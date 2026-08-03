@@ -35,6 +35,7 @@ migrate_working_dir/
 
 # Local environment configuration
 /.env
+**/.env.importer
 
 # Symbolication related
 app.*.symbols
