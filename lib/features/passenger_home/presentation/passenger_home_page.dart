@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:government_transit_collector/features/authentication/data/auth_repository.dart';
+import 'package:government_transit_collector/features/gtfs_data_check/data/gtfs_repository.dart';
+import 'package:government_transit_collector/features/gtfs_data_check/presentation/gtfs_data_check_page.dart';
 
 class PassengerHomePage extends StatefulWidget {
   const PassengerHomePage({
@@ -69,11 +71,20 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
             const SizedBox(height: 8),
             Text('Welcome, ${widget.profile.displayName}'),
             const SizedBox(height: 32),
-            const _PlaceholderCard(
+            _PlaceholderCard(
               icon: Icons.departure_board,
               title: 'Departure Recommendation',
               description:
-                  'Route and departure recommendations will appear here.',
+                  'Temporarily verify imported GTFS routes and stops.',
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => GtfsDataCheckPage(
+                      repository: GtfsRepository(),
+                    ),
+                  ),
+                );
+              },
             ),
             const SizedBox(height: 16),
             const _PlaceholderCard(
@@ -93,18 +104,23 @@ class _PlaceholderCard extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.description,
+    this.onTap,
   });
 
   final IconData icon;
   final String title;
   final String description;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Row(
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Icon(icon, size: 32, color: Theme.of(context).colorScheme.primary),
@@ -119,7 +135,8 @@ class _PlaceholderCard extends StatelessWidget {
                 ],
               ),
             ),
-          ],
+            ],
+          ),
         ),
       ),
     );
