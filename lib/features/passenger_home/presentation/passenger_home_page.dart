@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:government_transit_collector/features/authentication/data/auth_repository.dart';
-import 'package:government_transit_collector/features/gtfs_data_check/data/gtfs_repository.dart';
-import 'package:government_transit_collector/features/gtfs_data_check/presentation/gtfs_data_check_page.dart';
+import 'package:government_transit_collector/features/departure_recommendation/data/departure_stop_repository.dart';
+import 'package:government_transit_collector/features/departure_recommendation/presentation/departure_recommendation_page.dart';
 
 class PassengerHomePage extends StatefulWidget {
   const PassengerHomePage({
@@ -74,13 +74,12 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
             _PlaceholderCard(
               icon: Icons.departure_board,
               title: 'Departure Recommendation',
-              description:
-                  'Temporarily verify imported GTFS routes and stops.',
+              description: 'Select your origin and destination stops.',
               onTap: () {
                 Navigator.of(context).push(
                   MaterialPageRoute<void>(
-                    builder: (_) => GtfsDataCheckPage(
-                      repository: GtfsRepository(),
+                    builder: (_) => DepartureRecommendationPage(
+                      repository: SupabaseDepartureStopRepository(),
                     ),
                   ),
                 );
@@ -121,20 +120,24 @@ class _PlaceholderCard extends StatelessWidget {
         child: Padding(
           padding: const EdgeInsets.all(20),
           child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(icon, size: 32, color: Theme.of(context).colorScheme.primary),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title, style: Theme.of(context).textTheme.titleMedium),
-                  const SizedBox(height: 6),
-                  Text(description),
-                ],
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                icon,
+                size: 32,
+                color: Theme.of(context).colorScheme.primary,
               ),
-            ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: Theme.of(context).textTheme.titleMedium),
+                    const SizedBox(height: 6),
+                    Text(description),
+                  ],
+                ),
+              ),
             ],
           ),
         ),
