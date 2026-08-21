@@ -3,6 +3,7 @@ import 'package:government_transit_collector/features/departure_recommendation/d
 import 'package:government_transit_collector/features/departure_recommendation/data/direct_trip_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/recent_journey_search.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/recent_search_repository.dart';
+import 'package:government_transit_collector/features/departure_recommendation/data/transfer_journey_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/presentation/departure_validation.dart';
 import 'package:government_transit_collector/features/departure_recommendation/presentation/stop_selection_page.dart';
 
@@ -10,12 +11,14 @@ class DepartureRecommendationPage extends StatefulWidget {
   const DepartureRecommendationPage({
     required this.stopRepository,
     required this.tripRepository,
+    required this.transferRepository,
     required this.recentSearchRepository,
     super.key,
   });
 
   final DepartureStopRepository stopRepository;
   final DirectTripRepository tripRepository;
+  final TransferJourneyRepository transferRepository;
   final RecentSearchRepository recentSearchRepository;
 
   @override
@@ -29,7 +32,9 @@ class _DepartureRecommendationPageState
   DepartureStop? _destination;
   String? _validationMessage;
   List<DirectRouteResult>? _routeResults;
-  String? _searchError;
+  List<OneTransferJourneyResult>? _transferResults;
+  String? _directError;
+  String? _transferError;
   bool _searching = false;
   List<RecentJourneySearch>? _recentSearches;
   String? _historyError;
@@ -92,7 +97,9 @@ class _DepartureRecommendationPageState
   void _resetSearchState() {
     _validationMessage = null;
     _routeResults = null;
-    _searchError = null;
+    _transferResults = null;
+    _directError = null;
+    _transferError = null;
   }
 
   Future<void> _search() async {
@@ -105,7 +112,9 @@ class _DepartureRecommendationPageState
       setState(() {
         _validationMessage = validationMessage;
         _routeResults = null;
-        _searchError = null;
+        _transferResults = null;
+        _directError = null;
+        _transferError = null;
       });
       return;
     }
@@ -116,31 +125,47 @@ class _DepartureRecommendationPageState
       _searching = true;
       _validationMessage = null;
       _routeResults = null;
-      _searchError = null;
+      _transferResults = null;
+      _directError = null;
+      _transferError = null;
     });
+
+    final directFuture = widget.tripRepository.findDirectRoutes(
+      originStopId: origin.id,
+      destinationStopId: destination.id,
+    );
+    final transferFuture = widget.transferRepository.findOneTransferJourneys(
+      originStopId: origin.id,
+      destinationStopId: destination.id,
+    );
+    List<DirectRouteResult>? directResults;
+    List<OneTransferJourneyResult>? transferResults;
+    String? directError;
+    String? transferError;
     try {
-      final results = await widget.tripRepository.findDirectRoutes(
-        originStopId: origin.id,
-        destinationStopId: destination.id,
-      );
-      if (!mounted) return;
-      setState(() {
-        _routeResults = results;
-        _searching = false;
-      });
-      await _saveRecentSearch(origin, destination);
+      directResults = await directFuture;
     } on DirectTripReadException catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _searchError = error.message;
-        _searching = false;
-      });
+      directError = error.message;
     } on Object {
-      if (!mounted) return;
-      setState(() {
-        _searchError = 'Unable to find direct routes.';
-        _searching = false;
-      });
+      directError = 'Unable to find direct routes.';
+    }
+    try {
+      transferResults = await transferFuture;
+    } on TransferJourneyReadException catch (error) {
+      transferError = error.message;
+    } on Object {
+      transferError = 'Unable to find one-transfer routes.';
+    }
+    if (!mounted) return;
+    setState(() {
+      _routeResults = directResults;
+      _transferResults = transferResults;
+      _directError = directError;
+      _transferError = transferError;
+      _searching = false;
+    });
+    if (directError == null || transferError == null) {
+      await _saveRecentSearch(origin, destination);
     }
   }
 
@@ -298,38 +323,81 @@ class _DepartureRecommendationPageState
       return const _SectionMessage(
         key: Key('route-loading'),
         icon: Icons.route,
-        message: 'Finding direct routes…',
+        message: 'Finding direct and one-transfer routes…',
         showProgress: true,
       );
     }
-    if (_searchError != null) {
-      return _SectionMessage(
-        key: const Key('route-error'),
-        icon: Icons.error_outline,
-        message: _searchError!,
-        actionLabel: 'Retry',
-        onAction: _search,
-      );
+    final directResults = _routeResults;
+    final transferResults = _transferResults;
+    if (directResults == null &&
+        transferResults == null &&
+        _directError == null &&
+        _transferError == null) {
+      return const SizedBox.shrink();
     }
-    final results = _routeResults;
-    if (results == null) return const SizedBox.shrink();
+    final hasDirect = directResults?.isNotEmpty == true;
+    final hasTransfer = transferResults?.isNotEmpty == true;
+    final hasAnyJourney = hasDirect || hasTransfer;
     return Column(
-      key: const Key('direct-route-results'),
+      key: const Key('journey-results'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(
-          'Available Direct Routes',
-          style: Theme.of(context).textTheme.titleLarge,
-        ),
-        const SizedBox(height: 12),
-        if (results.isEmpty)
+        if (!hasAnyJourney && _directError == null && _transferError == null)
           const _SectionMessage(
-            key: Key('no-direct-routes'),
+            key: Key('no-journeys'),
             icon: Icons.route_outlined,
-            message: 'No direct bus route was found between these stops.',
+            message:
+                'No direct or one-transfer journey was found between these stops.',
           )
-        else
-          ...results.map(_DirectRouteCard.new),
+        else ...[
+          if (_directError != null)
+            _SectionMessage(
+              key: const Key('direct-route-error'),
+              icon: Icons.error_outline,
+              message: _directError!,
+              actionLabel: 'Retry',
+              onAction: _search,
+            )
+          else if (hasDirect) ...[
+            Text(
+              'Direct Routes',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 12),
+            ...directResults!.map(
+              (route) => _DirectRouteCard(
+                route: route,
+                originStopName: _origin!.name,
+                destinationStopName: _destination!.name,
+              ),
+            ),
+          ],
+          if ((hasDirect || _directError != null) &&
+              (hasTransfer || _transferError != null))
+            const SizedBox(height: 24),
+          if (_transferError != null)
+            _SectionMessage(
+              key: const Key('transfer-route-error'),
+              icon: Icons.error_outline,
+              message: _transferError!,
+              actionLabel: 'Retry',
+              onAction: _search,
+            )
+          else if (hasTransfer) ...[
+            Text(
+              '1-Transfer Routes',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 12),
+            ...transferResults!.map(
+              (journey) => _TransferRouteCard(
+                journey: journey,
+                originStopName: _origin!.name,
+                destinationStopName: _destination!.name,
+              ),
+            ),
+          ],
+        ],
       ],
     );
   }
@@ -394,34 +462,156 @@ class _DepartureRecommendationPageState
 }
 
 class _DirectRouteCard extends StatelessWidget {
-  const _DirectRouteCard(this.route);
+  const _DirectRouteCard({
+    required this.route,
+    required this.originStopName,
+    required this.destinationStopName,
+  });
 
   final DirectRouteResult route;
+  final String originStopName;
+  final String destinationStopName;
 
   @override
   Widget build(BuildContext context) {
     final shortName = route.routeShortName?.trim();
-    final longName = route.routeLongName?.trim();
-    final headsign = route.tripHeadsign?.trim();
     return Card(
-      child: ListTile(
-        leading: const Icon(Icons.directions_bus),
-        title: Text(
-          shortName?.isNotEmpty == true
-              ? 'Route $shortName'
-              : 'Route ${route.routeId}',
-        ),
-        subtitle: Column(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (longName?.isNotEmpty == true) Text(longName!),
-            if (headsign?.isNotEmpty == true) Text('Towards $headsign'),
             Text(
-              '${route.matchingTripCount} matching '
-              '${route.matchingTripCount == 1 ? 'trip' : 'trips'}',
+              shortName?.isNotEmpty == true ? shortName! : route.routeId,
+              style: Theme.of(context).textTheme.titleMedium,
             ),
+            const SizedBox(height: 8),
+            Text('$originStopName → $destinationStopName'),
+            const SizedBox(height: 10),
+            const _JourneySummary(label: 'Direct • No transfer'),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _TransferRouteCard extends StatelessWidget {
+  const _TransferRouteCard({
+    required this.journey,
+    required this.originStopName,
+    required this.destinationStopName,
+  });
+
+  final OneTransferJourneyResult journey;
+  final String originStopName;
+  final String destinationStopName;
+
+  String _routeLabel(TransferJourneyLeg leg) {
+    final shortName = leg.routeShortName?.trim();
+    return shortName?.isNotEmpty == true ? shortName! : leg.routeId;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final firstRoute = _routeLabel(journey.firstLeg);
+    final secondRoute = _routeLabel(journey.secondLeg);
+    return Card(
+      key: Key(
+        'transfer-${journey.firstLeg.routeId}-'
+        '${journey.transferStopId}-${journey.secondLeg.routeId}',
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '$firstRoute → $secondRoute',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 14),
+            _JourneyPoint(icon: Icons.trip_origin, label: originStopName),
+            _RouteConnector(routeLabel: firstRoute),
+            _JourneyPoint(
+              icon: Icons.sync_alt,
+              label: 'Transfer at ${journey.transferStopName}',
+            ),
+            _RouteConnector(routeLabel: secondRoute),
+            _JourneyPoint(
+              icon: Icons.location_on_outlined,
+              label: destinationStopName,
+            ),
+            const SizedBox(height: 12),
+            const _JourneySummary(label: '2 buses • 1 transfer'),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _JourneyPoint extends StatelessWidget {
+  const _JourneyPoint({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 20, color: Theme.of(context).colorScheme.primary),
+        const SizedBox(width: 12),
+        Expanded(child: Text(label)),
+      ],
+    );
+  }
+}
+
+class _RouteConnector extends StatelessWidget {
+  const _RouteConnector({required this.routeLabel});
+
+  final String routeLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 2, top: 4, bottom: 4),
+      child: Row(
+        children: [
+          const Icon(Icons.arrow_downward, size: 16),
+          const SizedBox(width: 14),
+          Flexible(
+            child: Text(
+              routeLabel,
+              style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                color: Theme.of(context).colorScheme.primary,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _JourneySummary extends StatelessWidget {
+  const _JourneySummary({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.secondaryContainer,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        child: Text(label, style: Theme.of(context).textTheme.labelMedium),
       ),
     );
   }
