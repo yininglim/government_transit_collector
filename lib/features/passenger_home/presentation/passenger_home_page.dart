@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:government_transit_collector/features/authentication/data/auth_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/departure_stop_repository.dart';
+import 'package:government_transit_collector/features/departure_recommendation/data/direct_trip_repository.dart';
+import 'package:government_transit_collector/features/departure_recommendation/data/recent_search_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/presentation/departure_recommendation_page.dart';
 
 class PassengerHomePage extends StatefulWidget {
@@ -79,7 +81,9 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
                 Navigator.of(context).push(
                   MaterialPageRoute<void>(
                     builder: (_) => DepartureRecommendationPage(
-                      repository: SupabaseDepartureStopRepository(),
+                      stopRepository: SupabaseDepartureStopRepository(),
+                      tripRepository: SupabaseDirectTripRepository(),
+                      recentSearchRepository: SqliteRecentSearchRepository(),
                     ),
                   ),
                 );
