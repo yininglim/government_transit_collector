@@ -6,6 +6,9 @@ import 'package:government_transit_collector/features/departure_recommendation/d
 import 'package:government_transit_collector/features/departure_recommendation/data/timetable_recommendation_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/transfer_journey_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/presentation/departure_recommendation_page.dart';
+import 'package:government_transit_collector/features/realtime_vehicle/data/realtime_vehicle_repository.dart';
+import 'package:government_transit_collector/features/realtime_vehicle/data/static_trip_matcher.dart';
+import 'package:government_transit_collector/features/realtime_vehicle/presentation/realtime_data_check_page.dart';
 
 class PassengerHomePage extends StatefulWidget {
   const PassengerHomePage({
@@ -95,10 +98,20 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
               },
             ),
             const SizedBox(height: 16),
-            const _PlaceholderCard(
+            _PlaceholderCard(
               icon: Icons.location_searching,
-              title: 'Real-time Journey Tracker',
-              description: 'Live journey tracking will appear here.',
+              title: 'Realtime Data Check',
+              description: 'Verify the current myBAS vehicle-position feed.',
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => RealtimeDataCheckPage(
+                      repository: DataGovMyRealtimeVehicleRepository(),
+                      tripMatcher: SupabaseStaticTripMatcher(),
+                    ),
+                  ),
+                );
+              },
             ),
           ],
         ),
