@@ -4,6 +4,7 @@ import 'package:government_transit_collector/features/departure_recommendation/d
 import 'package:government_transit_collector/features/departure_recommendation/data/direct_trip_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/recent_journey_search.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/recent_search_repository.dart';
+import 'package:government_transit_collector/features/departure_recommendation/data/timetable_recommendation_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/transfer_journey_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/presentation/departure_recommendation_page.dart';
 import 'package:government_transit_collector/features/departure_recommendation/presentation/departure_validation.dart';
@@ -49,6 +50,42 @@ const transferResult = OneTransferJourneyResult(
   ],
 );
 
+const directRecommendation = DirectJourneyRecommendation(
+  tripId: 'direct-trip',
+  routeId: 'J15',
+  routeShortName: 'J15',
+  originStopId: 'larkin',
+  destinationStopId: 'jb',
+  serviceId: 'weekday',
+  originStopSequence: 1,
+  destinationStopSequence: 5,
+  departureSeconds: 15 * 3600 + 55 * 60,
+  arrivalSeconds: 16 * 3600 + 25 * 60,
+);
+
+const transferRecommendation = TransferJourneyRecommendation(
+  firstTripId: 'first-trip',
+  secondTripId: 'second-trip',
+  firstRouteId: 'J15',
+  firstRouteShortName: 'J15',
+  secondRouteId: 'J10',
+  secondRouteShortName: 'J10',
+  originStopId: 'larkin',
+  transferStopId: 'transfer',
+  transferStopName: 'City Square',
+  destinationStopId: 'jb',
+  firstServiceId: 'weekday',
+  secondServiceId: 'weekday',
+  originStopSequence: 1,
+  firstTransferStopSequence: 5,
+  secondTransferStopSequence: 2,
+  destinationStopSequence: 8,
+  departureSeconds: 15 * 3600 + 45 * 60,
+  transferArrivalSeconds: 16 * 3600,
+  secondDepartureSeconds: 16 * 3600 + 8 * 60,
+  arrivalSeconds: 16 * 3600 + 42 * 60,
+);
+
 class FakeDepartureStopRepository implements DepartureStopRepository {
   @override
   Future<List<DepartureStop>> searchStops(String query) async {
@@ -81,6 +118,23 @@ class FakeTransferJourneyRepository implements TransferJourneyRepository {
   Future<List<OneTransferJourneyResult>> findOneTransferJourneys({
     required String originStopId,
     required String destinationStopId,
+  }) async => results;
+}
+
+class FakeTimetableRecommendationRepository
+    implements TimetableRecommendationRepository {
+  FakeTimetableRecommendationRepository({this.results = const []});
+
+  final List<JourneyRecommendation> results;
+
+  @override
+  Future<List<JourneyRecommendation>> findRecommendations({
+    required String originStopId,
+    required String destinationStopId,
+    required DateTime travelDate,
+    required int travelTimeSeconds,
+    required List<DirectRouteResult> directRoutes,
+    required List<OneTransferJourneyResult> transferJourneys,
   }) async => results;
 }
 
@@ -145,6 +199,7 @@ void main() {
       WidgetTester tester, {
       List<DirectRouteResult> directResults = const [],
       List<OneTransferJourneyResult> transferResults = const [],
+      List<JourneyRecommendation> recommendations = const [],
     }) async {
       await tester.pumpWidget(
         MaterialApp(
@@ -154,7 +209,11 @@ void main() {
             transferRepository: FakeTransferJourneyRepository(
               results: transferResults,
             ),
+            timetableRepository: FakeTimetableRecommendationRepository(
+              results: recommendations,
+            ),
             recentSearchRepository: FakeRecentSearchRepository(),
+            initialDateTime: DateTime(2026, 8, 21, 15, 30),
           ),
         ),
       );
@@ -203,6 +262,22 @@ void main() {
       expect(find.text('Please select an origin stop.'), findsOneWidget);
     });
 
+    testWidgets('opens travel date and time selectors', (tester) async {
+      await pumpPage(tester);
+
+      await tester.tap(find.byKey(const Key('travel-date-field')));
+      await tester.pumpAndSettle();
+      expect(find.byType(DatePickerDialog), findsOneWidget);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('travel-time-field')));
+      await tester.pumpAndSettle();
+      expect(find.byType(TimePickerDialog), findsOneWidget);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+    });
+
     testWidgets('shows validation when destination is missing', (tester) async {
       await pumpPage(tester);
       await selectStop(
@@ -246,6 +321,7 @@ void main() {
         tester,
         directResults: const [directResult],
         transferResults: const [transferResult],
+        recommendations: const [directRecommendation, transferRecommendation],
       );
       await selectStop(
         tester,
@@ -260,8 +336,7 @@ void main() {
       await tester.tap(find.byKey(const Key('journey-search-button')));
       await tester.pumpAndSettle();
 
-      expect(find.text('Direct Routes'), findsOneWidget);
-      expect(find.text('1-Transfer Routes'), findsOneWidget);
+      expect(find.text('Recommended Departures'), findsOneWidget);
       expect(find.text('J15 → J10'), findsOneWidget);
       expect(find.text('Transfer at City Square'), findsOneWidget);
       expect(
@@ -269,13 +344,39 @@ void main() {
           of: find.byKey(const Key('journey-results')),
           matching: find.text('Larkin Sentral → JB Sentral'),
         ),
-        findsOneWidget,
+        findsNWidgets(2),
       );
-      expect(find.text('Direct • No transfer'), findsOneWidget);
-      expect(find.text('2 buses • 1 transfer'), findsOneWidget);
+      expect(find.text('30 min • Direct'), findsOneWidget);
+      expect(find.text('57 min • 1 transfer'), findsOneWidget);
+      expect(find.text('8 min transfer'), findsOneWidget);
       expect(find.textContaining('matching trip'), findsNothing);
       expect(find.textContaining('Leg 1:'), findsNothing);
       expect(find.textContaining('Leg 2:'), findsNothing);
+    });
+
+    testWidgets('shows no upcoming departure for structural routes', (
+      tester,
+    ) async {
+      await pumpPage(tester, directResults: const [directResult]);
+      await selectStop(
+        tester,
+        fieldKey: const Key('origin-field'),
+        stop: larkin,
+      );
+      await selectStop(
+        tester,
+        fieldKey: const Key('destination-field'),
+        stop: jbSentral,
+      );
+      await tester.tap(find.byKey(const Key('journey-search-button')));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text(
+          'No upcoming departure was found for the selected date and time.',
+        ),
+        findsOneWidget,
+      );
     });
 
     testWidgets('tapping recent search restores origin and destination', (
@@ -294,6 +395,7 @@ void main() {
             stopRepository: FakeDepartureStopRepository(),
             tripRepository: FakeDirectTripRepository(),
             transferRepository: FakeTransferJourneyRepository(),
+            timetableRepository: FakeTimetableRecommendationRepository(),
             recentSearchRepository: FakeRecentSearchRepository([history]),
           ),
         ),
@@ -333,6 +435,7 @@ void main() {
           tester,
           directResults: const [directResult],
           transferResults: const [transferResult],
+          recommendations: const [directRecommendation, transferRecommendation],
         );
         await tester.pumpAndSettle();
         await selectStop(
@@ -354,9 +457,10 @@ void main() {
         expect(find.text('Departure Recommendation'), findsOneWidget);
         expect(find.byKey(const Key('origin-field')), findsOneWidget);
         expect(find.byKey(const Key('destination-field')), findsOneWidget);
+        expect(find.byKey(const Key('travel-date-field')), findsOneWidget);
+        expect(find.byKey(const Key('travel-time-field')), findsOneWidget);
         expect(find.byKey(const Key('journey-search-button')), findsOneWidget);
-        expect(find.text('Direct Routes'), findsOneWidget);
-        expect(find.text('1-Transfer Routes'), findsOneWidget);
+        expect(find.text('Recommended Departures'), findsOneWidget);
         expect(
           find.byKey(const Key('recent-searches-section')),
           findsOneWidget,

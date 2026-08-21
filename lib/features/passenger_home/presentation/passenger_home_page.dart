@@ -3,6 +3,7 @@ import 'package:government_transit_collector/features/authentication/data/auth_r
 import 'package:government_transit_collector/features/departure_recommendation/data/departure_stop_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/direct_trip_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/recent_search_repository.dart';
+import 'package:government_transit_collector/features/departure_recommendation/data/timetable_recommendation_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/transfer_journey_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/presentation/departure_recommendation_page.dart';
 
@@ -85,6 +86,8 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
                       stopRepository: SupabaseDepartureStopRepository(),
                       tripRepository: SupabaseDirectTripRepository(),
                       transferRepository: SupabaseTransferJourneyRepository(),
+                      timetableRepository:
+                          SupabaseTimetableRecommendationRepository(),
                       recentSearchRepository: SqliteRecentSearchRepository(),
                     ),
                   ),
