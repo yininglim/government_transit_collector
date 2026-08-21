@@ -9,6 +9,7 @@ import 'package:government_transit_collector/features/departure_recommendation/p
 import 'package:government_transit_collector/features/realtime_vehicle/data/realtime_vehicle_repository.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/static_trip_matcher.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/presentation/realtime_data_check_page.dart';
+import 'package:government_transit_collector/features/realtime_vehicle/presentation/realtime_journey_tracker_page.dart';
 
 class PassengerHomePage extends StatefulWidget {
   const PassengerHomePage({
@@ -100,6 +101,22 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
             const SizedBox(height: 16),
             _PlaceholderCard(
               icon: Icons.location_searching,
+              title: 'Realtime Journey Tracker',
+              description: 'View current myBAS vehicles on OpenStreetMap.',
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => RealtimeJourneyTrackerPage(
+                      repository: DataGovMyRealtimeVehicleRepository(),
+                      tripMatcher: SupabaseStaticTripMatcher(),
+                    ),
+                  ),
+                );
+              },
+            ),
+            const SizedBox(height: 16),
+            _PlaceholderCard(
+              icon: Icons.data_object,
               title: 'Realtime Data Check',
               description: 'Verify the current myBAS vehicle-position feed.',
               onTap: () {
