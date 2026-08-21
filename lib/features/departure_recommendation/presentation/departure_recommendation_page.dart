@@ -7,6 +7,8 @@ import 'package:government_transit_collector/features/departure_recommendation/d
 import 'package:government_transit_collector/features/departure_recommendation/data/transfer_journey_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/presentation/departure_validation.dart';
 import 'package:government_transit_collector/features/departure_recommendation/presentation/stop_selection_page.dart';
+import 'package:government_transit_collector/features/journey_map/data/journey_map_repository.dart';
+import 'package:government_transit_collector/features/journey_map/presentation/route_map_page.dart';
 
 class DepartureRecommendationPage extends StatefulWidget {
   const DepartureRecommendationPage({
@@ -15,6 +17,7 @@ class DepartureRecommendationPage extends StatefulWidget {
     required this.transferRepository,
     required this.timetableRepository,
     required this.recentSearchRepository,
+    this.journeyMapRepository,
     this.initialDateTime,
     super.key,
   });
@@ -24,6 +27,7 @@ class DepartureRecommendationPage extends StatefulWidget {
   final TransferJourneyRepository transferRepository;
   final TimetableRecommendationRepository timetableRepository;
   final RecentSearchRepository recentSearchRepository;
+  final JourneyMapRepository? journeyMapRepository;
   final DateTime? initialDateTime;
 
   @override
@@ -474,6 +478,8 @@ class _DepartureRecommendationPageState
             recommendation: recommendation,
             originStopName: _origin!.name,
             destinationStopName: _destination!.name,
+            journeyMapRepository:
+                widget.journeyMapRepository ?? GtfsJourneyMapRepository(),
           ),
         ),
       ],
@@ -544,11 +550,13 @@ class _RecommendationCard extends StatelessWidget {
     required this.recommendation,
     required this.originStopName,
     required this.destinationStopName,
+    required this.journeyMapRepository,
   });
 
   final JourneyRecommendation recommendation;
   final String originStopName;
   final String destinationStopName;
+  final JourneyMapRepository journeyMapRepository;
 
   String _routeLabel(String routeId, String? shortName) {
     final trimmed = shortName?.trim();
@@ -596,6 +604,27 @@ class _RecommendationCard extends StatelessWidget {
               label: transfer == null
                   ? '$duration • Direct'
                   : '$duration • 1 transfer',
+            ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                key: Key('view-route-${recommendation.departureSeconds}'),
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => RouteMapPage(
+                        recommendation: recommendation,
+                        originStopName: originStopName,
+                        destinationStopName: destinationStopName,
+                        repository: journeyMapRepository,
+                      ),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.map_outlined),
+                label: const Text('View Route'),
+              ),
             ),
           ],
         ),

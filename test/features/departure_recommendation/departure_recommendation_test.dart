@@ -349,6 +349,7 @@ void main() {
       expect(find.text('30 min • Direct'), findsOneWidget);
       expect(find.text('57 min • 1 transfer'), findsOneWidget);
       expect(find.text('8 min transfer'), findsOneWidget);
+      expect(find.text('View Route'), findsNWidgets(2));
       expect(find.textContaining('matching trip'), findsNothing);
       expect(find.textContaining('Leg 1:'), findsNothing);
       expect(find.textContaining('Leg 2:'), findsNothing);
