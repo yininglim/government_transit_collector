@@ -3,6 +3,8 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/timetable_recommendation_repository.dart';
 import 'package:government_transit_collector/features/journey_map/data/journey_map_models.dart';
 import 'package:government_transit_collector/features/journey_map/data/journey_map_repository.dart';
+import 'package:government_transit_collector/features/realtime_vehicle/presentation/animated_realtime_vehicle_layer.dart';
+import 'package:government_transit_collector/features/realtime_vehicle/presentation/realtime_vehicle_marker_data.dart';
 import 'package:latlong2/latlong.dart';
 
 class RouteMapPage extends StatefulWidget {
@@ -88,7 +90,7 @@ class _RouteMapPageState extends State<RouteMapPage> {
       destinationStopName: widget.destinationStopName,
       data: data,
     );
-    final map = widget.mapBuilder?.call(data) ?? _JourneyMap(data: data);
+    final map = widget.mapBuilder?.call(data) ?? JourneyRouteMap(data: data);
     return LayoutBuilder(
       builder: (context, constraints) {
         if (constraints.maxWidth > constraints.maxHeight) {
@@ -174,16 +176,21 @@ class _JourneyMapSummary extends StatelessWidget {
   }
 }
 
-class _JourneyMap extends StatefulWidget {
-  const _JourneyMap({required this.data});
+class JourneyRouteMap extends StatefulWidget {
+  const JourneyRouteMap({
+    required this.data,
+    this.realtimeMarkers = const [],
+    super.key,
+  });
 
   final JourneyMapData data;
+  final List<RealtimeVehicleMarkerData> realtimeMarkers;
 
   @override
-  State<_JourneyMap> createState() => _JourneyMapState();
+  State<JourneyRouteMap> createState() => _JourneyRouteMapState();
 }
 
-class _JourneyMapState extends State<_JourneyMap> {
+class _JourneyRouteMapState extends State<JourneyRouteMap> {
   Object? _tileError;
   var _tileLoadAttempt = 0;
 
@@ -207,6 +214,9 @@ class _JourneyMapState extends State<_JourneyMap> {
     final allCoordinates = [
       ...widget.data.stops.map((stop) => stop.coordinate),
       ...widget.data.legs.expand((leg) => leg.points),
+      ...widget.realtimeMarkers.map(
+        (marker) => MapCoordinate(marker.latitude, marker.longitude),
+      ),
     ];
     if (allCoordinates.isEmpty) {
       return const Center(
@@ -283,6 +293,45 @@ class _JourneyMapState extends State<_JourneyMap> {
                     ),
                   )
                   .toList(),
+            ),
+            AnimatedRealtimeVehicleLayer(
+              markers: widget.realtimeMarkers,
+              builder: (context, markers, movingIdentities) => MarkerLayer(
+                markers: markers
+                    .map(
+                      (marker) => Marker(
+                        key: ValueKey('selected-${marker.identity}'),
+                        point: LatLng(marker.latitude, marker.longitude),
+                        width: 56,
+                        height: 56,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: movingIdentities.contains(marker.identity)
+                                ? Border.all(
+                                    color: Theme.of(context).colorScheme.primary
+                                        .withValues(alpha: 0.4),
+                                    width: 3,
+                                  )
+                                : null,
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.all(4),
+                            child: Material(
+                              color: Theme.of(context).colorScheme.primary,
+                              shape: const CircleBorder(),
+                              elevation: 4,
+                              child: Icon(
+                                Icons.directions_bus,
+                                color: Theme.of(context).colorScheme.onPrimary,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    )
+                    .toList(growable: false),
+              ),
             ),
             const RichAttributionWidget(
               showFlutterMapAttribution: false,

@@ -10,12 +10,12 @@ const realtimePollingInterval = Duration(seconds: 15);
 class RealtimeTrackerController extends ChangeNotifier {
   RealtimeTrackerController({
     required this.repository,
-    required this.tripMatcher,
+    this.tripMatcher,
     this.pollingInterval = realtimePollingInterval,
   });
 
   final RealtimeVehicleRepository repository;
-  final StaticTripMatcher tripMatcher;
+  final StaticTripMatcher? tripMatcher;
   final Duration pollingInterval;
 
   RealtimeFeedSnapshot? snapshot;
@@ -52,13 +52,17 @@ class RealtimeTrackerController extends ChangeNotifier {
       final latest = await repository.fetchVehiclePositions();
       Set<String>? latestKnownTripIds;
       String? latestMatchingWarning;
-      try {
-        latestKnownTripIds = await tripMatcher.findKnownTripIds(
-          latest.vehicles.map((vehicle) => vehicle.tripId).whereType<String>(),
-        );
-      } on Object {
-        latestMatchingWarning =
-            'Vehicle positions loaded, but trip matching is unavailable.';
+      if (tripMatcher != null) {
+        try {
+          latestKnownTripIds = await tripMatcher!.findKnownTripIds(
+            latest.vehicles
+                .map((vehicle) => vehicle.tripId)
+                .whereType<String>(),
+          );
+        } on Object {
+          latestMatchingWarning =
+              'Vehicle positions loaded, but trip matching is unavailable.';
+        }
       }
       if (_disposed) return;
       snapshot = latest;

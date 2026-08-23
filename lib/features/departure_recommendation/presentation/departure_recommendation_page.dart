@@ -9,6 +9,15 @@ import 'package:government_transit_collector/features/departure_recommendation/p
 import 'package:government_transit_collector/features/departure_recommendation/presentation/stop_selection_page.dart';
 import 'package:government_transit_collector/features/journey_map/data/journey_map_repository.dart';
 import 'package:government_transit_collector/features/journey_map/presentation/route_map_page.dart';
+import 'package:government_transit_collector/features/realtime_vehicle/data/realtime_vehicle_repository.dart';
+import 'package:government_transit_collector/features/realtime_vehicle/data/selected_journey_tracking.dart';
+import 'package:government_transit_collector/features/realtime_vehicle/presentation/selected_journey_tracker_page.dart';
+
+typedef SelectedJourneyTrackerBuilder =
+    Widget Function(
+      SelectedJourneyTracking journey,
+      JourneyMapRepository journeyMapRepository,
+    );
 
 class DepartureRecommendationPage extends StatefulWidget {
   const DepartureRecommendationPage({
@@ -18,6 +27,7 @@ class DepartureRecommendationPage extends StatefulWidget {
     required this.timetableRepository,
     required this.recentSearchRepository,
     this.journeyMapRepository,
+    this.selectedJourneyTrackerBuilder,
     this.initialDateTime,
     super.key,
   });
@@ -28,6 +38,7 @@ class DepartureRecommendationPage extends StatefulWidget {
   final TimetableRecommendationRepository timetableRepository;
   final RecentSearchRepository recentSearchRepository;
   final JourneyMapRepository? journeyMapRepository;
+  final SelectedJourneyTrackerBuilder? selectedJourneyTrackerBuilder;
   final DateTime? initialDateTime;
 
   @override
@@ -478,8 +489,10 @@ class _DepartureRecommendationPageState
             recommendation: recommendation,
             originStopName: _origin!.name,
             destinationStopName: _destination!.name,
+            travelDate: _travelDate,
             journeyMapRepository:
                 widget.journeyMapRepository ?? GtfsJourneyMapRepository(),
+            selectedJourneyTrackerBuilder: widget.selectedJourneyTrackerBuilder,
           ),
         ),
       ],
@@ -550,13 +563,17 @@ class _RecommendationCard extends StatelessWidget {
     required this.recommendation,
     required this.originStopName,
     required this.destinationStopName,
+    required this.travelDate,
     required this.journeyMapRepository,
+    this.selectedJourneyTrackerBuilder,
   });
 
   final JourneyRecommendation recommendation;
   final String originStopName;
   final String destinationStopName;
+  final DateTime travelDate;
   final JourneyMapRepository journeyMapRepository;
+  final SelectedJourneyTrackerBuilder? selectedJourneyTrackerBuilder;
 
   String _routeLabel(String routeId, String? shortName) {
     final trimmed = shortName?.trim();
@@ -608,22 +625,59 @@ class _RecommendationCard extends StatelessWidget {
             const SizedBox(height: 8),
             Align(
               alignment: Alignment.centerRight,
-              child: TextButton.icon(
-                key: Key('view-route-${recommendation.departureSeconds}'),
-                onPressed: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => RouteMapPage(
-                        recommendation: recommendation,
-                        originStopName: originStopName,
-                        destinationStopName: destinationStopName,
-                        repository: journeyMapRepository,
-                      ),
+              child: Wrap(
+                alignment: WrapAlignment.end,
+                spacing: 4,
+                children: [
+                  TextButton.icon(
+                    key: Key('view-route-${recommendation.departureSeconds}'),
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => RouteMapPage(
+                            recommendation: recommendation,
+                            originStopName: originStopName,
+                            destinationStopName: destinationStopName,
+                            repository: journeyMapRepository,
+                          ),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.map_outlined),
+                    label: const Text('View Route'),
+                  ),
+                  FilledButton.tonalIcon(
+                    key: Key(
+                      'track-journey-${recommendation.departureSeconds}',
                     ),
-                  );
-                },
-                icon: const Icon(Icons.map_outlined),
-                label: const Text('View Route'),
+                    onPressed: () {
+                      final selected =
+                          SelectedJourneyTracking.fromRecommendation(
+                            recommendation: recommendation,
+                            originStopName: originStopName,
+                            destinationStopName: destinationStopName,
+                            travelDate: travelDate,
+                          );
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) =>
+                              selectedJourneyTrackerBuilder?.call(
+                                selected,
+                                journeyMapRepository,
+                              ) ??
+                              SelectedJourneyTrackerPage(
+                                journey: selected,
+                                realtimeRepository:
+                                    DataGovMyRealtimeVehicleRepository(),
+                                journeyMapRepository: journeyMapRepository,
+                              ),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.directions_bus_outlined),
+                    label: const Text('Track Journey'),
+                  ),
+                ],
               ),
             ),
           ],

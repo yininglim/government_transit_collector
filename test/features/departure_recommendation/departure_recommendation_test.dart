@@ -7,6 +7,7 @@ import 'package:government_transit_collector/features/departure_recommendation/d
 import 'package:government_transit_collector/features/departure_recommendation/data/timetable_recommendation_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/transfer_journey_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/presentation/departure_recommendation_page.dart';
+import 'package:government_transit_collector/features/realtime_vehicle/data/selected_journey_tracking.dart';
 import 'package:government_transit_collector/features/departure_recommendation/presentation/departure_validation.dart';
 
 const larkin = DepartureStop(id: 'larkin', name: 'Larkin Sentral');
@@ -200,6 +201,7 @@ void main() {
       List<DirectRouteResult> directResults = const [],
       List<OneTransferJourneyResult> transferResults = const [],
       List<JourneyRecommendation> recommendations = const [],
+      SelectedJourneyTrackerBuilder? selectedJourneyTrackerBuilder,
     }) async {
       await tester.pumpWidget(
         MaterialApp(
@@ -213,6 +215,7 @@ void main() {
               results: recommendations,
             ),
             recentSearchRepository: FakeRecentSearchRepository(),
+            selectedJourneyTrackerBuilder: selectedJourneyTrackerBuilder,
             initialDateTime: DateTime(2026, 8, 21, 15, 30),
           ),
         ),
@@ -350,9 +353,65 @@ void main() {
       expect(find.text('57 min • 1 transfer'), findsOneWidget);
       expect(find.text('8 min transfer'), findsOneWidget);
       expect(find.text('View Route'), findsNWidgets(2));
+      expect(find.text('Track Journey'), findsNWidgets(2));
       expect(find.textContaining('matching trip'), findsNothing);
       expect(find.textContaining('Leg 1:'), findsNothing);
       expect(find.textContaining('Leg 2:'), findsNothing);
+    });
+
+    testWidgets('Track Journey passes exact direct and transfer information', (
+      tester,
+    ) async {
+      SelectedJourneyTracking? selected;
+      await pumpPage(
+        tester,
+        directResults: const [directResult],
+        transferResults: const [transferResult],
+        recommendations: const [directRecommendation, transferRecommendation],
+        selectedJourneyTrackerBuilder: (journey, repository) {
+          selected = journey;
+          return const Scaffold(body: Text('Selected tracker test page'));
+        },
+      );
+      await selectStop(
+        tester,
+        fieldKey: const Key('origin-field'),
+        stop: larkin,
+      );
+      await selectStop(
+        tester,
+        fieldKey: const Key('destination-field'),
+        stop: jbSentral,
+      );
+      await tester.tap(find.byKey(const Key('journey-search-button')));
+      await tester.pumpAndSettle();
+
+      final directTrack = find.byKey(
+        Key('track-journey-${directRecommendation.departureSeconds}'),
+      );
+      await tester.ensureVisible(directTrack);
+      await tester.tap(directTrack);
+      await tester.pumpAndSettle();
+      expect(selected?.legs.single.tripId, 'direct-trip');
+      expect(selected?.originStopName, 'Larkin Sentral');
+      expect(selected?.destinationStopName, 'JB Sentral');
+      Navigator.of(
+        tester.element(find.text('Selected tracker test page')),
+      ).pop();
+      await tester.pumpAndSettle();
+
+      final transferTrack = find.byKey(
+        Key('track-journey-${transferRecommendation.departureSeconds}'),
+      );
+      await tester.ensureVisible(transferTrack);
+      await tester.tap(transferTrack);
+      await tester.pumpAndSettle();
+      expect(selected?.legs.map((leg) => leg.tripId), [
+        'first-trip',
+        'second-trip',
+      ]);
+      expect(selected?.legs.map((leg) => leg.routeName), ['J15', 'J10']);
+      expect(selected?.transferStopName, 'City Square');
     });
 
     testWidgets('shows no upcoming departure for structural routes', (
