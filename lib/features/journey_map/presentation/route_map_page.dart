@@ -3,6 +3,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/timetable_recommendation_repository.dart';
 import 'package:government_transit_collector/features/journey_map/data/journey_map_models.dart';
 import 'package:government_transit_collector/features/journey_map/data/journey_map_repository.dart';
+import 'package:government_transit_collector/features/passenger_location/data/passenger_location.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/presentation/animated_realtime_vehicle_layer.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/presentation/realtime_vehicle_marker_data.dart';
 import 'package:latlong2/latlong.dart';
@@ -180,19 +181,58 @@ class JourneyRouteMap extends StatefulWidget {
   const JourneyRouteMap({
     required this.data,
     this.realtimeMarkers = const [],
+    this.passengerLocation,
     super.key,
   });
 
   final JourneyMapData data;
   final List<RealtimeVehicleMarkerData> realtimeMarkers;
+  final PassengerLocation? passengerLocation;
 
   @override
   State<JourneyRouteMap> createState() => _JourneyRouteMapState();
 }
 
 class _JourneyRouteMapState extends State<JourneyRouteMap> {
+  final _mapController = MapController();
   Object? _tileError;
   var _tileLoadAttempt = 0;
+  var _hasFittedPassengerLocation = false;
+
+  @override
+  void didUpdateWidget(JourneyRouteMap oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!_hasFittedPassengerLocation &&
+        oldWidget.passengerLocation == null &&
+        widget.passengerLocation != null) {
+      _hasFittedPassengerLocation = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final points = _allCoordinates()
+            .map((point) => LatLng(point.latitude, point.longitude))
+            .toList();
+        if (points.length > 1) {
+          _mapController.fitCamera(
+            CameraFit.bounds(
+              bounds: LatLngBounds.fromPoints(points),
+              padding: const EdgeInsets.all(48),
+              maxZoom: 17,
+            ),
+          );
+        }
+      });
+    }
+  }
+
+  List<MapCoordinate> _allCoordinates() => [
+    ...widget.data.stops.map((stop) => stop.coordinate),
+    ...widget.data.legs.expand((leg) => leg.points),
+    ...widget.realtimeMarkers.map(
+      (marker) => MapCoordinate(marker.latitude, marker.longitude),
+    ),
+    if (widget.passengerLocation case final location?)
+      MapCoordinate(location.latitude, location.longitude),
+  ];
 
   void _handleTileError(TileImage tile, Object error, StackTrace? stackTrace) {
     debugPrint('OpenStreetMap tile failed to load: $error');
@@ -211,13 +251,7 @@ class _JourneyRouteMapState extends State<JourneyRouteMap> {
 
   @override
   Widget build(BuildContext context) {
-    final allCoordinates = [
-      ...widget.data.stops.map((stop) => stop.coordinate),
-      ...widget.data.legs.expand((leg) => leg.points),
-      ...widget.realtimeMarkers.map(
-        (marker) => MapCoordinate(marker.latitude, marker.longitude),
-      ),
-    ];
+    final allCoordinates = _allCoordinates();
     if (allCoordinates.isEmpty) {
       return const Center(
         child: Text('No coordinates are available for this journey.'),
@@ -234,6 +268,7 @@ class _JourneyRouteMapState extends State<JourneyRouteMap> {
       children: [
         FlutterMap(
           key: const Key('journey-map'),
+          mapController: _mapController,
           options: MapOptions(
             initialCenter: points.first,
             initialZoom: 14,
@@ -294,6 +329,38 @@ class _JourneyRouteMapState extends State<JourneyRouteMap> {
                   )
                   .toList(),
             ),
+            if (widget.passengerLocation case final passenger?)
+              MarkerLayer(
+                key: const Key('passenger-location-layer'),
+                markers: [
+                  Marker(
+                    key: const Key('passenger-location-marker'),
+                    point: LatLng(passenger.latitude, passenger.longitude),
+                    width: 52,
+                    height: 52,
+                    child: Semantics(
+                      label: 'Your current location',
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).colorScheme.secondary,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: Theme.of(context).colorScheme.surface,
+                            width: 3,
+                          ),
+                          boxShadow: const [
+                            BoxShadow(blurRadius: 5, color: Colors.black26),
+                          ],
+                        ),
+                        child: Icon(
+                          Icons.person_pin_circle,
+                          color: Theme.of(context).colorScheme.onSecondary,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             AnimatedRealtimeVehicleLayer(
               markers: widget.realtimeMarkers,
               builder: (context, markers, movingIdentities) => MarkerLayer(

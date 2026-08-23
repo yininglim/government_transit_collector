@@ -3,6 +3,9 @@ import 'package:government_transit_collector/core/time/transit_service_time.dart
 import 'package:government_transit_collector/features/journey_map/data/journey_map_models.dart';
 import 'package:government_transit_collector/features/journey_map/data/journey_map_repository.dart';
 import 'package:government_transit_collector/features/journey_map/presentation/route_map_page.dart';
+import 'package:government_transit_collector/features/passenger_location/data/boarding_stop_distance.dart';
+import 'package:government_transit_collector/features/passenger_location/data/passenger_location.dart';
+import 'package:government_transit_collector/features/passenger_location/data/passenger_location_service.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/realtime_vehicle_repository.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/realtime_vehicle_position.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/journey_progress_calculator.dart';
@@ -17,6 +20,7 @@ typedef SelectedJourneyMapBuilder =
     Widget Function(
       JourneyMapData data,
       List<RealtimeVehicleMarkerData> realtimeMarkers,
+      PassengerLocation? passengerLocation,
     );
 
 class SelectedJourneyTrackerPage extends StatefulWidget {
@@ -25,6 +29,7 @@ class SelectedJourneyTrackerPage extends StatefulWidget {
     required this.realtimeRepository,
     required this.journeyMapRepository,
     this.tripProgressRepository,
+    this.passengerLocationService,
     this.pollingInterval = realtimePollingInterval,
     this.mapBuilder,
     super.key,
@@ -34,6 +39,7 @@ class SelectedJourneyTrackerPage extends StatefulWidget {
   final RealtimeVehicleRepository realtimeRepository;
   final JourneyMapRepository journeyMapRepository;
   final TripProgressRepository? tripProgressRepository;
+  final PassengerLocationService? passengerLocationService;
   final Duration pollingInterval;
   final SelectedJourneyMapBuilder? mapBuilder;
 
@@ -51,6 +57,10 @@ class _SelectedJourneyTrackerPageState extends State<SelectedJourneyTrackerPage>
   late List<JourneyProgressState?> _progressByLeg;
   late List<Object?> _progressErrors;
   late List<bool> _progressLoading;
+  late final PassengerLocationService _passengerLocationService;
+  PassengerLocationResult _passengerLocationResult =
+      const PassengerLocationResult.loading();
+  var _passengerLocationRequestInFlight = false;
   Object? _observedSnapshot;
   JourneyMapData? _mapData;
   Object? _mapError;
@@ -66,13 +76,36 @@ class _SelectedJourneyTrackerPageState extends State<SelectedJourneyTrackerPage>
     _progressByLeg = List.filled(widget.journey.legs.length, null);
     _progressErrors = List.filled(widget.journey.legs.length, null);
     _progressLoading = List.filled(widget.journey.legs.length, true);
+    _passengerLocationService =
+        widget.passengerLocationService ?? ForegroundPassengerLocationService();
     _controller = RealtimeTrackerController(
       repository: widget.realtimeRepository,
       pollingInterval: widget.pollingInterval,
     )..addListener(_onControllerChanged);
     _loadMap();
     _loadAllProgressData();
+    _refreshPassengerLocation();
     _controller.startPolling();
+  }
+
+  Future<void> _refreshPassengerLocation() async {
+    if (_passengerLocationRequestInFlight || !mounted) return;
+    _passengerLocationRequestInFlight = true;
+    setState(() {
+      _passengerLocationResult = PassengerLocationResult.loading(
+        _passengerLocationResult.location,
+      );
+    });
+    PassengerLocationResult result;
+    try {
+      result = await _passengerLocationService.getCurrentLocation();
+    } on Object {
+      result = const PassengerLocationResult.unknownError();
+    } finally {
+      _passengerLocationRequestInFlight = false;
+    }
+    if (!mounted) return;
+    setState(() => _passengerLocationResult = result);
   }
 
   Future<void> _loadAllProgressData() async {
@@ -328,8 +361,120 @@ class _SelectedJourneyTrackerPageState extends State<SelectedJourneyTrackerPage>
         ],
         const SizedBox(height: 16),
         _buildProgressSummary(currentIsLive: current != null),
+        const SizedBox(height: 16),
+        _buildPassengerLocationSummary(activeLeg),
       ],
     );
+  }
+
+  Widget _buildPassengerLocationSummary(SelectedJourneyLeg activeLeg) {
+    final result = _passengerLocationResult;
+    final location = result.location;
+    final boardingCoordinate = _boardingStopCoordinate(activeLeg);
+    final distance = location == null || boardingCoordinate == null
+        ? null
+        : passengerDistanceToStopMeters(location, boardingCoordinate);
+    return Column(
+      key: const Key('passenger-location-summary'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Your Location', style: Theme.of(context).textTheme.labelLarge),
+        const SizedBox(height: 6),
+        Text('Boarding stop: ${activeLeg.fromStopName}'),
+        const SizedBox(height: 4),
+        switch (result.status) {
+          PassengerLocationStatus.notRequested => const Text(
+            'Location permission is required.',
+          ),
+          PassengerLocationStatus.loading => const Row(
+            children: [
+              SizedBox.square(
+                dimension: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              SizedBox(width: 8),
+              Expanded(child: Text('Getting your location...')),
+            ],
+          ),
+          PassengerLocationStatus.permissionDenied => const Text(
+            'Location permission was denied.',
+          ),
+          PassengerLocationStatus.permissionDeniedForever => const Text(
+            'Location permission is permanently denied.',
+          ),
+          PassengerLocationStatus.servicesDisabled => const Text(
+            'Location services are disabled.',
+          ),
+          PassengerLocationStatus.positionTimeout => const Text(
+            'Location request timed out. Please send a location from the '
+            'emulator or try again.',
+          ),
+          PassengerLocationStatus.noLastKnownPosition => const Text(
+            'Location timed out and no previous location is available.',
+          ),
+          PassengerLocationStatus.providerUnavailable => const Text(
+            'The Android location provider is currently unavailable.',
+          ),
+          PassengerLocationStatus.platformError => const Text(
+            'Android could not provide a location. Please check the emulator '
+            'location controls.',
+          ),
+          PassengerLocationStatus.unknownError => const Text(
+            'An unexpected location error occurred.',
+          ),
+          PassengerLocationStatus.available => Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (distance != null)
+                Text(
+                  'Straight-line distance: approximately '
+                  '${formatApproximateDistance(distance)} from boarding stop',
+                  key: const Key('boarding-stop-distance'),
+                )
+              else
+                const Text('Boarding-stop coordinates are unavailable.'),
+              if (result.isLastKnown)
+                const Text(
+                  'Using last-known location; it may be stale.',
+                  key: Key('last-known-passenger-location'),
+                ),
+              if (location != null &&
+                  hasPoorPassengerLocationAccuracy(location))
+                const Text('Approximate location (limited GPS accuracy)'),
+            ],
+          ),
+        },
+        if (result.status == PassengerLocationStatus.permissionDeniedForever)
+          TextButton(
+            key: const Key('open-location-app-settings'),
+            onPressed: _passengerLocationService.openAppSettings,
+            child: const Text('Open App Settings'),
+          ),
+        if (result.status == PassengerLocationStatus.servicesDisabled)
+          TextButton(
+            key: const Key('open-location-settings'),
+            onPressed: _passengerLocationService.openLocationSettings,
+            child: const Text('Open Location Settings'),
+          ),
+        TextButton.icon(
+          key: const Key('refresh-passenger-location'),
+          onPressed: _passengerLocationRequestInFlight
+              ? null
+              : _refreshPassengerLocation,
+          icon: const Icon(Icons.my_location),
+          label: const Text('Refresh Location'),
+        ),
+      ],
+    );
+  }
+
+  MapCoordinate? _boardingStopCoordinate(SelectedJourneyLeg activeLeg) {
+    final stops = _progressCalculators[_selectedLeg]?.data.stops;
+    if (stops == null) return null;
+    for (final stop in stops) {
+      if (stop.stopId == activeLeg.fromStopId) return stop.coordinate;
+    }
+    return null;
   }
 
   Widget _buildProgressSummary({required bool currentIsLive}) {
@@ -427,15 +572,18 @@ class _SelectedJourneyTrackerPageState extends State<SelectedJourneyTrackerPage>
         ? const <RealtimeVehicleMarkerData>[]
         : [displayed];
     if (_mapError != null) {
-      final fallbackMap = markers.isEmpty
+      final fallbackMap =
+          markers.isEmpty && _passengerLocationResult.location == null
           ? const SizedBox.shrink()
           : widget.mapBuilder?.call(
                   const JourneyMapData(stops: [], legs: []),
                   markers,
+                  _passengerLocationResult.location,
                 ) ??
                 JourneyRouteMap(
                   data: const JourneyMapData(stops: [], legs: []),
                   realtimeMarkers: markers,
+                  passengerLocation: _passengerLocationResult.location,
                 );
       return Stack(
         children: [
@@ -465,8 +613,16 @@ class _SelectedJourneyTrackerPageState extends State<SelectedJourneyTrackerPage>
     }
     final data = _mapData;
     if (data == null) return const Center(child: CircularProgressIndicator());
-    return widget.mapBuilder?.call(data, markers) ??
-        JourneyRouteMap(data: data, realtimeMarkers: markers);
+    return widget.mapBuilder?.call(
+          data,
+          markers,
+          _passengerLocationResult.location,
+        ) ??
+        JourneyRouteMap(
+          data: data,
+          realtimeMarkers: markers,
+          passengerLocation: _passengerLocationResult.location,
+        );
   }
 
   String _displayValue(String? value) =>

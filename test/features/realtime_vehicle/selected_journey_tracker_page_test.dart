@@ -5,6 +5,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/timetable_recommendation_repository.dart';
 import 'package:government_transit_collector/features/journey_map/data/journey_map_models.dart';
 import 'package:government_transit_collector/features/journey_map/data/journey_map_repository.dart';
+import 'package:government_transit_collector/features/passenger_location/data/passenger_location.dart';
+import 'package:government_transit_collector/features/passenger_location/data/passenger_location_service.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/gtfs_realtime_decoder.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/realtime_vehicle_position.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/realtime_vehicle_repository.dart';
@@ -135,6 +137,84 @@ class FailingProgressRepository implements TripProgressRepository {
       Future.error(Exception('static unavailable'));
 }
 
+class FakePassengerLocationService implements PassengerLocationService {
+  FakePassengerLocationService(this.responses);
+
+  final List<PassengerLocationResult> responses;
+  int calls = 0;
+  int appSettingsCalls = 0;
+  int locationSettingsCalls = 0;
+
+  @override
+  Future<PassengerLocationResult> getCurrentLocation() async {
+    final index = calls.clamp(0, responses.length - 1);
+    calls++;
+    return responses[index];
+  }
+
+  @override
+  Future<bool> openAppSettings() async {
+    appSettingsCalls++;
+    return true;
+  }
+
+  @override
+  Future<bool> openLocationSettings() async {
+    locationSettingsCalls++;
+    return true;
+  }
+}
+
+class DeferredPassengerLocationService implements PassengerLocationService {
+  DeferredPassengerLocationService(this.result);
+  final Future<PassengerLocationResult> result;
+
+  @override
+  Future<PassengerLocationResult> getCurrentLocation() => result;
+
+  @override
+  Future<bool> openAppSettings() async => true;
+
+  @override
+  Future<bool> openLocationSettings() async => true;
+}
+
+class QueuedPassengerLocationService implements PassengerLocationService {
+  QueuedPassengerLocationService(this.responses);
+  final List<Future<PassengerLocationResult>> responses;
+  int calls = 0;
+  int activeCalls = 0;
+  int maximumActiveCalls = 0;
+
+  @override
+  Future<PassengerLocationResult> getCurrentLocation() async {
+    final index = calls.clamp(0, responses.length - 1);
+    calls++;
+    activeCalls++;
+    maximumActiveCalls = maximumActiveCalls < activeCalls
+        ? activeCalls
+        : maximumActiveCalls;
+    try {
+      return await responses[index];
+    } finally {
+      activeCalls--;
+    }
+  }
+
+  @override
+  Future<bool> openAppSettings() async => true;
+
+  @override
+  Future<bool> openLocationSettings() async => true;
+}
+
+final johorPassengerLocation = PassengerLocation(
+  latitude: 1.49,
+  longitude: 103.74,
+  accuracyMeters: 12,
+  timestamp: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+);
+
 RealtimeVehiclePosition vehicle(
   String tripId, {
   String id = 'bus-1',
@@ -165,6 +245,7 @@ Widget app({
   required SelectedJourneyTracking selected,
   required SequenceRepository realtime,
   TripProgressRepository? progress,
+  PassengerLocationService? location,
 }) => MaterialApp(
   theme: ThemeData(useMaterial3: true),
   home: SelectedJourneyTrackerPage(
@@ -172,14 +253,24 @@ Widget app({
     realtimeRepository: realtime,
     journeyMapRepository: MapRepository(),
     tripProgressRepository: progress ?? ProgressRepository(),
+    passengerLocationService:
+        location ??
+        FakePassengerLocationService(const [
+          PassengerLocationResult.permissionDenied(),
+        ]),
     pollingInterval: const Duration(hours: 1),
-    mapBuilder: (data, markers) => ColoredBox(
+    mapBuilder: (data, markers, passenger) => ColoredBox(
       key: const Key('fake-selected-map'),
       color: Colors.blueGrey,
       child: Column(
         children: [
           Text('planned-stops:${data.stops.length}'),
           Text('planned-legs:${data.legs.length}'),
+          if (passenger != null)
+            Text(
+              'passenger:${passenger.latitude},${passenger.longitude}',
+              key: const Key('fake-passenger-marker'),
+            ),
           for (final marker in markers)
             Text(
               '${marker.vehicle.tripId}:${marker.latitude}',
@@ -197,6 +288,246 @@ Future<void> refresh(WidgetTester tester) async {
 }
 
 void main() {
+  testWidgets('shows location loading independently from realtime', (
+    tester,
+  ) async {
+    final pending = Completer<PassengerLocationResult>();
+    await tester.pumpWidget(
+      app(
+        selected: journey(fixtures.directRecommendation),
+        realtime: SequenceRepository([() async => snapshot([])]),
+        location: DeferredPassengerLocationService(pending.future),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('Getting your location...'), findsOneWidget);
+    expect(
+      find.text('Waiting for realtime vehicle data for this trip.'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets(
+    'successful location shows boarding distance without a live bus',
+    (tester) async {
+      final location = FakePassengerLocationService([
+        PassengerLocationResult.available(johorPassengerLocation),
+      ]);
+      await tester.pumpWidget(
+        app(
+          selected: journey(fixtures.directRecommendation),
+          realtime: SequenceRepository([() async => snapshot([])]),
+          location: location,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Boarding stop: Origin Stop'), findsOneWidget);
+      expect(
+        find.text(
+          'Straight-line distance: approximately 0 m from boarding stop',
+        ),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('fake-passenger-marker')), findsOneWidget);
+      expect(find.byKey(const Key('map-bus-1')), findsNothing);
+    },
+  );
+
+  testWidgets('location failures do not hide realtime bus and progress', (
+    tester,
+  ) async {
+    final cases = <PassengerLocationResult, String>{
+      const PassengerLocationResult.notRequested():
+          'Location permission is required.',
+      const PassengerLocationResult.permissionDenied():
+          'Location permission was denied.',
+      const PassengerLocationResult.permissionDeniedForever():
+          'Location permission is permanently denied.',
+      const PassengerLocationResult.servicesDisabled():
+          'Location services are disabled.',
+      const PassengerLocationResult.unknownError():
+          'An unexpected location error occurred.',
+    };
+    for (final entry in cases.entries) {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+      await tester.pumpWidget(
+        app(
+          selected: journey(fixtures.directRecommendation),
+          realtime: SequenceRepository([
+            () async => snapshot([vehicle('direct-trip')]),
+          ]),
+          location: FakePassengerLocationService([entry.key]),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text(entry.value), findsOneWidget);
+      expect(find.byKey(const Key('map-bus-1')), findsOneWidget);
+      expect(find.byKey(const Key('route-progress-summary')), findsOneWidget);
+      expect(find.byKey(const Key('fake-passenger-marker')), findsNothing);
+    }
+  });
+
+  testWidgets('missing boarding coordinate and poor accuracy are explained', (
+    tester,
+  ) async {
+    final poorLocation = PassengerLocation(
+      latitude: 1.49,
+      longitude: 103.74,
+      accuracyMeters: 150,
+      timestamp: DateTime.utc(2026),
+    );
+    await tester.pumpWidget(
+      app(
+        selected: journey(fixtures.directRecommendation),
+        realtime: SequenceRepository([() async => snapshot([])]),
+        progress: ProgressRepository(
+          dataByTrip: {
+            'direct-trip': const TripProgressData(
+              tripId: 'direct-trip',
+              shapePoints: [],
+              stops: [],
+            ),
+          },
+        ),
+        location: FakePassengerLocationService([
+          PassengerLocationResult.available(poorLocation),
+        ]),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Boarding-stop coordinates are unavailable.'),
+      findsOneWidget,
+    );
+    expect(
+      find.text('Approximate location (limited GPS accuracy)'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('settings actions and Refresh Location use injected service', (
+    tester,
+  ) async {
+    final service = FakePassengerLocationService([
+      PassengerLocationResult.permissionDeniedForever(),
+      PassengerLocationResult.available(johorPassengerLocation),
+    ]);
+    await tester.pumpWidget(
+      app(
+        selected: journey(fixtures.directRecommendation),
+        realtime: SequenceRepository([
+          () async => snapshot([vehicle('direct-trip')]),
+        ]),
+        location: service,
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(
+      find.byKey(const Key('open-location-app-settings')),
+    );
+    await tester.tap(find.byKey(const Key('open-location-app-settings')));
+    await tester.pump();
+    expect(service.appSettingsCalls, 1);
+
+    await tester.ensureVisible(
+      find.byKey(const Key('refresh-passenger-location')),
+    );
+    await tester.tap(find.byKey(const Key('refresh-passenger-location')));
+    await tester.pumpAndSettle();
+    expect(service.calls, 2);
+    expect(find.byKey(const Key('fake-passenger-marker')), findsOneWidget);
+    expect(find.byKey(const Key('map-bus-1')), findsOneWidget);
+  });
+
+  testWidgets('repeated Refresh Location taps never overlap requests', (
+    tester,
+  ) async {
+    final refreshResult = Completer<PassengerLocationResult>();
+    final service = QueuedPassengerLocationService([
+      Future.value(PassengerLocationResult.available(johorPassengerLocation)),
+      refreshResult.future,
+    ]);
+    await tester.pumpWidget(
+      app(
+        selected: journey(fixtures.directRecommendation),
+        realtime: SequenceRepository([() async => snapshot([])]),
+        location: service,
+      ),
+    );
+    await tester.pumpAndSettle();
+    final refreshButton = find.byKey(const Key('refresh-passenger-location'));
+    await tester.ensureVisible(refreshButton);
+    await tester.tap(refreshButton);
+    await tester.pump();
+    await tester.tap(refreshButton);
+    await tester.pump();
+
+    expect(service.calls, 2);
+    expect(service.maximumActiveCalls, 1);
+    expect(find.text('Getting your location...'), findsOneWidget);
+    expect(tester.widget<TextButton>(refreshButton).onPressed, isNull);
+
+    refreshResult.complete(const PassengerLocationResult.unknownError());
+    await tester.pumpAndSettle();
+    expect(find.text('An unexpected location error occurred.'), findsOneWidget);
+    expect(tester.widget<TextButton>(refreshButton).onPressed, isNotNull);
+  });
+
+  testWidgets('last-known fallback is labelled and loading clears', (
+    tester,
+  ) async {
+    final service = FakePassengerLocationService([
+      PassengerLocationResult.available(
+        johorPassengerLocation,
+        isLastKnown: true,
+      ),
+    ]);
+    await tester.pumpWidget(
+      app(
+        selected: journey(fixtures.directRecommendation),
+        realtime: SequenceRepository([() async => snapshot([])]),
+        location: service,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('last-known-passenger-location')),
+      findsOneWidget,
+    );
+    expect(find.text('Getting your location...'), findsNothing);
+    expect(
+      tester
+          .widget<TextButton>(
+            find.byKey(const Key('refresh-passenger-location')),
+          )
+          .onPressed,
+      isNotNull,
+    );
+  });
+
+  testWidgets('disposed tracker ignores a late location result safely', (
+    tester,
+  ) async {
+    final pending = Completer<PassengerLocationResult>();
+    await tester.pumpWidget(
+      app(
+        selected: journey(fixtures.directRecommendation),
+        realtime: SequenceRepository([() async => snapshot([])]),
+        location: DeferredPassengerLocationService(pending.future),
+      ),
+    );
+    await tester.pump();
+    await tester.pumpWidget(const SizedBox.shrink());
+    pending.complete(PassengerLocationResult.available(johorPassengerLocation));
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('direct UI shows planned journey and only exact-trip vehicle', (
     tester,
   ) async {
@@ -393,30 +724,47 @@ void main() {
   testWidgets('transfer leg selector displays each exact leg vehicle', (
     tester,
   ) async {
-    TripProgressData legData(String tripId, String stopName) =>
-        TripProgressData(
-          tripId: tripId,
-          shapePoints: const [
-            MapCoordinate(1.49, 103.74),
-            MapCoordinate(1.51, 103.76),
-          ],
-          stops: [
-            TrackedTripStop(
-              stopId: '$tripId-stop',
-              stopName: stopName,
-              stopSequence: 1,
-              coordinate: const MapCoordinate(1.50, 103.75),
-              scheduledArrivalSeconds: 36000,
-              scheduledDepartureSeconds: 36000,
-            ),
-          ],
-        );
+    TripProgressData legData(
+      String tripId,
+      String stopId,
+      String stopName,
+      MapCoordinate coordinate,
+    ) => TripProgressData(
+      tripId: tripId,
+      shapePoints: const [
+        MapCoordinate(1.49, 103.74),
+        MapCoordinate(1.51, 103.76),
+      ],
+      stops: [
+        TrackedTripStop(
+          stopId: stopId,
+          stopName: stopName,
+          stopSequence: 1,
+          coordinate: coordinate,
+          scheduledArrivalSeconds: 36000,
+          scheduledDepartureSeconds: 36000,
+        ),
+      ],
+    );
     final progress = ProgressRepository(
       dataByTrip: {
-        'first-trip': legData('first-trip', 'First Leg Stop'),
-        'second-trip': legData('second-trip', 'Second Leg Stop'),
+        'first-trip': legData(
+          'first-trip',
+          'origin',
+          'First Leg Stop',
+          const MapCoordinate(1.49, 103.74),
+        ),
+        'second-trip': legData(
+          'second-trip',
+          'transfer',
+          'Second Leg Stop',
+          const MapCoordinate(1.50, 103.75),
+        ),
       },
     );
+    final location = FakePassengerLocationService([
+      PassengerLocationResult.available(johorPassengerLocation),
+    ]);
     await tester.pumpWidget(
       app(
         selected: journey(fixtures.transferRecommendation),
@@ -428,6 +776,7 @@ void main() {
           ]),
         ]),
         progress: progress,
+        location: location,
       ),
     );
     await tester.pumpAndSettle();
@@ -435,6 +784,11 @@ void main() {
     expect(find.text('J13 → J10'), findsOneWidget);
     expect(find.text('Transfer at JB Sentral'), findsOneWidget);
     expect(find.text('Selected leg: J13'), findsOneWidget);
+    expect(find.text('Boarding stop: Origin Stop'), findsOneWidget);
+    expect(
+      find.textContaining('approximately 0 m from boarding stop'),
+      findsOneWidget,
+    );
     expect(find.text('Near: First Leg Stop'), findsOneWidget);
     expect(find.byKey(const Key('map-first-bus')), findsOneWidget);
     expect(find.byKey(const Key('map-other-bus')), findsNothing);
@@ -443,12 +797,19 @@ void main() {
     await tester.tap(find.text('Leg 2: J10'));
     await tester.pumpAndSettle();
     expect(find.text('Selected leg: J10'), findsOneWidget);
+    expect(find.text('Boarding stop: JB Sentral'), findsOneWidget);
+    expect(
+      find.textContaining('approximately 1.6 km from boarding stop'),
+      findsOneWidget,
+    );
     expect(find.text('Near: Second Leg Stop'), findsOneWidget);
     expect(find.textContaining('First Leg Stop'), findsNothing);
     expect(find.byKey(const Key('map-second-bus')), findsOneWidget);
     expect(find.byKey(const Key('map-first-bus')), findsNothing);
     expect(progress.calls, 2);
     expect(progress.loadedTripIds, containsAll(['first-trip', 'second-trip']));
+    expect(location.calls, 1);
+    expect(find.byKey(const Key('fake-passenger-marker')), findsOneWidget);
   });
 
   testWidgets('refresh failure retains selected last-known position', (
@@ -502,12 +863,22 @@ void main() {
         app(
           selected: journey(fixtures.transferRecommendation),
           realtime: SequenceRepository([() async => snapshot([])]),
+          location: FakePassengerLocationService([
+            PassengerLocationResult.available(johorPassengerLocation),
+          ]),
         ),
       );
       await tester.pumpAndSettle();
       expect(find.text('J13 → J10'), findsOneWidget);
       expect(find.byKey(const Key('selected-leg-selector')), findsOneWidget);
       expect(find.byKey(const Key('refresh-selected-journey')), findsOneWidget);
+      expect(find.text('Your Location'), findsOneWidget);
+      expect(find.text('Boarding stop: Origin Stop'), findsOneWidget);
+      expect(
+        find.byKey(const Key('refresh-passenger-location')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('fake-passenger-marker')), findsOneWidget);
       expect(find.byKey(const Key('fake-selected-map')), findsOneWidget);
       expect(tester.takeException(), isNull);
     }

@@ -1,6 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- Required by Supabase and OpenStreetMap tile requests in all build modes. -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Foreground passenger location only. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <application
         android:label="government_transit_collector"
         android:name="${applicationName}"
