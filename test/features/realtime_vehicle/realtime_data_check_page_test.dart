@@ -96,6 +96,8 @@ void main() {
     expect(find.text('Trip matched: No'), findsOneWidget);
     expect(find.text('Latitude: 1.492345'), findsOneWidget);
     expect(find.text('Longitude: 103.741234'), findsOneWidget);
+    expect(find.text('Last feed update: 22/08/2026 1:21 AM'), findsOneWidget);
+    expect(find.text('Updated: 22/08/2026 1:20 AM'), findsOneWidget);
     expect(matcher.receivedIds, ['trip-1', 'unknown-trip']);
   });
 

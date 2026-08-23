@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:government_transit_collector/core/time/transit_service_time.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/departure_stop_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/direct_trip_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/recent_journey_search.dart';
@@ -29,6 +30,7 @@ class DepartureRecommendationPage extends StatefulWidget {
     this.journeyMapRepository,
     this.selectedJourneyTrackerBuilder,
     this.initialDateTime,
+    this.now,
     super.key,
   });
 
@@ -40,6 +42,7 @@ class DepartureRecommendationPage extends StatefulWidget {
   final JourneyMapRepository? journeyMapRepository;
   final SelectedJourneyTrackerBuilder? selectedJourneyTrackerBuilder;
   final DateTime? initialDateTime;
+  final DateTime Function()? now;
 
   @override
   State<DepartureRecommendationPage> createState() =>
@@ -65,7 +68,9 @@ class _DepartureRecommendationPageState
   @override
   void initState() {
     super.initState();
-    final initial = widget.initialDateTime ?? DateTime.now();
+    final initial =
+        widget.initialDateTime ??
+        currentTransitServiceDateTime(now: widget.now);
     _travelDate = DateTime(initial.year, initial.month, initial.day);
     _travelTime = TimeOfDay.fromDateTime(initial);
     _loadRecentSearches();

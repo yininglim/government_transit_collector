@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:government_transit_collector/core/time/transit_service_time.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/realtime_vehicle_repository.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/static_trip_matcher.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/presentation/animated_realtime_vehicle_layer.dart';
@@ -88,7 +89,7 @@ class _RealtimeJourneyTrackerPageState extends State<RealtimeJourneyTrackerPage>
 
   String _formatTimestamp(DateTime? timestamp) {
     if (timestamp == null) return 'Not provided';
-    final local = timestamp.toLocal();
+    final local = transitServiceDateTime(timestamp);
     final hour = local.hour % 12 == 0 ? 12 : local.hour % 12;
     final minute = local.minute.toString().padLeft(2, '0');
     final second = local.second.toString().padLeft(2, '0');

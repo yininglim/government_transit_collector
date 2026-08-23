@@ -130,6 +130,7 @@ void main() {
     expect(find.text('Vehicle: JWG6029'), findsOneWidget);
     expect(find.text('Trip matched: Yes'), findsOneWidget);
     expect(find.textContaining('Updated:'), findsOneWidget);
+    expect(find.text('Updated: 1:20:00 AM'), findsOneWidget);
     expect(find.text('Development movement diagnostic'), findsOneWidget);
     expect(
       find.text('Position changed: Not available (first observation)'),

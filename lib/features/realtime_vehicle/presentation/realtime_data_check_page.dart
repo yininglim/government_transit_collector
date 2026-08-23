@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:government_transit_collector/core/time/transit_service_time.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/gtfs_realtime_decoder.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/realtime_vehicle_position.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/realtime_vehicle_repository.dart';
@@ -78,7 +79,7 @@ class _RealtimeDataCheckPageState extends State<RealtimeDataCheckPage> {
 
   String _formatTimestamp(BuildContext context, DateTime? timestamp) {
     if (timestamp == null) return 'Not provided';
-    final local = timestamp.toLocal();
+    final local = transitServiceDateTime(timestamp);
     final date =
         '${local.day.toString().padLeft(2, '0')}/'
         '${local.month.toString().padLeft(2, '0')}/${local.year}';

@@ -127,6 +127,8 @@ class FakeTimetableRecommendationRepository
   FakeTimetableRecommendationRepository({this.results = const []});
 
   final List<JourneyRecommendation> results;
+  DateTime? receivedTravelDate;
+  int? receivedTravelTimeSeconds;
 
   @override
   Future<List<JourneyRecommendation>> findRecommendations({
@@ -136,7 +138,11 @@ class FakeTimetableRecommendationRepository
     required int travelTimeSeconds,
     required List<DirectRouteResult> directRoutes,
     required List<OneTransferJourneyResult> transferJourneys,
-  }) async => results;
+  }) async {
+    receivedTravelDate = travelDate;
+    receivedTravelTimeSeconds = travelTimeSeconds;
+    return results;
+  }
 }
 
 class FakeRecentSearchRepository implements RecentSearchRepository {
@@ -202,7 +208,13 @@ void main() {
       List<OneTransferJourneyResult> transferResults = const [],
       List<JourneyRecommendation> recommendations = const [],
       SelectedJourneyTrackerBuilder? selectedJourneyTrackerBuilder,
+      FakeTimetableRecommendationRepository? timetableRepository,
+      bool useCurrentTransitTime = false,
+      DateTime Function()? now,
     }) async {
+      final effectiveTimetableRepository =
+          timetableRepository ??
+          FakeTimetableRecommendationRepository(results: recommendations);
       await tester.pumpWidget(
         MaterialApp(
           home: DepartureRecommendationPage(
@@ -211,12 +223,13 @@ void main() {
             transferRepository: FakeTransferJourneyRepository(
               results: transferResults,
             ),
-            timetableRepository: FakeTimetableRecommendationRepository(
-              results: recommendations,
-            ),
+            timetableRepository: effectiveTimetableRepository,
             recentSearchRepository: FakeRecentSearchRepository(),
             selectedJourneyTrackerBuilder: selectedJourneyTrackerBuilder,
-            initialDateTime: DateTime(2026, 8, 21, 15, 30),
+            initialDateTime: useCurrentTransitTime
+                ? null
+                : DateTime(2026, 8, 21, 15, 30),
+            now: now,
           ),
         ),
       );
@@ -232,6 +245,45 @@ void main() {
       await tester.tap(find.byKey(Key('stop-${stop.id}')));
       await tester.pumpAndSettle();
     }
+
+    testWidgets('defaults to injected current Asia/Singapore date and time', (
+      tester,
+    ) async {
+      await pumpPage(
+        tester,
+        useCurrentTransitTime: true,
+        now: () => DateTime.utc(2026, 8, 21, 23, 53),
+      );
+
+      expect(find.text('Sat, Aug 22'), findsOneWidget);
+      expect(find.text('7:53 AM'), findsOneWidget);
+    });
+
+    testWidgets('respects an explicitly selected transit-local date and time', (
+      tester,
+    ) async {
+      final timetable = FakeTimetableRecommendationRepository();
+      await pumpPage(
+        tester,
+        directResults: const [directResult],
+        timetableRepository: timetable,
+      );
+      await selectStop(
+        tester,
+        fieldKey: const Key('origin-field'),
+        stop: larkin,
+      );
+      await selectStop(
+        tester,
+        fieldKey: const Key('destination-field'),
+        stop: jbSentral,
+      );
+      await tester.tap(find.byKey(const Key('journey-search-button')));
+      await tester.pumpAndSettle();
+
+      expect(timetable.receivedTravelDate, DateTime(2026, 8, 21));
+      expect(timetable.receivedTravelTimeSeconds, 15 * 3600 + 30 * 60);
+    });
 
     testWidgets('selects an origin stop', (tester) async {
       await pumpPage(tester);

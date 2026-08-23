@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/timetable_recommendation_repository.dart';
@@ -7,6 +9,8 @@ import 'package:government_transit_collector/features/realtime_vehicle/data/gtfs
 import 'package:government_transit_collector/features/realtime_vehicle/data/realtime_vehicle_position.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/realtime_vehicle_repository.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/selected_journey_tracking.dart';
+import 'package:government_transit_collector/features/realtime_vehicle/data/trip_progress_models.dart';
+import 'package:government_transit_collector/features/realtime_vehicle/data/trip_progress_repository.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/presentation/selected_journey_tracker_page.dart';
 
 import 'selected_journey_tracking_test.dart' as fixtures;
@@ -67,6 +71,70 @@ class MapRepository implements JourneyMapRepository {
   }
 }
 
+class ProgressRepository implements TripProgressRepository {
+  ProgressRepository({this.dataByTrip = const {}});
+
+  final Map<String, TripProgressData> dataByTrip;
+  int calls = 0;
+  final List<String> loadedTripIds = [];
+
+  @override
+  Future<TripProgressData> loadTrip(String exactTripId) async {
+    calls++;
+    loadedTripIds.add(exactTripId);
+    final custom = dataByTrip[exactTripId];
+    if (custom != null) return custom;
+    return TripProgressData(
+      tripId: exactTripId,
+      shapePoints: const [
+        MapCoordinate(1.49, 103.74),
+        MapCoordinate(1.50, 103.75),
+        MapCoordinate(1.51, 103.76),
+      ],
+      stops: const [
+        TrackedTripStop(
+          stopId: 'origin',
+          stopName: 'Origin',
+          stopSequence: 1,
+          coordinate: MapCoordinate(1.49, 103.74),
+          scheduledArrivalSeconds: 36000,
+          scheduledDepartureSeconds: 36000,
+        ),
+        TrackedTripStop(
+          stopId: 'middle',
+          stopName: 'Middle Stop',
+          stopSequence: 2,
+          coordinate: MapCoordinate(1.50, 103.75),
+          scheduledArrivalSeconds: 36600,
+          scheduledDepartureSeconds: 36600,
+        ),
+        TrackedTripStop(
+          stopId: 'destination',
+          stopName: 'Destination',
+          stopSequence: 3,
+          coordinate: MapCoordinate(1.51, 103.76),
+          scheduledArrivalSeconds: 37200,
+          scheduledDepartureSeconds: 37200,
+        ),
+      ],
+    );
+  }
+}
+
+class DeferredProgressRepository implements TripProgressRepository {
+  DeferredProgressRepository(this.future);
+  final Future<TripProgressData> future;
+
+  @override
+  Future<TripProgressData> loadTrip(String exactTripId) => future;
+}
+
+class FailingProgressRepository implements TripProgressRepository {
+  @override
+  Future<TripProgressData> loadTrip(String exactTripId) =>
+      Future.error(Exception('static unavailable'));
+}
+
 RealtimeVehiclePosition vehicle(
   String tripId, {
   String id = 'bus-1',
@@ -78,7 +146,7 @@ RealtimeVehiclePosition vehicle(
   tripId: tripId,
   routeId: routeId,
   latitude: latitude,
-  longitude: 103.745,
+  longitude: 103.74 + (latitude - 1.49),
   timestampSeconds: timestamp,
 );
 
@@ -96,12 +164,14 @@ SelectedJourneyTracking journey(JourneyRecommendation recommendation) =>
 Widget app({
   required SelectedJourneyTracking selected,
   required SequenceRepository realtime,
+  TripProgressRepository? progress,
 }) => MaterialApp(
   theme: ThemeData(useMaterial3: true),
   home: SelectedJourneyTrackerPage(
     journey: selected,
     realtimeRepository: realtime,
     journeyMapRepository: MapRepository(),
+    tripProgressRepository: progress ?? ProgressRepository(),
     pollingInterval: const Duration(hours: 1),
     mapBuilder: (data, markers) => ColoredBox(
       key: const Key('fake-selected-map'),
@@ -146,6 +216,10 @@ void main() {
     expect(find.text('10:30 AM → 11:05 AM'), findsOneWidget);
     expect(find.text('Live tracking active'), findsOneWidget);
     expect(find.text('Vehicle: selected'), findsOneWidget);
+    expect(find.byKey(const Key('route-progress-summary')), findsOneWidget);
+    expect(find.text('Next stop: Middle Stop'), findsOneWidget);
+    expect(find.text('Upcoming Stops'), findsOneWidget);
+    expect(find.text('✓ Origin'), findsOneWidget);
     expect(find.byKey(const Key('map-selected')), findsOneWidget);
     expect(find.byKey(const Key('map-unrelated')), findsNothing);
     expect(find.text('planned-stops:2'), findsOneWidget);
@@ -171,7 +245,77 @@ void main() {
       find.text('Waiting for realtime vehicle data for this trip.'),
       findsOneWidget,
     );
+    expect(find.byKey(const Key('route-progress-waiting')), findsOneWidget);
     expect(find.byKey(const Key('map-unrelated')), findsNothing);
+  });
+
+  testWidgets('shows static progress loading and failure distinctly', (
+    tester,
+  ) async {
+    final pending = Completer<TripProgressData>();
+    await tester.pumpWidget(
+      app(
+        selected: journey(fixtures.directRecommendation),
+        realtime: SequenceRepository([() async => snapshot([])]),
+        progress: DeferredProgressRepository(pending.future),
+      ),
+    );
+    await tester.pump();
+    expect(find.byKey(const Key('route-progress-loading')), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    await tester.pumpWidget(
+      app(
+        selected: journey(fixtures.directRecommendation),
+        realtime: SequenceRepository([() async => snapshot([])]),
+        progress: FailingProgressRepository(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Unable to load route progress information.'),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('retry-route-progress')), findsOneWidget);
+  });
+
+  testWidgets('shows missing-shape and off-route progress states', (
+    tester,
+  ) async {
+    final noShape = TripProgressData(
+      tripId: 'direct-trip',
+      shapePoints: const [],
+      stops: const [],
+    );
+    await tester.pumpWidget(
+      app(
+        selected: journey(fixtures.directRecommendation),
+        realtime: SequenceRepository([
+          () async => snapshot([vehicle('direct-trip')]),
+        ]),
+        progress: ProgressRepository(dataByTrip: {'direct-trip': noShape}),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('route-progress-shape-unavailable')),
+      findsOneWidget,
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    await tester.pumpWidget(
+      app(
+        selected: journey(fixtures.directRecommendation),
+        realtime: SequenceRepository([
+          () async => snapshot([vehicle('direct-trip', latitude: 2)]),
+        ]),
+        progress: ProgressRepository(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('route-progress-off-route')), findsOneWidget);
   });
 
   testWidgets('selected vehicle appearing later is shown automatically', (
@@ -213,6 +357,7 @@ void main() {
     await refresh(tester);
     expect(find.textContaining('temporarily unavailable'), findsOneWidget);
     expect(find.text('Last known position'), findsOneWidget);
+    expect(find.text('Last known route progress'), findsOneWidget);
     expect(find.text('direct-trip:1.49'), findsOneWidget);
 
     await refresh(tester);
@@ -220,9 +365,58 @@ void main() {
     expect(find.text('direct-trip:1.51'), findsOneWidget);
   });
 
+  testWidgets(
+    'static trip progress data loads once across realtime refreshes',
+    (tester) async {
+      final progress = ProgressRepository();
+      final realtime = SequenceRepository([
+        () async => snapshot([vehicle('direct-trip', latitude: 1.495)]),
+        () async =>
+            snapshot([vehicle('direct-trip', latitude: 1.50, timestamp: 115)]),
+      ]);
+      await tester.pumpWidget(
+        app(
+          selected: journey(fixtures.directRecommendation),
+          realtime: realtime,
+          progress: progress,
+        ),
+      );
+      await tester.pumpAndSettle();
+      await refresh(tester);
+
+      expect(progress.calls, 1);
+      expect(progress.loadedTripIds, ['direct-trip']);
+      expect(find.byKey(const Key('route-progress-summary')), findsOneWidget);
+    },
+  );
+
   testWidgets('transfer leg selector displays each exact leg vehicle', (
     tester,
   ) async {
+    TripProgressData legData(String tripId, String stopName) =>
+        TripProgressData(
+          tripId: tripId,
+          shapePoints: const [
+            MapCoordinate(1.49, 103.74),
+            MapCoordinate(1.51, 103.76),
+          ],
+          stops: [
+            TrackedTripStop(
+              stopId: '$tripId-stop',
+              stopName: stopName,
+              stopSequence: 1,
+              coordinate: const MapCoordinate(1.50, 103.75),
+              scheduledArrivalSeconds: 36000,
+              scheduledDepartureSeconds: 36000,
+            ),
+          ],
+        );
+    final progress = ProgressRepository(
+      dataByTrip: {
+        'first-trip': legData('first-trip', 'First Leg Stop'),
+        'second-trip': legData('second-trip', 'Second Leg Stop'),
+      },
+    );
     await tester.pumpWidget(
       app(
         selected: journey(fixtures.transferRecommendation),
@@ -233,6 +427,7 @@ void main() {
             vehicle('unrelated', id: 'other-bus'),
           ]),
         ]),
+        progress: progress,
       ),
     );
     await tester.pumpAndSettle();
@@ -240,6 +435,7 @@ void main() {
     expect(find.text('J13 → J10'), findsOneWidget);
     expect(find.text('Transfer at JB Sentral'), findsOneWidget);
     expect(find.text('Selected leg: J13'), findsOneWidget);
+    expect(find.text('Near: First Leg Stop'), findsOneWidget);
     expect(find.byKey(const Key('map-first-bus')), findsOneWidget);
     expect(find.byKey(const Key('map-other-bus')), findsNothing);
     expect(find.text('planned-legs:2'), findsOneWidget);
@@ -247,8 +443,12 @@ void main() {
     await tester.tap(find.text('Leg 2: J10'));
     await tester.pumpAndSettle();
     expect(find.text('Selected leg: J10'), findsOneWidget);
+    expect(find.text('Near: Second Leg Stop'), findsOneWidget);
+    expect(find.textContaining('First Leg Stop'), findsNothing);
     expect(find.byKey(const Key('map-second-bus')), findsOneWidget);
     expect(find.byKey(const Key('map-first-bus')), findsNothing);
+    expect(progress.calls, 2);
+    expect(progress.loadedTripIds, containsAll(['first-trip', 'second-trip']));
   });
 
   testWidgets('refresh failure retains selected last-known position', (
