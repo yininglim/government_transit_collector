@@ -82,9 +82,11 @@ class GtfsJourneyMapRepository implements JourneyMapRepository {
       final from = stopsById[leg.fromStopId]?.coordinate;
       final to = stopsById[leg.toStopId]?.coordinate;
       final shapeId = shapeByTrip[leg.tripId];
-      final fullPoints = shapeId == null
-          ? const <ShapePoint>[]
-          : pointsByShape[shapeId] ?? const <ShapePoint>[];
+      final fullPoints =
+          shapeId == null
+                ? const <ShapePoint>[]
+                : [...pointsByShape[shapeId] ?? const <ShapePoint>[]]
+            ..sort((left, right) => left.sequence.compareTo(right.sequence));
       final segment = from == null || to == null
           ? const ShapeSegment(points: [], usedFullShapeFallback: false)
           : segmentShape(
@@ -158,8 +160,8 @@ class SupabaseJourneyMapDataSource implements JourneyMapDataSource {
           .from('gtfs_shapes')
           .select('shape_id, shape_pt_sequence, shape_pt_lat, shape_pt_lon')
           .inFilter('shape_id', shapeIds)
-          .order('shape_id')
-          .order('shape_pt_sequence')
+          .order('shape_id', ascending: true)
+          .order('shape_pt_sequence', ascending: true)
           .range(start, start + _pageSize - 1);
       for (final row in rows) {
         final point = ShapePoint(
@@ -175,6 +177,9 @@ class SupabaseJourneyMapDataSource implements JourneyMapDataSource {
       }
       if (rows.length < _pageSize) break;
       start += _pageSize;
+    }
+    for (final points in pointsByShape.values) {
+      points.sort((left, right) => left.sequence.compareTo(right.sequence));
     }
     return pointsByShape;
   }

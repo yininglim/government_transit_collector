@@ -74,6 +74,8 @@ class JourneyProgressState {
     this.progressFraction,
     this.projectionDistanceMeters,
     this.wasJitterStabilized = false,
+    this.selectedOriginProgressMeters,
+    this.selectedDestinationProgressMeters,
   });
 
   final String activeTripId;
@@ -88,4 +90,6 @@ class JourneyProgressState {
   final double? projectionDistanceMeters;
   final DateTime? timestamp;
   final bool wasJitterStabilized;
+  final double? selectedOriginProgressMeters;
+  final double? selectedDestinationProgressMeters;
 }

@@ -61,9 +61,11 @@ class GtfsTripProgressRepository implements TripProgressRepository {
     final shapePoints = shapeId == null
         ? const <String, List<ShapePoint>>{}
         : await _mapDataSource.loadShapePoints([shapeId]);
-    final orderedShapePoints = shapeId == null
-        ? const <ShapePoint>[]
-        : shapePoints[shapeId] ?? const <ShapePoint>[];
+    final orderedShapePoints =
+        shapeId == null
+              ? const <ShapePoint>[]
+              : [...shapePoints[shapeId] ?? const <ShapePoint>[]]
+          ..sort((left, right) => left.sequence.compareTo(right.sequence));
 
     return TripProgressData(
       tripId: exactTripId,

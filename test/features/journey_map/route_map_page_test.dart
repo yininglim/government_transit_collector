@@ -4,6 +4,8 @@ import 'package:government_transit_collector/features/departure_recommendation/d
 import 'package:government_transit_collector/features/journey_map/data/journey_map_models.dart';
 import 'package:government_transit_collector/features/journey_map/data/journey_map_repository.dart';
 import 'package:government_transit_collector/features/journey_map/presentation/route_map_page.dart';
+import 'package:government_transit_collector/features/realtime_vehicle/data/realtime_vehicle_position.dart';
+import 'package:government_transit_collector/features/realtime_vehicle/presentation/realtime_vehicle_marker_data.dart';
 
 const recommendation = DirectJourneyRecommendation(
   tripId: 'trip',
@@ -47,6 +49,66 @@ Widget app(FakeRepository repository) => MaterialApp(
 );
 
 void main() {
+  testWidgets('selected journey map exposes compact camera controls', (
+    tester,
+  ) async {
+    const data = JourneyMapData(
+      stops: [
+        JourneyMapStop(
+          stopId: 'origin',
+          name: 'Origin',
+          coordinate: MapCoordinate(1.49, 103.74),
+          role: JourneyStopRole.origin,
+        ),
+        JourneyMapStop(
+          stopId: 'destination',
+          name: 'Destination',
+          coordinate: MapCoordinate(1.50, 103.75),
+          role: JourneyStopRole.destination,
+        ),
+      ],
+      legs: [
+        JourneyMapLeg(
+          tripId: 'trip',
+          routeLabel: 'J10',
+          points: [MapCoordinate(1.49, 103.74), MapCoordinate(1.50, 103.75)],
+          usedFullShapeFallback: false,
+        ),
+      ],
+    );
+    const vehicle = RealtimeVehiclePosition(
+      vehicleId: 'bus',
+      tripId: 'trip',
+      routeId: 'route',
+      latitude: 1.495,
+      longitude: 103.745,
+      timestampSeconds: 1,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: JourneyRouteMap(
+            data: data,
+            realtimeMarkers: buildRealtimeVehicleMarkers([vehicle]),
+            activeLegIndex: 0,
+            showCameraControls: true,
+            busLabel: 'J10',
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byKey(const Key('fit-journey-map')), findsOneWidget);
+    expect(find.byKey(const Key('fit-active-leg-map')), findsOneWidget);
+    expect(find.byKey(const Key('follow-live-bus')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('fit-journey-map')));
+    await tester.tap(find.byKey(const Key('fit-active-leg-map')));
+    await tester.tap(find.byKey(const Key('follow-live-bus')));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('missing shape keeps summary and displays fallback message', (
     tester,
   ) async {

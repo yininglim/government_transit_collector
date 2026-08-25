@@ -81,16 +81,16 @@ class FakeMapDataSource implements JourneyMapDataSource {
       for (final shapeId in shapeIds)
         shapeId: [
           const ShapePoint(
-            sequence: 1,
-            coordinate: MapCoordinate(1.450, 103.750),
+            sequence: 3,
+            coordinate: MapCoordinate(1.460, 103.760),
           ),
           const ShapePoint(
             sequence: 2,
             coordinate: MapCoordinate(1.455, 103.755),
           ),
           const ShapePoint(
-            sequence: 3,
-            coordinate: MapCoordinate(1.460, 103.760),
+            sequence: 1,
+            coordinate: MapCoordinate(1.450, 103.750),
           ),
         ],
     };
@@ -107,6 +107,10 @@ void main() {
     expect(source.requestedTripIds, ['direct-trip']);
     expect(source.requestedShapeIds, ['shape-direct-trip']);
     expect(result.legs, hasLength(1));
+    expect(
+      result.legs.single.points.first,
+      const MapCoordinate(1.450, 103.750),
+    );
     expect(result.stops, hasLength(2));
   });
 

@@ -35,8 +35,8 @@ class FakeMapSource implements JourneyMapDataSource {
     requestedShapes = shapeIds;
     return const {
       'shape-1': [
-        ShapePoint(sequence: 1, coordinate: MapCoordinate(1, 103)),
         ShapePoint(sequence: 2, coordinate: MapCoordinate(1.1, 103.1)),
+        ShapePoint(sequence: 1, coordinate: MapCoordinate(1, 103)),
       ],
     };
   }
@@ -85,6 +85,7 @@ void main() {
       expect(result.stops.first.stopName, 'Stop A');
       expect(result.stops.last.coordinate, isNull);
       expect(result.shapePoints, hasLength(2));
+      expect(result.shapePoints.first, const MapCoordinate(1, 103));
     },
   );
 }

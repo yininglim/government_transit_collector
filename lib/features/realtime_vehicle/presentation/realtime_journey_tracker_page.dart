@@ -1,10 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:government_transit_collector/core/time/transit_service_time.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/realtime_vehicle_repository.dart';
+import 'package:government_transit_collector/features/realtime_vehicle/data/realtime_vehicle_position.dart';
+import 'package:government_transit_collector/features/realtime_vehicle/data/realtime_route_metadata_repository.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/static_trip_matcher.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/presentation/animated_realtime_vehicle_layer.dart';
-import 'package:government_transit_collector/features/realtime_vehicle/presentation/realtime_movement_diagnostic.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/presentation/realtime_tracker_controller.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/presentation/realtime_vehicle_marker_data.dart';
 import 'package:latlong2/latlong.dart';
@@ -23,6 +26,7 @@ class RealtimeJourneyTrackerPage extends StatefulWidget {
     required this.tripMatcher,
     this.pollingInterval = realtimePollingInterval,
     this.mapBuilder,
+    this.routeMetadataRepository,
     super.key,
   });
 
@@ -30,6 +34,7 @@ class RealtimeJourneyTrackerPage extends StatefulWidget {
   final StaticTripMatcher tripMatcher;
   final Duration pollingInterval;
   final RealtimeMapBuilder? mapBuilder;
+  final RealtimeRouteMetadataRepository? routeMetadataRepository;
 
   @override
   State<RealtimeJourneyTrackerPage> createState() =>
@@ -39,9 +44,12 @@ class RealtimeJourneyTrackerPage extends StatefulWidget {
 class _RealtimeJourneyTrackerPageState extends State<RealtimeJourneyTrackerPage>
     with WidgetsBindingObserver {
   late final RealtimeTrackerController _controller;
-  final _movementDiagnostics = RealtimeMovementDiagnosticTracker();
   Object? _observedSnapshot;
   String? _selectedRoute;
+  final Map<String, RealtimeRouteMetadata> _routeMetadata = {};
+  final Set<String> _requestedRouteIds = {};
+  final Set<String> _knownRouteIds = {};
+  Object? _routeMetadataError;
 
   @override
   void initState() {
@@ -58,12 +66,38 @@ class _RealtimeJourneyTrackerPageState extends State<RealtimeJourneyTrackerPage>
   void _onControllerChanged() {
     final snapshot = _controller.snapshot;
     if (snapshot != null && !identical(snapshot, _observedSnapshot)) {
-      _movementDiagnostics.observe(
-        buildRealtimeVehicleMarkers(snapshot.vehicles),
-      );
       _observedSnapshot = snapshot;
+      unawaited(_loadRouteMetadata(snapshot.vehicles));
     }
     if (mounted) setState(() {});
+  }
+
+  Future<void> _loadRouteMetadata(
+    Iterable<RealtimeVehiclePosition> vehicles,
+  ) async {
+    final routeIds = vehicles
+        .map((vehicle) => vehicle.routeId?.trim())
+        .whereType<String>()
+        .where((routeId) => routeId.isNotEmpty)
+        .where((routeId) => !_requestedRouteIds.contains(routeId))
+        .toSet();
+    if (routeIds.isEmpty) return;
+    _knownRouteIds.addAll(routeIds);
+    _requestedRouteIds.addAll(routeIds);
+    try {
+      final loaded =
+          await (widget.routeMetadataRepository ??
+                  SupabaseRealtimeRouteMetadataRepository())
+              .loadRoutes(routeIds);
+      if (!mounted) return;
+      setState(() {
+        _routeMetadata.addAll(loaded);
+        _routeMetadataError = null;
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() => _routeMetadataError = error);
+    }
   }
 
   @override
@@ -98,8 +132,8 @@ class _RealtimeJourneyTrackerPageState extends State<RealtimeJourneyTrackerPage>
 
   Future<void> _showVehicleDetails(RealtimeVehicleMarkerData marker) async {
     final vehicle = marker.vehicle;
-    final diagnostic = _movementDiagnostics.forIdentity(marker.identity);
-    final matched = _controller.isTripMatched(vehicle.tripId);
+    final routeId = vehicle.routeId?.trim();
+    final route = routeId == null ? null : _routeMetadata[routeId];
     final stale = vehicle.timestamp?.isBefore(
       DateTime.now().toUtc().subtract(realtimeStaleThreshold),
     );
@@ -115,44 +149,16 @@ class _RealtimeJourneyTrackerPageState extends State<RealtimeJourneyTrackerPage>
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Route ${_displayValue(vehicle.routeId)}',
+                route?.passengerShortName ?? _displayValue(routeId),
                 style: Theme.of(context).textTheme.titleLarge,
               ),
+              if (route?.passengerLongName case final longName?) ...[
+                const SizedBox(height: 2),
+                Text(longName),
+              ],
               const SizedBox(height: 12),
               Text('Vehicle: ${_displayValue(vehicle.vehicleId)}'),
-              Text(
-                'Trip matched: '
-                '${matched == null
-                    ? 'Not checked'
-                    : matched
-                    ? 'Yes'
-                    : 'No'}',
-              ),
               Text('Updated: ${_formatTimestamp(vehicle.timestamp)}'),
-              const SizedBox(height: 16),
-              Text(
-                'Development movement diagnostic',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Position changed: ${_formatChanged(diagnostic?.positionChanged)}',
-              ),
-              Text('Previous: ${_formatCoordinate(diagnostic?.previous)}'),
-              Text('Latest: ${_formatCoordinate(diagnostic?.latest)}'),
-              Text('Moved: ${_formatDistance(diagnostic?.distanceMetres)}'),
-              Text(
-                'Previous vehicle timestamp: '
-                '${_formatTimestamp(diagnostic?.previous?.vehicle.timestamp)}',
-              ),
-              Text(
-                'Latest vehicle timestamp: '
-                '${_formatTimestamp(diagnostic?.latest.vehicle.timestamp)}',
-              ),
-              Text(
-                'Feed interval: '
-                '${_formatInterval(diagnostic?.feedIntervalSeconds)}',
-              ),
               if (stale == true) ...[
                 const SizedBox(height: 8),
                 const Text('This vehicle position may be stale.'),
@@ -166,23 +172,6 @@ class _RealtimeJourneyTrackerPageState extends State<RealtimeJourneyTrackerPage>
 
   String _displayValue(String? value) =>
       value?.trim().isNotEmpty == true ? value!.trim() : 'Not provided';
-
-  String _formatChanged(bool? changed) => changed == null
-      ? 'Not available (first observation)'
-      : changed
-      ? 'Yes'
-      : 'No';
-
-  String _formatCoordinate(RealtimeVehicleMarkerData? marker) => marker == null
-      ? 'Not available'
-      : '${marker.latitude.toStringAsFixed(6)}, '
-            '${marker.longitude.toStringAsFixed(6)}';
-
-  String _formatDistance(double? metres) =>
-      metres == null ? 'Not available' : '${metres.toStringAsFixed(1)} m';
-
-  String _formatInterval(int? seconds) =>
-      seconds == null ? 'Not available' : '$seconds sec';
 
   @override
   Widget build(BuildContext context) {
@@ -229,17 +218,14 @@ class _RealtimeJourneyTrackerPageState extends State<RealtimeJourneyTrackerPage>
     final allMarkers = buildRealtimeVehicleMarkers(
       _controller.snapshot!.vehicles,
     );
-    final routes =
-        allMarkers
-            .map((marker) => marker.vehicle.routeId?.trim())
-            .whereType<String>()
-            .where((route) => route.isNotEmpty)
-            .toSet()
-            .toList()
-          ..sort();
-    final effectiveRoute = routes.contains(_selectedRoute)
-        ? _selectedRoute
-        : null;
+    _knownRouteIds.addAll(
+      allMarkers
+          .map((marker) => marker.vehicle.routeId?.trim())
+          .whereType<String>()
+          .where((route) => route.isNotEmpty),
+    );
+    final routes = _knownRouteIds.toList()..sort();
+    final effectiveRoute = _selectedRoute;
     final visibleMarkers = effectiveRoute == null
         ? allMarkers
         : allMarkers
@@ -255,17 +241,28 @@ class _RealtimeJourneyTrackerPageState extends State<RealtimeJourneyTrackerPage>
       warning: _controller.refreshWarning ?? _controller.matchingWarning,
       routes: routes,
       selectedRoute: effectiveRoute,
+      routeMetadata: _routeMetadata,
+      routeMetadataUnavailable: _routeMetadataError != null,
+      selectedVehicleCount: visibleMarkers.length,
       formatTimestamp: _formatTimestamp,
       onRouteChanged: (route) => setState(() => _selectedRoute = route),
       onRefresh: _controller.isRefreshing ? null : _controller.refresh,
     );
-    final map = visibleMarkers.isEmpty
-        ? const _NoRealtimeVehicles()
-        : widget.mapBuilder?.call(visibleMarkers, _showVehicleDetails) ??
-              RealtimeVehicleMap(
-                markers: visibleMarkers,
-                onMarkerTap: _showVehicleDetails,
-              );
+    final map = KeyedSubtree(
+      key: ValueKey('realtime-map-route-${effectiveRoute ?? 'all'}'),
+      child: visibleMarkers.isEmpty
+          ? _NoRealtimeVehicles(
+              routeName: effectiveRoute == null
+                  ? null
+                  : _routeMetadata[effectiveRoute]?.passengerShortName ??
+                        effectiveRoute,
+            )
+          : widget.mapBuilder?.call(visibleMarkers, _showVehicleDetails) ??
+                RealtimeVehicleMap(
+                  markers: visibleMarkers,
+                  onMarkerTap: _showVehicleDetails,
+                ),
+    );
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -306,6 +303,9 @@ class _TrackerStatusPanel extends StatelessWidget {
     required this.formatTimestamp,
     required this.onRouteChanged,
     required this.onRefresh,
+    required this.routeMetadata,
+    required this.routeMetadataUnavailable,
+    required this.selectedVehicleCount,
   });
 
   final int vehicleCount;
@@ -318,6 +318,16 @@ class _TrackerStatusPanel extends StatelessWidget {
   final String Function(DateTime?) formatTimestamp;
   final ValueChanged<String?> onRouteChanged;
   final VoidCallback? onRefresh;
+  final Map<String, RealtimeRouteMetadata> routeMetadata;
+  final bool routeMetadataUnavailable;
+  final int selectedVehicleCount;
+
+  String routeLabel(String routeId) {
+    final metadata = routeMetadata[routeId];
+    final shortName = metadata?.passengerShortName ?? routeId;
+    final longName = metadata?.passengerLongName;
+    return longName == null ? shortName : '$shortName — $longName';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -332,7 +342,7 @@ class _TrackerStatusPanel extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    'Live Vehicles: $vehicleCount',
+                    'Live buses: $vehicleCount',
                     key: const Key('tracker-vehicle-count'),
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
@@ -345,12 +355,13 @@ class _TrackerStatusPanel extends StatelessWidget {
                 ),
               ],
             ),
-            Text('Last updated: ${formatTimestamp(feedTimestamp)}'),
-            Text('Auto refresh: Every ${pollingInterval.inSeconds} sec'),
+            Text('Updated: ${formatTimestamp(feedTimestamp)}'),
+            Text('Auto refresh: ${pollingInterval.inSeconds} sec'),
             const SizedBox(height: 8),
             DropdownButtonFormField<String?>(
               key: const Key('route-filter'),
               initialValue: selectedRoute,
+              isExpanded: true,
               decoration: const InputDecoration(
                 labelText: 'Route filter',
                 border: OutlineInputBorder(),
@@ -359,11 +370,30 @@ class _TrackerStatusPanel extends StatelessWidget {
               items: [
                 const DropdownMenuItem(value: null, child: Text('All Routes')),
                 ...routes.map(
-                  (route) => DropdownMenuItem(value: route, child: Text(route)),
+                  (route) => DropdownMenuItem(
+                    value: route,
+                    child: Text(
+                      routeLabel(route),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
                 ),
               ],
               onChanged: onRouteChanged,
             ),
+            if (selectedRoute case final routeId?) ...[
+              const SizedBox(height: 8),
+              Text(
+                routeMetadata[routeId]?.passengerShortName ?? routeId,
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              if (routeMetadata[routeId]?.passengerLongName case final name?)
+                Text(name),
+              Text('Live buses: $selectedVehicleCount'),
+            ],
+            if (routeMetadataUnavailable)
+              const Text('Passenger route names are temporarily unavailable.'),
             if (isRefreshing) ...[
               const SizedBox(height: 8),
               const LinearProgressIndicator(key: Key('tracker-refreshing')),
@@ -384,16 +414,20 @@ class _TrackerStatusPanel extends StatelessWidget {
 }
 
 class _NoRealtimeVehicles extends StatelessWidget {
-  const _NoRealtimeVehicles();
+  const _NoRealtimeVehicles({this.routeName});
+
+  final String? routeName;
 
   @override
   Widget build(BuildContext context) {
-    return const Center(
+    return Center(
       key: Key('tracker-empty'),
       child: Padding(
         padding: EdgeInsets.all(24),
         child: Text(
-          'No realtime vehicle positions are currently available.',
+          routeName == null
+              ? 'No realtime vehicle positions are currently available.'
+              : 'No realtime buses are currently available for $routeName.',
           textAlign: TextAlign.center,
         ),
       ),

@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:government_transit_collector/core/time/transit_service_time.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/departure_stop_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/direct_trip_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/recent_journey_search.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/recent_search_repository.dart';
+import 'package:government_transit_collector/features/departure_recommendation/data/recommendation_realtime_availability.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/timetable_recommendation_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/transfer_journey_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/presentation/departure_validation.dart';
@@ -31,6 +34,7 @@ class DepartureRecommendationPage extends StatefulWidget {
     this.selectedJourneyTrackerBuilder,
     this.initialDateTime,
     this.now,
+    this.realtimeRepository,
     super.key,
   });
 
@@ -43,6 +47,7 @@ class DepartureRecommendationPage extends StatefulWidget {
   final SelectedJourneyTrackerBuilder? selectedJourneyTrackerBuilder;
   final DateTime? initialDateTime;
   final DateTime Function()? now;
+  final RealtimeVehicleRepository? realtimeRepository;
 
   @override
   State<DepartureRecommendationPage> createState() =>
@@ -64,6 +69,10 @@ class _DepartureRecommendationPageState
   String? _historyError;
   late DateTime _travelDate;
   late TimeOfDay _travelTime;
+  Map<String, RecommendationRealtimeAvailability> _liveAvailability = const {};
+  var _liveStatusLoading = false;
+  var _liveStatusUnavailable = false;
+  var _availabilityRequest = 0;
 
   @override
   void initState() {
@@ -126,12 +135,16 @@ class _DepartureRecommendationPageState
   }
 
   void _resetSearchState() {
+    _availabilityRequest++;
     _validationMessage = null;
     _directError = null;
     _transferError = null;
     _recommendations = null;
     _timetableError = null;
     _routeStructureFound = null;
+    _liveAvailability = const {};
+    _liveStatusLoading = false;
+    _liveStatusUnavailable = false;
   }
 
   Future<void> _selectTravelDate() async {
@@ -245,9 +258,44 @@ class _DepartureRecommendationPageState
       _timetableError = timetableError;
       _routeStructureFound = routeStructureFound;
       _searching = false;
+      _liveAvailability = const {};
+      _liveStatusUnavailable = false;
+      _liveStatusLoading = recommendations?.isNotEmpty == true;
     });
+    if (recommendations?.isNotEmpty == true) {
+      final request = ++_availabilityRequest;
+      unawaited(_loadRealtimeAvailability(recommendations!, request));
+    }
     if (directError == null || transferError == null) {
       await _saveRecentSearch(origin, destination);
+    }
+  }
+
+  Future<void> _loadRealtimeAvailability(
+    List<JourneyRecommendation> recommendations,
+    int request,
+  ) async {
+    try {
+      final snapshot =
+          await (widget.realtimeRepository ??
+                  DataGovMyRealtimeVehicleRepository())
+              .fetchVehiclePositions();
+      if (!mounted || request != _availabilityRequest) return;
+      setState(() {
+        _liveAvailability = evaluateRecommendationRealtimeAvailability(
+          recommendations: recommendations,
+          vehicles: snapshot.vehicles,
+        );
+        _liveStatusLoading = false;
+        _liveStatusUnavailable = false;
+      });
+    } on Object {
+      if (!mounted || request != _availabilityRequest) return;
+      setState(() {
+        _liveAvailability = const {};
+        _liveStatusLoading = false;
+        _liveStatusUnavailable = true;
+      });
     }
   }
 
@@ -498,6 +546,12 @@ class _DepartureRecommendationPageState
             journeyMapRepository:
                 widget.journeyMapRepository ?? GtfsJourneyMapRepository(),
             selectedJourneyTrackerBuilder: widget.selectedJourneyTrackerBuilder,
+            liveAvailability:
+                _liveAvailability[recommendationAvailabilityKey(
+                  recommendation,
+                )],
+            liveStatusLoading: _liveStatusLoading,
+            liveStatusUnavailable: _liveStatusUnavailable,
           ),
         ),
       ],
@@ -571,6 +625,9 @@ class _RecommendationCard extends StatelessWidget {
     required this.travelDate,
     required this.journeyMapRepository,
     this.selectedJourneyTrackerBuilder,
+    required this.liveAvailability,
+    required this.liveStatusLoading,
+    required this.liveStatusUnavailable,
   });
 
   final JourneyRecommendation recommendation;
@@ -579,6 +636,9 @@ class _RecommendationCard extends StatelessWidget {
   final DateTime travelDate;
   final JourneyMapRepository journeyMapRepository;
   final SelectedJourneyTrackerBuilder? selectedJourneyTrackerBuilder;
+  final RecommendationRealtimeAvailability? liveAvailability;
+  final bool liveStatusLoading;
+  final bool liveStatusUnavailable;
 
   String _routeLabel(String routeId, String? shortName) {
     final trimmed = shortName?.trim();
@@ -626,6 +686,13 @@ class _RecommendationCard extends StatelessWidget {
               label: transfer == null
                   ? '$duration • Direct'
                   : '$duration • 1 transfer',
+            ),
+            const SizedBox(height: 8),
+            _RecommendationLiveStatus(
+              transfer: transfer != null,
+              availability: liveAvailability,
+              loading: liveStatusLoading,
+              unavailable: liveStatusUnavailable,
             ),
             const SizedBox(height: 8),
             Align(
@@ -688,6 +755,52 @@ class _RecommendationCard extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _RecommendationLiveStatus extends StatelessWidget {
+  const _RecommendationLiveStatus({
+    required this.transfer,
+    required this.availability,
+    required this.loading,
+    required this.unavailable,
+  });
+
+  final bool transfer;
+  final RecommendationRealtimeAvailability? availability;
+  final bool loading;
+  final bool unavailable;
+
+  @override
+  Widget build(BuildContext context) {
+    if (loading) {
+      return const Text(
+        'Checking live status…',
+        key: Key('recommendation-live-loading'),
+      );
+    }
+    if (unavailable || availability == null) {
+      return const Text(
+        'Live status unavailable',
+        key: Key('recommendation-live-unavailable'),
+      );
+    }
+    if (!transfer) {
+      return Text(
+        availability!.firstLegLive ? 'Live now' : 'Not currently live',
+        key: const Key('direct-live-status'),
+      );
+    }
+    return Column(
+      key: const Key('transfer-live-status'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Leg 1: ${availability!.firstLegLive ? 'Live' : 'Not live'}'),
+        Text(
+          'Leg 2: ${availability!.secondLegLive == true ? 'Live' : 'Not live yet'}',
+        ),
+      ],
     );
   }
 }

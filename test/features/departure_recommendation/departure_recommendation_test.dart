@@ -8,6 +8,9 @@ import 'package:government_transit_collector/features/departure_recommendation/d
 import 'package:government_transit_collector/features/departure_recommendation/data/transfer_journey_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/presentation/departure_recommendation_page.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/selected_journey_tracking.dart';
+import 'package:government_transit_collector/features/realtime_vehicle/data/gtfs_realtime_decoder.dart';
+import 'package:government_transit_collector/features/realtime_vehicle/data/realtime_vehicle_position.dart';
+import 'package:government_transit_collector/features/realtime_vehicle/data/realtime_vehicle_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/presentation/departure_validation.dart';
 
 const larkin = DepartureStop(id: 'larkin', name: 'Larkin Sentral');
@@ -170,6 +173,34 @@ class FakeRecentSearchRepository implements RecentSearchRepository {
   }
 }
 
+class FakeRecommendationRealtimeRepository
+    implements RealtimeVehicleRepository {
+  FakeRecommendationRealtimeRepository({this.vehicles = const [], this.error});
+
+  final List<RealtimeVehiclePosition> vehicles;
+  final Object? error;
+  int calls = 0;
+
+  @override
+  Future<RealtimeFeedSnapshot> fetchVehiclePositions() async {
+    calls++;
+    if (error case final failure?) throw failure;
+    return RealtimeFeedSnapshot(vehicles: vehicles, feedTimestampSeconds: 100);
+  }
+}
+
+RealtimeVehiclePosition recommendationVehicle({
+  required String tripId,
+  required String routeId,
+}) => RealtimeVehiclePosition(
+  vehicleId: 'bus-$tripId',
+  tripId: tripId,
+  routeId: routeId,
+  latitude: 1.49,
+  longitude: 103.74,
+  timestampSeconds: 100,
+);
+
 void main() {
   group('departure stop validation', () {
     test('rejects missing origin', () {
@@ -211,6 +242,7 @@ void main() {
       FakeTimetableRecommendationRepository? timetableRepository,
       bool useCurrentTransitTime = false,
       DateTime Function()? now,
+      RealtimeVehicleRepository? realtimeRepository,
     }) async {
       final effectiveTimetableRepository =
           timetableRepository ??
@@ -230,6 +262,8 @@ void main() {
                 ? null
                 : DateTime(2026, 8, 21, 15, 30),
             now: now,
+            realtimeRepository:
+                realtimeRepository ?? FakeRecommendationRealtimeRepository(),
           ),
         ),
       );
@@ -407,8 +441,100 @@ void main() {
       expect(find.text('View Route'), findsNWidgets(2));
       expect(find.text('Track Journey'), findsNWidgets(2));
       expect(find.textContaining('matching trip'), findsNothing);
-      expect(find.textContaining('Leg 1:'), findsNothing);
-      expect(find.textContaining('Leg 2:'), findsNothing);
+      expect(find.textContaining('Leg 1:'), findsOneWidget);
+      expect(find.textContaining('Leg 2:'), findsOneWidget);
+    });
+
+    testWidgets('shows exact direct and independent transfer live statuses', (
+      tester,
+    ) async {
+      final realtime = FakeRecommendationRealtimeRepository(
+        vehicles: [
+          recommendationVehicle(tripId: 'direct-trip', routeId: 'J15'),
+          recommendationVehicle(tripId: 'first-trip', routeId: 'J15'),
+        ],
+      );
+      await pumpPage(
+        tester,
+        directResults: const [directResult],
+        transferResults: const [transferResult],
+        recommendations: const [directRecommendation, transferRecommendation],
+        realtimeRepository: realtime,
+      );
+      await selectStop(
+        tester,
+        fieldKey: const Key('origin-field'),
+        stop: larkin,
+      );
+      await selectStop(
+        tester,
+        fieldKey: const Key('destination-field'),
+        stop: jbSentral,
+      );
+      await tester.tap(find.byKey(const Key('journey-search-button')));
+      await tester.pumpAndSettle();
+
+      expect(realtime.calls, 1);
+      expect(find.text('Live now'), findsOneWidget);
+      expect(find.text('Leg 1: Live'), findsOneWidget);
+      expect(find.text('Leg 2: Not live yet'), findsOneWidget);
+    });
+
+    testWidgets('same route different trip is not considered live', (
+      tester,
+    ) async {
+      await pumpPage(
+        tester,
+        directResults: const [directResult],
+        recommendations: const [directRecommendation],
+        realtimeRepository: FakeRecommendationRealtimeRepository(
+          vehicles: [
+            recommendationVehicle(tripId: 'other-trip', routeId: 'J15'),
+          ],
+        ),
+      );
+      await selectStop(
+        tester,
+        fieldKey: const Key('origin-field'),
+        stop: larkin,
+      );
+      await selectStop(
+        tester,
+        fieldKey: const Key('destination-field'),
+        stop: jbSentral,
+      );
+      await tester.tap(find.byKey(const Key('journey-search-button')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Not currently live'), findsOneWidget);
+      expect(find.text('Live now'), findsNothing);
+    });
+
+    testWidgets('realtime failure preserves recommendations', (tester) async {
+      await pumpPage(
+        tester,
+        directResults: const [directResult],
+        recommendations: const [directRecommendation],
+        realtimeRepository: FakeRecommendationRealtimeRepository(
+          error: const RealtimeVehicleReadException('offline'),
+        ),
+      );
+      await selectStop(
+        tester,
+        fieldKey: const Key('origin-field'),
+        stop: larkin,
+      );
+      await selectStop(
+        tester,
+        fieldKey: const Key('destination-field'),
+        stop: jbSentral,
+      );
+      await tester.tap(find.byKey(const Key('journey-search-button')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Live status unavailable'), findsOneWidget);
+      expect(find.text('Track Journey'), findsOneWidget);
+      expect(find.byKey(const Key('journey-results')), findsOneWidget);
     });
 
     testWidgets('Track Journey passes exact direct and transfer information', (

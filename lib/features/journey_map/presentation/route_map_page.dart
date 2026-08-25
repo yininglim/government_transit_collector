@@ -182,12 +182,18 @@ class JourneyRouteMap extends StatefulWidget {
     required this.data,
     this.realtimeMarkers = const [],
     this.passengerLocation,
+    this.activeLegIndex,
+    this.showCameraControls = false,
+    this.busLabel,
     super.key,
   });
 
   final JourneyMapData data;
   final List<RealtimeVehicleMarkerData> realtimeMarkers;
   final PassengerLocation? passengerLocation;
+  final int? activeLegIndex;
+  final bool showCameraControls;
+  final String? busLabel;
 
   @override
   State<JourneyRouteMap> createState() => _JourneyRouteMapState();
@@ -222,17 +228,67 @@ class _JourneyRouteMapState extends State<JourneyRouteMap> {
         }
       });
     }
+    if (widget.showCameraControls &&
+        oldWidget.activeLegIndex != widget.activeLegIndex) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _fitActiveLeg();
+      });
+    }
   }
 
   List<MapCoordinate> _allCoordinates() => [
-    ...widget.data.stops.map((stop) => stop.coordinate),
-    ...widget.data.legs.expand((leg) => leg.points),
+    ..._plannedCoordinates(),
     ...widget.realtimeMarkers.map(
       (marker) => MapCoordinate(marker.latitude, marker.longitude),
     ),
     if (widget.passengerLocation case final location?)
       MapCoordinate(location.latitude, location.longitude),
   ];
+
+  List<MapCoordinate> _plannedCoordinates() => [
+    ...widget.data.stops.map((stop) => stop.coordinate),
+    ...widget.data.legs.expand((leg) => leg.points),
+  ];
+
+  List<MapCoordinate> _activeLegCoordinates() {
+    final index = widget.activeLegIndex;
+    if (index == null || index < 0 || index >= widget.data.legs.length) {
+      return _allCoordinates();
+    }
+    final points = widget.data.legs[index].points;
+    return points.isEmpty ? _allCoordinates() : points;
+  }
+
+  void _fitCoordinates(List<MapCoordinate> coordinates) {
+    if (coordinates.isEmpty) return;
+    final points = coordinates
+        .map((point) => LatLng(point.latitude, point.longitude))
+        .toList();
+    if (points.length == 1) {
+      _mapController.move(points.single, 16);
+      return;
+    }
+    _mapController.fitCamera(
+      CameraFit.bounds(
+        bounds: LatLngBounds.fromPoints(points),
+        padding: const EdgeInsets.all(48),
+        maxZoom: 17,
+      ),
+    );
+  }
+
+  void _fitJourney() => _fitCoordinates(_plannedCoordinates());
+
+  void _fitActiveLeg() => _fitCoordinates(_activeLegCoordinates());
+
+  void _followBus() {
+    final marker = widget.realtimeMarkers.firstOrNull;
+    if (marker == null) return;
+    _mapController.move(
+      LatLng(marker.latitude, marker.longitude),
+      _mapController.camera.zoom.clamp(15, 18),
+    );
+  }
 
   void _handleTileError(TileImage tile, Object error, StackTrace? stackTrace) {
     debugPrint('OpenStreetMap tile failed to load: $error');
@@ -316,9 +372,11 @@ class _JourneyRouteMapState extends State<JourneyRouteMap> {
                       child: Tooltip(
                         message: stop.name,
                         child: Icon(
-                          stop.role == JourneyStopRole.transfer
-                              ? Icons.sync_alt
-                              : Icons.location_pin,
+                          switch (stop.role) {
+                            JourneyStopRole.origin => Icons.trip_origin,
+                            JourneyStopRole.transfer => Icons.sync_alt,
+                            JourneyStopRole.destination => Icons.flag,
+                          },
                           size: 38,
                           color: stop.role == JourneyStopRole.destination
                               ? Theme.of(context).colorScheme.error
@@ -371,26 +429,35 @@ class _JourneyRouteMapState extends State<JourneyRouteMap> {
                         point: LatLng(marker.latitude, marker.longitude),
                         width: 56,
                         height: 56,
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            border: movingIdentities.contains(marker.identity)
-                                ? Border.all(
-                                    color: Theme.of(context).colorScheme.primary
-                                        .withValues(alpha: 0.4),
-                                    width: 3,
-                                  )
-                                : null,
-                          ),
-                          child: Padding(
-                            padding: const EdgeInsets.all(4),
-                            child: Material(
-                              color: Theme.of(context).colorScheme.primary,
-                              shape: const CircleBorder(),
-                              elevation: 4,
-                              child: Icon(
-                                Icons.directions_bus,
-                                color: Theme.of(context).colorScheme.onPrimary,
+                        child: Tooltip(
+                          message: widget.busLabel == null
+                              ? 'Live bus'
+                              : 'Bus ${widget.busLabel}',
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              border: movingIdentities.contains(marker.identity)
+                                  ? Border.all(
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .primary
+                                          .withValues(alpha: 0.4),
+                                      width: 3,
+                                    )
+                                  : null,
+                            ),
+                            child: Padding(
+                              padding: const EdgeInsets.all(4),
+                              child: Material(
+                                color: Theme.of(context).colorScheme.primary,
+                                shape: const CircleBorder(),
+                                elevation: 4,
+                                child: Icon(
+                                  Icons.directions_bus,
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onPrimary,
+                                ),
                               ),
                             ),
                           ),
@@ -442,7 +509,67 @@ class _JourneyRouteMapState extends State<JourneyRouteMap> {
               ),
             ),
           ),
+        if (widget.showCameraControls)
+          Positioned(
+            right: 12,
+            bottom: 42,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _MapControl(
+                  key: const Key('fit-journey-map'),
+                  tooltip: 'Fit journey',
+                  icon: Icons.fit_screen,
+                  onPressed: _fitJourney,
+                ),
+                if (widget.activeLegIndex != null) ...[
+                  const SizedBox(height: 8),
+                  _MapControl(
+                    key: const Key('fit-active-leg-map'),
+                    tooltip: 'Fit active leg',
+                    icon: Icons.route,
+                    onPressed: _fitActiveLeg,
+                  ),
+                ],
+                if (widget.realtimeMarkers.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  _MapControl(
+                    key: const Key('follow-live-bus'),
+                    tooltip: 'Follow live bus',
+                    icon: Icons.directions_bus,
+                    onPressed: _followBus,
+                  ),
+                ],
+              ],
+            ),
+          ),
       ],
     );
   }
+}
+
+class _MapControl extends StatelessWidget {
+  const _MapControl({
+    required this.tooltip,
+    required this.icon,
+    required this.onPressed,
+    super.key,
+  });
+
+  final String tooltip;
+  final IconData icon;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) => Material(
+    color: Theme.of(context).colorScheme.surfaceContainerHigh,
+    shape: const CircleBorder(),
+    elevation: 3,
+    child: IconButton(
+      tooltip: tooltip,
+      onPressed: onPressed,
+      icon: Icon(icon),
+      visualDensity: VisualDensity.compact,
+    ),
+  );
 }

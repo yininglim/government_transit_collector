@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/gtfs_realtime_decoder.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/realtime_vehicle_position.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/realtime_vehicle_repository.dart';
+import 'package:government_transit_collector/features/realtime_vehicle/data/realtime_route_metadata_repository.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/static_trip_matcher.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/presentation/realtime_journey_tracker_page.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/presentation/realtime_vehicle_marker_data.dart';
@@ -12,7 +13,7 @@ import 'package:government_transit_collector/features/realtime_vehicle/presentat
 const firstVehicle = RealtimeVehiclePosition(
   vehicleId: 'JWG6029',
   tripId: 'trip-1',
-  routeId: 'J15',
+  routeId: 'J15CWLMYJB',
   latitude: 1.492345,
   longitude: 103.741234,
   timestampSeconds: 1787332800,
@@ -56,6 +57,34 @@ class TrackerMatcher implements StaticTripMatcher {
   }
 }
 
+class RouteMetadataRepository implements RealtimeRouteMetadataRepository {
+  RouteMetadataRepository({this.fail = false});
+  final bool fail;
+  int calls = 0;
+  final List<Set<String>> requested = [];
+
+  @override
+  Future<Map<String, RealtimeRouteMetadata>> loadRoutes(
+    Iterable<String> routeIds,
+  ) async {
+    calls++;
+    requested.add(routeIds.toSet());
+    if (fail) throw Exception('static routes unavailable');
+    return {
+      'J15CWLMYJB': const RealtimeRouteMetadata(
+        routeId: 'J15CWLMYJB',
+        shortName: 'J15',
+        longName: 'City Centre ↔ Permas Jaya',
+      ),
+      'J10': const RealtimeRouteMetadata(
+        routeId: 'J10',
+        shortName: 'J10',
+        longName: 'JB Sentral ↔ Kota Masai',
+      ),
+    };
+  }
+}
+
 Widget fakeMap(
   List<RealtimeVehicleMarkerData> markers,
   ValueChanged<RealtimeVehicleMarkerData> onTap,
@@ -78,6 +107,7 @@ Widget fakeMap(
 Widget app(
   RealtimeVehicleRepository repository, {
   StaticTripMatcher? matcher,
+  RealtimeRouteMetadataRepository? routeMetadata,
 }) => MaterialApp(
   theme: ThemeData(useMaterial3: true),
   home: RealtimeJourneyTrackerPage(
@@ -85,6 +115,7 @@ Widget app(
     tripMatcher: matcher ?? TrackerMatcher(),
     pollingInterval: const Duration(hours: 1),
     mapBuilder: fakeMap,
+    routeMetadataRepository: routeMetadata ?? RouteMetadataRepository(),
   ),
 );
 
@@ -108,9 +139,9 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Live Vehicles: 2'), findsOneWidget);
-    expect(find.textContaining('Last updated:'), findsOneWidget);
-    expect(find.text('Auto refresh: Every 3600 sec'), findsOneWidget);
+    expect(find.text('Live buses: 2'), findsOneWidget);
+    expect(find.textContaining('Updated:'), findsWidgets);
+    expect(find.text('Auto refresh: 3600 sec'), findsOneWidget);
     expect(find.byKey(const Key('route-filter')), findsOneWidget);
     expect(find.byKey(const Key('fake-vehicle:JWG6029')), findsOneWidget);
     expect(find.byKey(const Key('fake-vehicle:JVT1002')), findsOneWidget);
@@ -126,54 +157,17 @@ void main() {
     await tester.tap(find.byKey(const Key('fake-vehicle:JWG6029')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('vehicle-details')), findsOneWidget);
-    expect(find.text('Route J15'), findsOneWidget);
+    expect(find.text('J15'), findsOneWidget);
+    expect(find.text('City Centre ↔ Permas Jaya'), findsOneWidget);
     expect(find.text('Vehicle: JWG6029'), findsOneWidget);
-    expect(find.text('Trip matched: Yes'), findsOneWidget);
-    expect(find.textContaining('Updated:'), findsOneWidget);
+    expect(find.textContaining('Updated:'), findsWidgets);
     expect(find.text('Updated: 1:20:00 AM'), findsOneWidget);
-    expect(find.text('Development movement diagnostic'), findsOneWidget);
-    expect(
-      find.text('Position changed: Not available (first observation)'),
-      findsOneWidget,
-    );
-    expect(find.text('Previous: Not available'), findsOneWidget);
-    expect(find.text('Latest: 1.492345, 103.741234'), findsOneWidget);
+    expect(find.text('Development movement diagnostic'), findsNothing);
+    expect(find.textContaining('Position changed'), findsNothing);
+    expect(find.textContaining('Trip matched'), findsNothing);
     expect(find.textContaining('trip-1'), findsNothing);
     await tester.tapAt(const Offset(10, 10));
     await tester.pumpAndSettle();
-    await disposePage(tester);
-  });
-
-  testWidgets('vehicle details compare consecutive genuine feed positions', (
-    tester,
-  ) async {
-    const movedVehicle = RealtimeVehiclePosition(
-      vehicleId: 'JWG6029',
-      tripId: 'trip-1',
-      routeId: 'J15',
-      latitude: 1.492399,
-      longitude: 103.741291,
-      timestampSeconds: 1787332815,
-    );
-    final repository = TrackerRepository([
-      () async => trackerSnapshot,
-      () async => const RealtimeFeedSnapshot(
-        vehicles: [movedVehicle],
-        feedTimestampSeconds: 1787332815,
-      ),
-    ]);
-    await tester.pumpWidget(app(repository));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('refresh-tracker')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('fake-vehicle:JWG6029')));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Position changed: Yes'), findsOneWidget);
-    expect(find.text('Previous: 1.492345, 103.741234'), findsOneWidget);
-    expect(find.text('Latest: 1.492399, 103.741291'), findsOneWidget);
-    expect(find.textContaining('Moved: '), findsOneWidget);
-    expect(find.text('Feed interval: 15 sec'), findsOneWidget);
     await disposePage(tester);
   });
 
@@ -191,7 +185,7 @@ void main() {
     await tester.tap(find.byKey(const Key('retry-tracker')));
     await tester.pumpAndSettle();
     expect(repository.calls, 2);
-    expect(find.text('Live Vehicles: 2'), findsOneWidget);
+    expect(find.text('Live buses: 2'), findsOneWidget);
     await disposePage(tester);
   });
 
@@ -221,7 +215,7 @@ void main() {
     await tester.tap(find.byKey(const Key('refresh-tracker')));
     await tester.pumpAndSettle();
     expect(repository.calls, 2);
-    expect(find.text('Live Vehicles: 1'), findsOneWidget);
+    expect(find.text('Live buses: 1'), findsOneWidget);
     expect(find.byKey(const Key('fake-vehicle:JWG6029')), findsOneWidget);
     expect(find.byKey(const Key('fake-vehicle:JVT1002')), findsNothing);
     await disposePage(tester);
@@ -255,11 +249,87 @@ void main() {
 
     await tester.tap(find.byKey(const Key('route-filter')));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('J10').last);
+    await tester.tap(find.textContaining('J10 —').last);
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('fake-vehicle:JVT1002')), findsOneWidget);
     expect(find.byKey(const Key('fake-vehicle:JWG6029')), findsNothing);
+    expect(find.text('J10'), findsOneWidget);
+    expect(find.text('JB Sentral ↔ Kota Masai'), findsOneWidget);
+    expect(find.text('Live buses: 1'), findsOneWidget);
     await disposePage(tester);
+  });
+
+  testWidgets('selected route counts multiple buses using route_id filter', (
+    tester,
+  ) async {
+    const anotherJ15 = RealtimeVehiclePosition(
+      vehicleId: 'second-j15',
+      tripId: 'trip-2',
+      routeId: 'J15CWLMYJB',
+      latitude: 1.51,
+      longitude: 103.76,
+      timestampSeconds: 1787332860,
+    );
+    const snapshot = RealtimeFeedSnapshot(
+      vehicles: [firstVehicle, anotherJ15, secondVehicle],
+      feedTimestampSeconds: 1787332900,
+    );
+    await tester.pumpWidget(app(TrackerRepository([() async => snapshot])));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('route-filter')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.textContaining('J15 —').last);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('fake-vehicle:JWG6029')), findsOneWidget);
+    expect(find.byKey(const Key('fake-vehicle:second-j15')), findsOneWidget);
+    expect(find.byKey(const Key('fake-vehicle:JVT1002')), findsNothing);
+    expect(find.text('Live buses: 2'), findsWidgets);
+  });
+
+  testWidgets('selected route remains selected when its vehicles disappear', (
+    tester,
+  ) async {
+    final repository = TrackerRepository([
+      () async => trackerSnapshot,
+      () async => const RealtimeFeedSnapshot(
+        vehicles: [firstVehicle],
+        feedTimestampSeconds: 1787333000,
+      ),
+    ]);
+    await tester.pumpWidget(app(repository));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('route-filter')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.textContaining('J10 —').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('refresh-tracker')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('No realtime buses are currently available for J10.'),
+      findsOneWidget,
+    );
+    expect(find.text('Live buses: 0'), findsOneWidget);
+  });
+
+  testWidgets('static route metadata failure falls back without losing map', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      app(
+        TrackerRepository([() async => trackerSnapshot]),
+        routeMetadata: RouteMetadataRepository(fail: true),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Passenger route names are temporarily unavailable.'),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('fake-live-map')), findsOneWidget);
+    expect(find.text('All Routes'), findsOneWidget);
   });
 
   testWidgets('zero valid coordinates displays empty state', (tester) async {
@@ -281,7 +351,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Live Vehicles: 0'), findsOneWidget);
+    expect(find.text('Live buses: 0'), findsOneWidget);
     expect(find.byKey(const Key('tracker-empty')), findsOneWidget);
     await disposePage(tester);
   });
@@ -295,7 +365,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byKey(const Key('fake-live-map')), findsOneWidget);
-      expect(find.text('Live Vehicles: 2'), findsOneWidget);
+      expect(find.text('Live buses: 2'), findsOneWidget);
       expect(find.byKey(const Key('refresh-tracker')), findsOneWidget);
       expect(find.byKey(const Key('route-filter')), findsOneWidget);
       expect(tester.takeException(), isNull);

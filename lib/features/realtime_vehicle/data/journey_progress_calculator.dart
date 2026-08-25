@@ -17,8 +17,11 @@ class JourneyProgressCalculator {
     this.completionToleranceMeters = defaultCompletionToleranceMeters,
     this.backwardJitterToleranceMeters = defaultBackwardJitterToleranceMeters,
     this.upcomingStopLimit = defaultUpcomingStopLimit,
+    this.selectedOriginStopId,
+    this.selectedDestinationStopId,
   }) : cumulativeDistances = cumulativeShapeDistances(data.shapePoints) {
-    _stopProgress = _mapStopsToShape();
+    _allStopProgress = _mapStopsToShape();
+    _stopProgress = _selectedStops(_allStopProgress);
   }
 
   final TripProgressData data;
@@ -26,7 +29,10 @@ class JourneyProgressCalculator {
   final double completionToleranceMeters;
   final double backwardJitterToleranceMeters;
   final int upcomingStopLimit;
+  final String? selectedOriginStopId;
+  final String? selectedDestinationStopId;
   final List<double> cumulativeDistances;
+  late final List<StopRouteProgress> _allStopProgress;
   late final List<StopRouteProgress> _stopProgress;
 
   List<StopRouteProgress> get stopProgress => List.unmodifiable(_stopProgress);
@@ -95,17 +101,20 @@ class JourneyProgressCalculator {
       }
     }
 
-    final completed = _stopProgress
-        .where(
-          (stop) => progress >= stop.progressMeters + completionToleranceMeters,
-        )
-        .map((stop) => stop.stop)
-        .toList(growable: false);
-    final remaining = _stopProgress
-        .where(
-          (stop) => progress < stop.progressMeters + completionToleranceMeters,
-        )
-        .toList(growable: false);
+    final completed = <TrackedTripStop>[];
+    final remaining = <StopRouteProgress>[];
+    for (var index = 0; index < _stopProgress.length; index++) {
+      final stop = _stopProgress[index];
+      final isFinalSelectedStop = index == _stopProgress.length - 1;
+      final isCompleted = isFinalSelectedStop
+          ? progress >= stop.progressMeters - 0.01
+          : progress >= stop.progressMeters + completionToleranceMeters;
+      if (isCompleted) {
+        completed.add(stop.stop);
+      } else {
+        remaining.add(stop);
+      }
+    }
     final nearest = _stopProgress.isEmpty
         ? null
         : _stopProgress.reduce(
@@ -116,12 +125,20 @@ class JourneyProgressCalculator {
                 : b,
           );
     final total = cumulativeDistances.last;
+    final selectedOrigin = _stopProgress.firstOrNull?.progressMeters;
+    final selectedDestination = _stopProgress.lastOrNull?.progressMeters;
+    final selectedLength = selectedOrigin == null || selectedDestination == null
+        ? null
+        : selectedDestination - selectedOrigin;
+    final passengerFraction = selectedLength == null || selectedLength <= 0
+        ? (total <= 0 ? 0.0 : (progress / total).clamp(0.0, 1.0))
+        : ((progress - selectedOrigin!) / selectedLength).clamp(0.0, 1.0);
     return JourneyProgressState(
       activeTripId: data.tripId,
       availability: JourneyProgressAvailability.available,
       busProgressMeters: progress,
       totalShapeMeters: total,
-      progressFraction: total <= 0 ? 0 : (progress / total).clamp(0, 1),
+      progressFraction: passengerFraction,
       completedStops: completed,
       nearestStop: nearest?.stop,
       nextStop: remaining.firstOrNull?.stop,
@@ -132,6 +149,8 @@ class JourneyProgressCalculator {
       projectionDistanceMeters: raw.distanceFromShapeMeters,
       timestamp: timestamp,
       wasJitterStabilized: stabilized,
+      selectedOriginProgressMeters: selectedOrigin,
+      selectedDestinationProgressMeters: selectedDestination,
     );
   }
 
@@ -156,7 +175,10 @@ class JourneyProgressCalculator {
         minimumProgressMeters: minimumProgress,
       );
       if (projection == null) continue;
-      minimumProgress = projection.progressMeters;
+      // GTFS stop_sequence is authoritative at loops/self-crossings. Moving
+      // the lower bound slightly forward prevents a later repeated coordinate
+      // from snapping back to the same earlier shape occurrence.
+      minimumProgress = projection.progressMeters + 0.01;
       mapped.add(
         StopRouteProgress(
           stop: stop,
@@ -166,5 +188,19 @@ class JourneyProgressCalculator {
       );
     }
     return mapped;
+  }
+
+  List<StopRouteProgress> _selectedStops(List<StopRouteProgress> stops) {
+    if (selectedOriginStopId == null || selectedDestinationStopId == null) {
+      return stops;
+    }
+    final originIndex = stops.indexWhere(
+      (item) => item.stop.stopId == selectedOriginStopId,
+    );
+    final destinationIndex = stops.indexWhere(
+      (item) => item.stop.stopId == selectedDestinationStopId,
+    );
+    if (originIndex < 0 || destinationIndex < originIndex) return stops;
+    return stops.sublist(originIndex, destinationIndex + 1);
   }
 }
