@@ -11,13 +11,21 @@ abstract interface class DepartureStopRepository {
   Future<List<DepartureStop>> searchStops(String query);
 }
 
+typedef DepartureStopQuery =
+    Future<List<DepartureStop>> Function(String normalizedQuery, int limit);
+
 class SupabaseDepartureStopRepository implements DepartureStopRepository {
-  SupabaseDepartureStopRepository({SupabaseClient? client})
-    : _client = client ?? Supabase.instance.client;
+  factory SupabaseDepartureStopRepository({
+    SupabaseClient? client,
+    DepartureStopQuery? query,
+  }) => SupabaseDepartureStopRepository._(client, query);
+
+  SupabaseDepartureStopRepository._(this._client, this._query);
 
   static const int resultLimit = 50;
 
-  final SupabaseClient _client;
+  final SupabaseClient? _client;
+  final DepartureStopQuery? _query;
   final Map<String, List<DepartureStop>> _cache = {};
 
   @override
@@ -27,7 +35,15 @@ class SupabaseDepartureStopRepository implements DepartureStopRepository {
     if (cached != null) return cached;
 
     try {
-      var request = _client.from('gtfs_stops').select('stop_id, stop_name');
+      final injectedQuery = _query;
+      if (injectedQuery != null) {
+        final stops = await injectedQuery(normalizedQuery, resultLimit);
+        _cache[normalizedQuery] = stops;
+        return stops;
+      }
+      var request = (_client ?? Supabase.instance.client)
+          .from('gtfs_stops')
+          .select('stop_id, stop_name');
       if (normalizedQuery.isNotEmpty) {
         request = request.ilike(
           'stop_name',

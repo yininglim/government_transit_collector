@@ -22,15 +22,9 @@ class StopSelectionPage extends StatefulWidget {
 class _StopSelectionPageState extends State<StopSelectionPage> {
   final _searchController = TextEditingController();
   Timer? _debounce;
-  List<DepartureStop>? _stops;
+  List<DepartureStop>? _stops = const [];
   String? _error;
   int _requestId = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadStops();
-  }
 
   @override
   void dispose() {
@@ -39,23 +33,41 @@ class _StopSelectionPageState extends State<StopSelectionPage> {
     super.dispose();
   }
 
-  void _onSearchChanged(String _) {
+  void _onSearchChanged(String value) {
     _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 350), _loadStops);
+    final requestId = ++_requestId;
+    final query = value.trim();
+    if (query.isEmpty) {
+      setState(() {
+        _stops = const [];
+        _error = null;
+      });
+      return;
+    }
+    setState(() {
+      _stops = null;
+      _error = null;
+    });
+    _debounce = Timer(
+      const Duration(milliseconds: 350),
+      () => _loadStops(query: query, requestId: requestId),
+    );
   }
 
-  Future<void> _loadStops() async {
-    final requestId = ++_requestId;
+  Future<void> _loadStops({String? query, int? requestId}) async {
+    final effectiveQuery = query ?? _searchController.text.trim();
+    if (effectiveQuery.isEmpty) return;
+    final effectiveRequestId = requestId ?? ++_requestId;
     setState(() {
       _stops = null;
       _error = null;
     });
     try {
-      final stops = await widget.repository.searchStops(_searchController.text);
-      if (!mounted || requestId != _requestId) return;
+      final stops = await widget.repository.searchStops(effectiveQuery);
+      if (!mounted || effectiveRequestId != _requestId) return;
       setState(() => _stops = stops);
     } on DepartureStopReadException catch (error) {
-      if (!mounted || requestId != _requestId) return;
+      if (!mounted || effectiveRequestId != _requestId) return;
       setState(() => _error = error.message);
     }
   }
@@ -75,14 +87,18 @@ class _StopSelectionPageState extends State<StopSelectionPage> {
                 autofocus: true,
                 decoration: const InputDecoration(
                   border: OutlineInputBorder(),
-                  labelText: 'Search by stop name',
+                  labelText: 'Search stops',
+                  helperText: 'Type a stop name to search all available stops',
                   prefixIcon: Icon(Icons.search),
                 ),
                 textInputAction: TextInputAction.search,
                 onChanged: _onSearchChanged,
                 onSubmitted: (_) {
                   _debounce?.cancel();
-                  _loadStops();
+                  final query = _searchController.text.trim();
+                  if (query.isNotEmpty) {
+                    _loadStops(query: query);
+                  }
                 },
               ),
               const SizedBox(height: 12),
@@ -100,7 +116,7 @@ class _StopSelectionPageState extends State<StopSelectionPage> {
         icon: Icons.error_outline,
         message: _error!,
         actionLabel: 'Retry',
-        onAction: _loadStops,
+        onAction: () => _loadStops(),
       );
     }
     final stops = _stops;
@@ -108,9 +124,15 @@ class _StopSelectionPageState extends State<StopSelectionPage> {
       return const Center(child: CircularProgressIndicator());
     }
     if (stops.isEmpty) {
+      if (_searchController.text.trim().isEmpty) {
+        return const _StopMessage(
+          icon: Icons.search,
+          message: 'Search to find a bus stop',
+        );
+      }
       return const _StopMessage(
         icon: Icons.search_off,
-        message: 'No stops match your search.',
+        message: 'No stops found',
       );
     }
     return ListView.separated(

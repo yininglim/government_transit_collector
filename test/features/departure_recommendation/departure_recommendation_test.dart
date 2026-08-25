@@ -276,6 +276,12 @@ void main() {
     }) async {
       await tester.tap(find.byKey(fieldKey));
       await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('stop-search-field')),
+        stop.name,
+      );
+      await tester.pump(const Duration(milliseconds: 350));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(Key('stop-${stop.id}')));
       await tester.pumpAndSettle();
     }
