@@ -2,11 +2,14 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:government_transit_collector/features/journey_map/data/journey_map_models.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/gtfs_realtime_decoder.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/realtime_vehicle_position.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/realtime_vehicle_repository.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/realtime_route_metadata_repository.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/static_trip_matcher.dart';
+import 'package:government_transit_collector/features/realtime_vehicle/data/trip_progress_models.dart';
+import 'package:government_transit_collector/features/realtime_vehicle/data/trip_progress_repository.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/presentation/realtime_journey_tracker_page.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/presentation/realtime_vehicle_marker_data.dart';
 
@@ -85,6 +88,61 @@ class RouteMetadataRepository implements RealtimeRouteMetadataRepository {
   }
 }
 
+class TrackerProgressRepository implements TripProgressRepository {
+  TrackerProgressRepository(this.responses);
+
+  final Map<String, Future<TripProgressData> Function()> responses;
+  final List<String> requestedTripIds = [];
+
+  @override
+  Future<TripProgressData> loadTrip(String exactTripId) {
+    requestedTripIds.add(exactTripId);
+    final response = responses[exactTripId];
+    if (response == null) {
+      return Future.error(StateError('Unknown exact trip: $exactTripId'));
+    }
+    return response();
+  }
+}
+
+TripProgressData progressData({
+  String tripId = 'trip-1',
+  String namePrefix = '',
+}) => TripProgressData(
+  tripId: tripId,
+  shapePoints: const [
+    MapCoordinate(1.490000, 103.740000),
+    MapCoordinate(1.500000, 103.750000),
+    MapCoordinate(1.510000, 103.760000),
+  ],
+  stops: [
+    TrackedTripStop(
+      stopId: '${namePrefix}first',
+      stopName: '${namePrefix}First Stop',
+      stopSequence: 1,
+      coordinate: const MapCoordinate(1.490000, 103.740000),
+      scheduledArrivalSeconds: 100,
+      scheduledDepartureSeconds: 100,
+    ),
+    TrackedTripStop(
+      stopId: '${namePrefix}middle',
+      stopName: '${namePrefix}Middle Stop',
+      stopSequence: 2,
+      coordinate: const MapCoordinate(1.500000, 103.750000),
+      scheduledArrivalSeconds: 200,
+      scheduledDepartureSeconds: 200,
+    ),
+    TrackedTripStop(
+      stopId: '${namePrefix}final',
+      stopName: '${namePrefix}Final Stop',
+      stopSequence: 3,
+      coordinate: const MapCoordinate(1.510000, 103.760000),
+      scheduledArrivalSeconds: 300,
+      scheduledDepartureSeconds: 300,
+    ),
+  ],
+);
+
 Widget fakeMap(
   List<RealtimeVehicleMarkerData> markers,
   ValueChanged<RealtimeVehicleMarkerData> onTap,
@@ -108,6 +166,7 @@ Widget app(
   RealtimeVehicleRepository repository, {
   StaticTripMatcher? matcher,
   RealtimeRouteMetadataRepository? routeMetadata,
+  TripProgressRepository? tripProgress,
 }) => MaterialApp(
   theme: ThemeData(useMaterial3: true),
   home: RealtimeJourneyTrackerPage(
@@ -116,6 +175,7 @@ Widget app(
     pollingInterval: const Duration(hours: 1),
     mapBuilder: fakeMap,
     routeMetadataRepository: routeMetadata ?? RouteMetadataRepository(),
+    tripProgressRepository: tripProgress,
   ),
 );
 
@@ -149,8 +209,14 @@ void main() {
   });
 
   testWidgets('marker tap opens passenger-friendly details', (tester) async {
+    final progressRepository = TrackerProgressRepository({
+      'trip-1': () async => progressData(),
+    });
     await tester.pumpWidget(
-      app(TrackerRepository([() async => trackerSnapshot])),
+      app(
+        TrackerRepository([() async => trackerSnapshot]),
+        tripProgress: progressRepository,
+      ),
     );
     await tester.pumpAndSettle();
 
@@ -160,15 +226,220 @@ void main() {
     expect(find.text('J15'), findsOneWidget);
     expect(find.text('City Centre ↔ Permas Jaya'), findsOneWidget);
     expect(find.text('Vehicle: JWG6029'), findsOneWidget);
+    expect(find.text('Near First Stop'), findsOneWidget);
+    expect(find.text('Middle Stop'), findsOneWidget);
     expect(find.textContaining('Updated:'), findsWidgets);
     expect(find.text('Updated: 1:20:00 AM'), findsOneWidget);
     expect(find.text('Development movement diagnostic'), findsNothing);
     expect(find.textContaining('Position changed'), findsNothing);
     expect(find.textContaining('Trip matched'), findsNothing);
     expect(find.textContaining('trip-1'), findsNothing);
+    expect(find.textContaining('1.492345'), findsNothing);
+    expect(find.textContaining('103.741234'), findsNothing);
+    expect(progressRepository.requestedTripIds, ['trip-1']);
     await tester.tapAt(const Offset(10, 10));
     await tester.pumpAndSettle();
     await disposePage(tester);
+  });
+
+  testWidgets('marker details show progress loading immediately', (
+    tester,
+  ) async {
+    final pending = Completer<TripProgressData>();
+    final progressRepository = TrackerProgressRepository({
+      'trip-1': () => pending.future,
+    });
+    await tester.pumpWidget(
+      app(
+        TrackerRepository([() async => trackerSnapshot]),
+        tripProgress: progressRepository,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('fake-vehicle:JWG6029')));
+    await tester.pump();
+    expect(find.text('Loading route position...'), findsOneWidget);
+    expect(find.text('Loading...'), findsOneWidget);
+
+    pending.complete(progressData());
+    await tester.pumpAndSettle();
+    expect(find.text('Near First Stop'), findsOneWidget);
+    expect(find.text('Middle Stop'), findsOneWidget);
+  });
+
+  testWidgets('missing exact trip and load failure stay passenger friendly', (
+    tester,
+  ) async {
+    const missingTripVehicle = RealtimeVehiclePosition(
+      vehicleId: 'missing-trip-bus',
+      tripId: null,
+      routeId: 'J10',
+      latitude: 1.5,
+      longitude: 103.75,
+      timestampSeconds: 1787332860,
+    );
+    final progressRepository = TrackerProgressRepository({
+      'unknown-trip': () => Future.error(StateError('not in static GTFS')),
+    });
+    await tester.pumpWidget(
+      app(
+        TrackerRepository([
+          () async => const RealtimeFeedSnapshot(
+            vehicles: [missingTripVehicle, secondVehicle],
+            feedTimestampSeconds: 1787332900,
+          ),
+        ]),
+        tripProgress: progressRepository,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('fake-vehicle:missing-trip-bus')));
+    await tester.pumpAndSettle();
+    expect(find.text('Route position unavailable'), findsOneWidget);
+    expect(find.text('Unavailable'), findsOneWidget);
+    expect(progressRepository.requestedTripIds, isEmpty);
+    await tester.tapAt(const Offset(10, 10));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('fake-vehicle:JVT1002')));
+    await tester.pumpAndSettle();
+    expect(find.text('Route position unavailable'), findsOneWidget);
+    expect(find.text('Unavailable'), findsOneWidget);
+    expect(find.textContaining('not in static GTFS'), findsNothing);
+  });
+
+  testWidgets('off-route vehicle reports unavailable progress', (tester) async {
+    const offRoute = RealtimeVehiclePosition(
+      vehicleId: 'off-route',
+      tripId: 'trip-1',
+      routeId: 'J15CWLMYJB',
+      latitude: 2,
+      longitude: 104,
+      timestampSeconds: 1787332860,
+    );
+    await tester.pumpWidget(
+      app(
+        TrackerRepository([
+          () async => const RealtimeFeedSnapshot(
+            vehicles: [offRoute],
+            feedTimestampSeconds: 1787332900,
+          ),
+        ]),
+        tripProgress: TrackerProgressRepository({
+          'trip-1': () async => progressData(),
+        }),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('fake-vehicle:off-route')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Route position unavailable'), findsOneWidget);
+    expect(find.text('Unavailable'), findsOneWidget);
+  });
+
+  testWidgets('final stop reports route trip completed', (tester) async {
+    const completedVehicle = RealtimeVehiclePosition(
+      vehicleId: 'completed-bus',
+      tripId: 'trip-1',
+      routeId: 'J15CWLMYJB',
+      latitude: 1.51,
+      longitude: 103.76,
+      timestampSeconds: 1787332860,
+    );
+    await tester.pumpWidget(
+      app(
+        TrackerRepository([
+          () async => const RealtimeFeedSnapshot(
+            vehicles: [completedVehicle],
+            feedTimestampSeconds: 1787332900,
+          ),
+        ]),
+        tripProgress: TrackerProgressRepository({
+          'trip-1': () async => progressData(),
+        }),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('fake-vehicle:completed-bus')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Near Final Stop'), findsOneWidget);
+    expect(find.text('Route trip completed'), findsOneWidget);
+    expect(find.byKey(const Key('vehicle-next-stop')), findsNothing);
+  });
+
+  testWidgets('movement advances next stop without reloading static trip', (
+    tester,
+  ) async {
+    const movedVehicle = RealtimeVehiclePosition(
+      vehicleId: 'JWG6029',
+      tripId: 'trip-1',
+      routeId: 'J15CWLMYJB',
+      latitude: 1.505,
+      longitude: 103.755,
+      timestampSeconds: 1787333000,
+    );
+    final realtimeRepository = TrackerRepository([
+      () async => const RealtimeFeedSnapshot(
+        vehicles: [firstVehicle],
+        feedTimestampSeconds: 1787332900,
+      ),
+      () async => const RealtimeFeedSnapshot(
+        vehicles: [movedVehicle],
+        feedTimestampSeconds: 1787333000,
+      ),
+    ]);
+    final progressRepository = TrackerProgressRepository({
+      'trip-1': () async => progressData(),
+    });
+    await tester.pumpWidget(
+      app(realtimeRepository, tripProgress: progressRepository),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('fake-vehicle:JWG6029')));
+    await tester.pumpAndSettle();
+    expect(find.text('Middle Stop'), findsOneWidget);
+    await tester.tapAt(const Offset(10, 10));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('refresh-tracker')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('fake-vehicle:JWG6029')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Near Middle Stop'), findsOneWidget);
+    expect(find.text('Final Stop'), findsOneWidget);
+    expect(progressRepository.requestedTripIds, ['trip-1']);
+  });
+
+  testWidgets('multiple vehicles resolve independent exact trips', (
+    tester,
+  ) async {
+    final progressRepository = TrackerProgressRepository({
+      'trip-1': () async => progressData(namePrefix: 'A '),
+      'unknown-trip': () async =>
+          progressData(tripId: 'unknown-trip', namePrefix: 'B '),
+    });
+    await tester.pumpWidget(
+      app(
+        TrackerRepository([() async => trackerSnapshot]),
+        tripProgress: progressRepository,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('fake-vehicle:JWG6029')));
+    await tester.pumpAndSettle();
+    expect(find.text('Near A First Stop'), findsOneWidget);
+    await tester.tapAt(const Offset(10, 10));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('fake-vehicle:JVT1002')));
+    await tester.pumpAndSettle();
+    expect(find.text('Near B Middle Stop'), findsOneWidget);
+    expect(progressRepository.requestedTripIds, ['trip-1', 'unknown-trip']);
   });
 
   testWidgets('initial error exposes Retry and can recover', (tester) async {
@@ -360,7 +631,12 @@ void main() {
     for (final size in [const Size(400, 800), const Size(800, 400)]) {
       await tester.binding.setSurfaceSize(size);
       await tester.pumpWidget(
-        app(TrackerRepository([() async => trackerSnapshot])),
+        app(
+          TrackerRepository([() async => trackerSnapshot]),
+          tripProgress: TrackerProgressRepository({
+            'trip-1': () async => progressData(),
+          }),
+        ),
       );
       await tester.pumpAndSettle();
 
@@ -368,6 +644,10 @@ void main() {
       expect(find.text('Live buses: 2'), findsOneWidget);
       expect(find.byKey(const Key('refresh-tracker')), findsOneWidget);
       expect(find.byKey(const Key('route-filter')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('fake-vehicle:JWG6029')));
+      await tester.pumpAndSettle();
+      expect(find.text('Near First Stop'), findsOneWidget);
+      expect(find.text('Middle Stop'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await disposePage(tester);
     }
