@@ -35,7 +35,29 @@ class FakeDecoder implements RealtimeFeedDecoder {
   }
 }
 
+class TrackingHttpClient extends http.BaseClient {
+  var closeCalls = 0;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) {
+    throw UnimplementedError();
+  }
+
+  @override
+  void close() => closeCalls++;
+}
+
 void main() {
+  test('repository closes its HTTP client exactly once', () {
+    final client = TrackingHttpClient();
+    final repository = DataGovMyRealtimeVehicleRepository(client: client);
+
+    repository.close();
+    repository.close();
+
+    expect(client.closeCalls, 1);
+  });
+
   test('successful HTTP response decodes body bytes', () async {
     final decoder = FakeDecoder();
     final client = MockClient((request) async {

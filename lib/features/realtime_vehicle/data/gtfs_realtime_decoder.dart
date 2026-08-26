@@ -43,6 +43,7 @@ class GtfsRealtimeFeedDecoder implements RealtimeFeedDecoder {
         final position = vehicle.hasPosition() ? vehicle.position : null;
         vehicles.add(
           RealtimeVehiclePosition(
+            entityId: entity.hasId() ? entity.id : null,
             vehicleId: descriptor?.hasId() == true
                 ? descriptor!.id
                 : descriptor?.hasLabel() == true

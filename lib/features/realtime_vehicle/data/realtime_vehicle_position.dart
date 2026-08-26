@@ -1,5 +1,6 @@
 class RealtimeVehiclePosition {
   const RealtimeVehiclePosition({
+    this.entityId,
     required this.vehicleId,
     required this.tripId,
     required this.routeId,
@@ -8,10 +9,13 @@ class RealtimeVehiclePosition {
     required this.timestampSeconds,
   });
 
+  final String? entityId;
+
   /// This model is JSON-serializable for application storage/interchange.
   /// The data.gov.my response itself is protobuf and is never JSON-decoded.
   factory RealtimeVehiclePosition.fromJson(Map<String, dynamic> json) {
     return RealtimeVehiclePosition(
+      entityId: json['entity_id'] as String?,
       vehicleId: json['vehicle_id'] as String?,
       tripId: json['trip_id'] as String?,
       routeId: json['route_id'] as String?,
@@ -29,6 +33,7 @@ class RealtimeVehiclePosition {
   final int? timestampSeconds;
 
   Map<String, dynamic> toJson() => {
+    if (entityId != null) 'entity_id': entityId,
     'vehicle_id': vehicleId,
     'trip_id': tripId,
     'route_id': routeId,

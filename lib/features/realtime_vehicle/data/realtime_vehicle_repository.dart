@@ -21,6 +21,14 @@ class DataGovMyRealtimeVehicleRepository implements RealtimeVehicleRepository {
   final http.Client _client;
   final RealtimeFeedDecoder _decoder;
   final Duration requestTimeout;
+  bool _isClosed = false;
+
+  /// Releases the repository's persistent HTTP connection exactly once.
+  void close() {
+    if (_isClosed) return;
+    _isClosed = true;
+    _client.close();
+  }
 
   @override
   Future<RealtimeFeedSnapshot> fetchVehiclePositions() async {
