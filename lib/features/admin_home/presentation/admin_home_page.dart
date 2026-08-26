@@ -1,15 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:government_transit_collector/features/authentication/data/auth_repository.dart';
+import 'package:government_transit_collector/features/route_performance/data/route_performance_repository.dart';
+import 'package:government_transit_collector/features/route_performance/presentation/route_performance_dashboard_page.dart';
 
 class AdminHomePage extends StatefulWidget {
   const AdminHomePage({
     required this.profile,
     required this.repository,
+    this.routePerformanceRepository,
     super.key,
   });
 
   final AppProfile profile;
   final AuthRepository repository;
+  final RoutePerformanceRepository? routePerformanceRepository;
 
   @override
   State<AdminHomePage> createState() => _AdminHomePageState();
@@ -97,6 +101,23 @@ class _AdminHomePageState extends State<AdminHomePage> {
                       ),
                     ),
                   ],
+                ),
+              ),
+            ),
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.analytics_outlined),
+                title: const Text('Route Performance Dashboard'),
+                subtitle: const Text(
+                  'Analyse collected travel time, delay frequency, and route efficiency.',
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => RoutePerformanceDashboardPage(
+                      repository: widget.routePerformanceRepository,
+                    ),
+                  ),
                 ),
               ),
             ),
