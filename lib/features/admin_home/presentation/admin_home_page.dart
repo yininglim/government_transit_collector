@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:government_transit_collector/features/authentication/data/auth_repository.dart';
+import 'package:government_transit_collector/features/peak_operation/data/peak_operation_repository.dart';
+import 'package:government_transit_collector/features/peak_operation/presentation/peak_operation_analysis_page.dart';
 import 'package:government_transit_collector/features/route_performance/data/route_performance_repository.dart';
 import 'package:government_transit_collector/features/route_performance/presentation/route_performance_dashboard_page.dart';
 
@@ -8,12 +10,14 @@ class AdminHomePage extends StatefulWidget {
     required this.profile,
     required this.repository,
     this.routePerformanceRepository,
+    this.peakOperationRepository,
     super.key,
   });
 
   final AppProfile profile;
   final AuthRepository repository;
   final RoutePerformanceRepository? routePerformanceRepository;
+  final PeakOperationRepository? peakOperationRepository;
 
   @override
   State<AdminHomePage> createState() => _AdminHomePageState();
@@ -116,6 +120,23 @@ class _AdminHomePageState extends State<AdminHomePage> {
                   MaterialPageRoute<void>(
                     builder: (_) => RoutePerformanceDashboardPage(
                       repository: widget.routePerformanceRepository,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.query_stats),
+                title: const Text('Peak Operation Analysis'),
+                subtitle: const Text(
+                  'Identify high observed bus service activity by time of day.',
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => PeakOperationAnalysisPage(
+                      repository: widget.peakOperationRepository,
                     ),
                   ),
                 ),
