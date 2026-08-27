@@ -82,6 +82,33 @@ void main() {
     expect(result.value, {'result': 'available'});
   });
 
+  test('parses a completed envelope when optional object is omitted', () async {
+    final response = jsonDecode(_successfulResponse()) as Map<String, dynamic>
+      ..remove('object');
+    final source = _source(
+      (_) async => http.Response(jsonEncode(response), 200),
+    );
+
+    final result = await source.createStructuredInteraction(request);
+
+    expect(result.interactionId, 'interaction-1');
+    expect(result.value, {'result': 'available'});
+  });
+
+  test(
+    'parses a direct structured JSON object without an interaction ID',
+    () async {
+      final source = _source(
+        (_) async => http.Response('{"result":"available"}', 200),
+      );
+
+      final result = await source.createStructuredInteraction(request);
+
+      expect(result.interactionId, isNull);
+      expect(result.value, {'result': 'available'});
+    },
+  );
+
   test('rejects malformed outer JSON', () async {
     final source = _source((_) async => http.Response('not-json', 200));
 
@@ -92,11 +119,42 @@ void main() {
   });
 
   test('rejects an unexpected top-level response shape', () async {
-    final source = _source((_) async => http.Response('{}', 200));
+    final source = _source((_) async => http.Response('[]', 200));
 
     await expectLater(
       source.createStructuredInteraction(request),
       throwsA(_failure(GeminiTransportFailure.malformedResponse)),
+    );
+  });
+
+  test('rejects a non-completed Interaction', () async {
+    final response = jsonDecode(_successfulResponse()) as Map<String, dynamic>
+      ..['status'] = 'incomplete';
+    final source = _source(
+      (_) async => http.Response(jsonEncode(response), 200),
+    );
+
+    await expectLater(
+      source.createStructuredInteraction(request),
+      throwsA(_failure(GeminiTransportFailure.malformedResponse)),
+    );
+  });
+
+  test('rejects a completed Interaction with missing steps', () async {
+    final source = _source(
+      (_) async => http.Response(
+        jsonEncode({
+          'id': 'interaction-1',
+          'object': 'interaction',
+          'status': 'completed',
+        }),
+        200,
+      ),
+    );
+
+    await expectLater(
+      source.createStructuredInteraction(request),
+      throwsA(_failure(GeminiTransportFailure.missingStructuredOutput)),
     );
   });
 

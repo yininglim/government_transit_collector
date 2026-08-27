@@ -124,18 +124,35 @@ GeminiStructuredInteractionResult parseGeminiStructuredInteractionResponse(
     );
   }
 
-  final id = root['id'];
   final object = root['object'];
   final status = root['status'];
-  final steps = root['steps'];
-  if (id is! String ||
-      id.isEmpty ||
-      object != 'interaction' ||
-      status != 'completed' ||
-      steps is! List<dynamic>) {
+  final isInteraction =
+      object == 'interaction' ||
+      root.containsKey('steps') ||
+      (root.containsKey('id') && _interactionStatuses.contains(status));
+  if (!isInteraction) {
+    return GeminiStructuredInteractionResult(interactionId: null, value: root);
+  }
+
+  if ((object != null && object != 'interaction') || status != 'completed') {
     throw const GeminiTransportException(
       failure: GeminiTransportFailure.malformedResponse,
       message: 'Gemini returned an unexpected response shape.',
+    );
+  }
+
+  final id = root['id'];
+  if (id != null && (id is! String || id.isEmpty)) {
+    throw const GeminiTransportException(
+      failure: GeminiTransportFailure.malformedResponse,
+      message: 'Gemini returned an unexpected response shape.',
+    );
+  }
+  final steps = root['steps'];
+  if (steps is! List<dynamic>) {
+    throw const GeminiTransportException(
+      failure: GeminiTransportFailure.missingStructuredOutput,
+      message: 'Gemini returned no structured output.',
     );
   }
 
@@ -169,7 +186,10 @@ GeminiStructuredInteractionResult parseGeminiStructuredInteractionResponse(
   try {
     final decoded = jsonDecode(output);
     if (decoded is! Map<String, dynamic>) throw const FormatException();
-    return GeminiStructuredInteractionResult(interactionId: id, value: decoded);
+    return GeminiStructuredInteractionResult(
+      interactionId: id as String?,
+      value: decoded,
+    );
   } on Object {
     throw const GeminiTransportException(
       failure: GeminiTransportFailure.invalidStructuredJson,
@@ -177,3 +197,12 @@ GeminiStructuredInteractionResult parseGeminiStructuredInteractionResponse(
     );
   }
 }
+
+const _interactionStatuses = {
+  'in_progress',
+  'requires_action',
+  'completed',
+  'failed',
+  'cancelled',
+  'incomplete',
+};

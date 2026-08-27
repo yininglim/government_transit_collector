@@ -16,7 +16,7 @@ class GeminiStructuredInteractionResult {
     required this.value,
   });
 
-  final String interactionId;
+  final String? interactionId;
   final Map<String, dynamic> value;
 }
 
