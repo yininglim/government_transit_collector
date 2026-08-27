@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/presentation/ai_recommendation_dashboard_page.dart';
 import 'package:government_transit_collector/features/authentication/data/auth_repository.dart';
 import 'package:government_transit_collector/features/peak_operation/data/peak_operation_repository.dart';
 import 'package:government_transit_collector/features/peak_operation/presentation/peak_operation_analysis_page.dart';
@@ -78,33 +79,17 @@ class _AdminHomePageState extends State<AdminHomePage> {
             Text('Welcome, ${widget.profile.displayName}'),
             const SizedBox(height: 32),
             Card(
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(
-                      Icons.auto_awesome,
-                      size: 32,
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'AI Smart Route Recommendation',
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
-                          const SizedBox(height: 6),
-                          const Text(
-                            'Transport analysis and recommendations will appear here.',
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
+              child: ListTile(
+                leading: const Icon(Icons.auto_awesome),
+                title: const Text('AI Transit Recommendation'),
+                subtitle: const Text(
+                  'Review transit recommendations and estimation reports.',
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const AiRecommendationDashboardPage(),
+                  ),
                 ),
               ),
             ),
