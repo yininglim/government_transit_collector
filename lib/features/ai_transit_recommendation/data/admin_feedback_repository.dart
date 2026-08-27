@@ -1,0 +1,155 @@
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+class AdminFeedbackRecord {
+  const AdminFeedbackRecord({
+    required this.feedbackId,
+    required this.routeId,
+    required this.tripId,
+    required this.stopId,
+    required this.issueType,
+    required this.comment,
+    required this.createdAt,
+  });
+
+  factory AdminFeedbackRecord.fromMap(Map<String, dynamic> map) {
+    return AdminFeedbackRecord(
+      feedbackId: map['feedback_id'] as String,
+      routeId: map['route_id'] as String,
+      tripId: map['trip_id'] as String?,
+      stopId: map['stop_id'] as String,
+      issueType: map['issue_type'] as String,
+      comment: map['comment'] as String,
+      createdAt: DateTime.parse(map['created_at'] as String).toUtc(),
+    );
+  }
+
+  final String feedbackId;
+  final String routeId;
+  final String? tripId;
+  final String stopId;
+  final String issueType;
+  final String comment;
+  final DateTime createdAt;
+}
+
+abstract interface class AdminFeedbackDataSource {
+  Future<List<AdminFeedbackRecord>> fetchFeedback({
+    required String? routeId,
+    required String? issueType,
+    required DateTime? startUtc,
+    required DateTime? endExclusiveUtc,
+    required int offset,
+    required int limit,
+  });
+}
+
+abstract interface class AdminFeedbackRepository {
+  Future<List<AdminFeedbackRecord>> loadFeedback({
+    String? routeId,
+    String? issueType,
+    DateTime? startUtc,
+    DateTime? endExclusiveUtc,
+  });
+}
+
+class DefaultAdminFeedbackRepository implements AdminFeedbackRepository {
+  DefaultAdminFeedbackRepository({AdminFeedbackDataSource? dataSource})
+    : _dataSource = dataSource ?? SupabaseAdminFeedbackDataSource();
+
+  static const pageSize = 1000;
+
+  final AdminFeedbackDataSource _dataSource;
+
+  @override
+  Future<List<AdminFeedbackRecord>> loadFeedback({
+    String? routeId,
+    String? issueType,
+    DateTime? startUtc,
+    DateTime? endExclusiveUtc,
+  }) async {
+    try {
+      final result = <AdminFeedbackRecord>[];
+      for (var offset = 0; ; offset += pageSize) {
+        final page = await _dataSource.fetchFeedback(
+          routeId: routeId,
+          issueType: issueType,
+          startUtc: startUtc,
+          endExclusiveUtc: endExclusiveUtc,
+          offset: offset,
+          limit: pageSize,
+        );
+        result.addAll(
+          page.where(
+            (record) =>
+                (routeId == null || record.routeId == routeId) &&
+                (issueType == null || record.issueType == issueType) &&
+                (startUtc == null || !record.createdAt.isBefore(startUtc)) &&
+                (endExclusiveUtc == null ||
+                    record.createdAt.isBefore(endExclusiveUtc)),
+          ),
+        );
+        if (page.length < pageSize) break;
+      }
+      return result;
+    } on AdminFeedbackReadException {
+      rethrow;
+    } on Object {
+      throw const AdminFeedbackReadException(
+        'Unable to load feedback for analysis.',
+      );
+    }
+  }
+}
+
+class SupabaseAdminFeedbackDataSource implements AdminFeedbackDataSource {
+  SupabaseAdminFeedbackDataSource({SupabaseClient? client})
+    : _client = client ?? Supabase.instance.client;
+
+  final SupabaseClient _client;
+
+  @override
+  Future<List<AdminFeedbackRecord>> fetchFeedback({
+    required String? routeId,
+    required String? issueType,
+    required DateTime? startUtc,
+    required DateTime? endExclusiveUtc,
+    required int offset,
+    required int limit,
+  }) async {
+    try {
+      var query = _client
+          .from('bus_feedback')
+          .select(
+            'feedback_id, route_id, trip_id, stop_id, issue_type, comment, created_at',
+          );
+      if (routeId != null) query = query.eq('route_id', routeId);
+      if (issueType != null) query = query.eq('issue_type', issueType);
+      if (startUtc != null) {
+        query = query.gte('created_at', startUtc.toUtc().toIso8601String());
+      }
+      if (endExclusiveUtc != null) {
+        query = query.lt(
+          'created_at',
+          endExclusiveUtc.toUtc().toIso8601String(),
+        );
+      }
+      final rows = await query
+          .order('created_at', ascending: false)
+          .range(offset, offset + limit - 1);
+      return rows.map(AdminFeedbackRecord.fromMap).toList(growable: false);
+    } on Object {
+      throw const AdminFeedbackReadException(
+        'Unable to load feedback for analysis.',
+      );
+    }
+  }
+}
+
+class AdminFeedbackReadException implements Exception {
+  const AdminFeedbackReadException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
