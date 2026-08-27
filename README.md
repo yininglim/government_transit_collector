@@ -268,25 +268,25 @@ The three main modules work together by connecting passenger services, realtime 
 
 # 🗄 Database
 
-The application uses **Supabase PostgreSQL** as its central database.
+The application uses both **Supabase PostgreSQL** and **SQLite** for data management.
 
-The database manages information including:
+## Supabase PostgreSQL
+
+Supabase PostgreSQL serves as the shared cloud database and manages data including:
 
 - User profiles and roles
-- GTFS agencies
-- Bus stops
-- Bus routes
-- Bus trips and schedules
-- Passenger journey-related data
+- GTFS agencies, stops, routes, trips, and schedules
 - Passenger feedback and issue reports
 - Realtime and historical vehicle positions
-- Data required for administrative analysis
+- Data used for route performance and peak operation analysis
 
-Row Level Security (RLS) is used to control database access according to user roles and application requirements.
+Row Level Security (RLS) is used to control access according to user roles and application requirements.
 
-Historical vehicle-position observations are stored in `vehicle_positions` and are used by the Route Performance and Peak Operation analyses.
+## SQLite
 
-Database schema changes should be managed through the project's migration files rather than manually modifying the production database schema.
+SQLite is used as the local database within the mobile application for data that requires local storage and access on the user's device.
+
+Database changes should follow the existing project database structure and migration workflow to maintain consistency across the team.
 
 ---
 
