@@ -269,15 +269,70 @@ void main() {
       expect(find.textContaining(unsupported), findsNothing);
     }
   });
+
+  testWidgets('recreated page restores cost results for the same date', (
+    tester,
+  ) async {
+    final session = CostDashboardSession();
+    final coordinator = FakeDashboardCoordinator(candidates: candidates(1));
+    await pumpDashboard(tester, coordinator, session: session);
+    await tapAnalyse(tester);
+    await tester.pumpAndSettle();
+    expect(coordinator.analysisRouteIds, ['R1']);
+
+    await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+    await tester.pump();
+    await pumpDashboard(tester, coordinator, session: session);
+
+    expect(find.byKey(const Key('route-result-R1')), findsOneWidget);
+    expect(coordinator.analysisRouteIds, ['R1']);
+    expect(session.referenceDate, referenceDate);
+  });
+
+  testWidgets('different reference date clears the retained cost session', (
+    tester,
+  ) async {
+    final session = CostDashboardSession()
+      ..begin(periodStart, periodEnd, referenceDate)
+      ..candidates.addAll(candidates(1))
+      ..entries.add(
+        CostDashboardEntry(
+          route: route('R1'),
+          result: result('R1', CostRecommendationAction.costEfficiencyReview),
+        ),
+      )
+      ..nextCandidateIndex = 1;
+    final coordinator = FakeDashboardCoordinator(candidates: candidates(1));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: CostEstimationReportPage(
+          session: session,
+          coordinator: coordinator,
+          now: () => fixedNow().add(const Duration(days: 1)),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byKey(const Key('route-result-R1')), findsNothing);
+    expect(session.referenceDate, isNull);
+    expect(coordinator.analysisRouteIds, isEmpty);
+  });
 }
 
 Future<void> pumpDashboard(
   WidgetTester tester,
-  CostDashboardCoordinator coordinator,
-) async {
+  CostDashboardCoordinator coordinator, {
+  CostDashboardSession? session,
+}) async {
   await tester.pumpWidget(
     MaterialApp(
-      home: CostEstimationReportPage(coordinator: coordinator, now: fixedNow),
+      home: CostEstimationReportPage(
+        session: session,
+        coordinator: coordinator,
+        now: fixedNow,
+      ),
     ),
   );
   await tester.pump();

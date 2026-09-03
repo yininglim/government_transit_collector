@@ -25,6 +25,46 @@ class RouteStopDashboardEntry {
   final RouteStopRecommendationResult result;
 }
 
+class RouteStopDashboardSession {
+  final candidates = <RouteStopDashboardCandidate>[];
+  final entries = <RouteStopDashboardEntry>[];
+  DateTime? periodStartUtc;
+  DateTime? periodEndUtc;
+  bool empty = false;
+  bool setupFailure = false;
+  int completedInBatch = 0;
+  int batchTotal = 0;
+  int nextCandidateIndex = 0;
+
+  bool matchesPeriod(DateTime startUtc, DateTime endExclusiveUtc) =>
+      periodStartUtc?.isAtSameMomentAs(startUtc) == true &&
+      periodEndUtc?.isAtSameMomentAs(endExclusiveUtc) == true;
+
+  void begin(DateTime startUtc, DateTime endExclusiveUtc) {
+    periodStartUtc = startUtc;
+    periodEndUtc = endExclusiveUtc;
+    candidates.clear();
+    entries.clear();
+    empty = false;
+    setupFailure = false;
+    completedInBatch = 0;
+    batchTotal = 0;
+    nextCandidateIndex = 0;
+  }
+
+  void clear() {
+    periodStartUtc = null;
+    periodEndUtc = null;
+    candidates.clear();
+    entries.clear();
+    empty = false;
+    setupFailure = false;
+    completedInBatch = 0;
+    batchTotal = 0;
+    nextCandidateIndex = 0;
+  }
+}
+
 class RouteStopDashboardCoordinator {
   RouteStopDashboardCoordinator({
     RoutePerformanceRepository? routeRepository,

@@ -364,15 +364,76 @@ void main() {
       }
     },
   );
+
+  testWidgets(
+    'recreated page restores results and continues with the next candidates',
+    (tester) async {
+      final session = BusFrequencyDashboardSession();
+      final coordinator = FakeDashboardCoordinator(candidates: candidates(5));
+      await pumpDashboard(tester, coordinator, session: session);
+      await tapAnalyse(tester);
+      await tester.pumpAndSettle();
+      expect(coordinator.analysisRouteIds, ['R1', 'R2', 'R3']);
+
+      await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+      await tester.pump();
+      await pumpDashboard(tester, coordinator, session: session);
+
+      expect(find.byKey(const Key('route-result-R1')), findsOneWidget);
+      expect(coordinator.analysisRouteIds, ['R1', 'R2', 'R3']);
+      final next = find.byKey(const Key('analyse-next-routes'));
+      await tester.dragUntilVisible(
+        next,
+        find.byType(ListView).first,
+        const Offset(0, -300),
+      );
+      await tester.tap(next);
+      await tester.pumpAndSettle();
+
+      expect(coordinator.analysisRouteIds, ['R1', 'R2', 'R3', 'R4', 'R5']);
+    },
+  );
+
+  testWidgets('new analysis replaces the retained session identity', (
+    tester,
+  ) async {
+    var now = fixedNow();
+    final session = BusFrequencyDashboardSession();
+    final coordinator = FakeDashboardCoordinator(candidates: candidates(1));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: BusFrequencyRecommendationPage(
+          session: session,
+          coordinator: coordinator,
+          now: () => now,
+        ),
+      ),
+    );
+    await tester.pump();
+    await tapAnalyse(tester);
+    await tester.pumpAndSettle();
+    final firstStart = session.periodStartUtc;
+    expect(session.entries, hasLength(1));
+
+    now = now.add(const Duration(days: 1));
+    await tester.tap(find.byKey(const Key('analyse-routes')));
+    await tester.pumpAndSettle();
+
+    expect(session.periodStartUtc, firstStart!.add(const Duration(days: 1)));
+    expect(session.entries, hasLength(1));
+    expect(coordinator.analysisRouteIds, ['R1', 'R1']);
+  });
 }
 
 Future<void> pumpDashboard(
   WidgetTester tester,
-  BusFrequencyDashboardCoordinator coordinator,
-) async {
+  BusFrequencyDashboardCoordinator coordinator, {
+  BusFrequencyDashboardSession? session,
+}) async {
   await tester.pumpWidget(
     MaterialApp(
       home: BusFrequencyRecommendationPage(
+        session: session,
         coordinator: coordinator,
         now: fixedNow,
       ),

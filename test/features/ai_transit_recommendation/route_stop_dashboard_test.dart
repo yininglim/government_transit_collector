@@ -276,15 +276,40 @@ void main() {
       }
     },
   );
+
+  testWidgets('recreated page restores route and stop results', (tester) async {
+    final session = RouteStopDashboardSession();
+    final retainedCandidates = candidates(1);
+    final coordinator = FakeDashboardCoordinator(
+      candidates: retainedCandidates,
+    );
+    await pumpDashboard(tester, coordinator, session: session);
+    await tapAnalyse(tester);
+    await tester.pumpAndSettle();
+    expect(coordinator.analysisRouteIds, ['R1']);
+
+    await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+    await tester.pump();
+    await pumpDashboard(tester, coordinator, session: session);
+
+    expect(find.byKey(const Key('route-result-R1')), findsOneWidget);
+    expect(coordinator.analysisRouteIds, ['R1']);
+    expect(
+      session.candidates.single.evidence,
+      same(retainedCandidates.single.evidence),
+    );
+  });
 }
 
 Future<void> pumpDashboard(
   WidgetTester tester,
-  RouteStopDashboardCoordinator coordinator,
-) async {
+  RouteStopDashboardCoordinator coordinator, {
+  RouteStopDashboardSession? session,
+}) async {
   await tester.pumpWidget(
     MaterialApp(
       home: RouteBusStopRecommendationPage(
+        session: session,
         coordinator: coordinator,
         now: fixedNow,
       ),

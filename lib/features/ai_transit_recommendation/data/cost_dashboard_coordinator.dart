@@ -22,6 +22,60 @@ class CostDashboardEntry {
   final CostRecommendationResult result;
 }
 
+class CostDashboardSession {
+  final candidates = <CostDashboardCandidate>[];
+  final entries = <CostDashboardEntry>[];
+  DateTime? periodStartUtc;
+  DateTime? periodEndUtc;
+  DateTime? referenceDate;
+  bool empty = false;
+  bool setupFailure = false;
+  int completedInBatch = 0;
+  int batchTotal = 0;
+  int nextCandidateIndex = 0;
+
+  bool matchesPeriod(
+    DateTime startUtc,
+    DateTime endExclusiveUtc,
+    DateTime reference,
+  ) =>
+      periodStartUtc?.isAtSameMomentAs(startUtc) == true &&
+      periodEndUtc?.isAtSameMomentAs(endExclusiveUtc) == true &&
+      _sameDate(referenceDate, reference);
+
+  void begin(DateTime startUtc, DateTime endExclusiveUtc, DateTime reference) {
+    periodStartUtc = startUtc;
+    periodEndUtc = endExclusiveUtc;
+    referenceDate = DateTime(reference.year, reference.month, reference.day);
+    candidates.clear();
+    entries.clear();
+    empty = false;
+    setupFailure = false;
+    completedInBatch = 0;
+    batchTotal = 0;
+    nextCandidateIndex = 0;
+  }
+
+  void clear() {
+    periodStartUtc = null;
+    periodEndUtc = null;
+    referenceDate = null;
+    candidates.clear();
+    entries.clear();
+    empty = false;
+    setupFailure = false;
+    completedInBatch = 0;
+    batchTotal = 0;
+    nextCandidateIndex = 0;
+  }
+}
+
+bool _sameDate(DateTime? first, DateTime second) =>
+    first != null &&
+    first.year == second.year &&
+    first.month == second.month &&
+    first.day == second.day;
+
 class CostDashboardCoordinator {
   CostDashboardCoordinator({
     RoutePerformanceRepository? routeRepository,
