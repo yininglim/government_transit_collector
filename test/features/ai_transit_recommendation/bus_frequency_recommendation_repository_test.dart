@@ -382,6 +382,30 @@ void main() {
     );
   });
 
+  test('uses retained evidence without loading it again', () async {
+    final retainedEvidence = evidence();
+    final evidenceRepository = FakeEvidenceRepository(retainedEvidence);
+    final gemini = FakeGeminiDataSource(
+      response: validResponse('maintainService'),
+    );
+    final recommendationRepository =
+        DefaultBusFrequencyRecommendationRepository(
+          evidenceRepository: evidenceRepository,
+          geminiDataSource: gemini,
+        );
+
+    final result = await recommendationRepository.generate(
+      routeId: 'J15',
+      startUtc: periodStart,
+      endExclusiveUtc: periodEnd,
+      evidence: retainedEvidence,
+    );
+
+    expect(evidenceRepository.callCount, 0);
+    expect(result.evidence, same(retainedEvidence));
+    expect(jsonDecode(gemini.request!.input), result.payload!.toJson());
+  });
+
   test('uses 90 seconds while Part 6A retains its 30-second default', () {
     final recommendationRepository =
         DefaultBusFrequencyRecommendationRepository(
@@ -536,13 +560,17 @@ class FakeEvidenceRepository implements BusFrequencyEvidenceRepository {
   FakeEvidenceRepository(this.result);
 
   final BusFrequencyEvidence result;
+  int callCount = 0;
 
   @override
   Future<BusFrequencyEvidence> loadEvidence({
     required String routeId,
     required DateTime startUtc,
     required DateTime endExclusiveUtc,
-  }) async => result;
+  }) async {
+    callCount++;
+    return result;
+  }
 }
 
 class FakeGeminiDataSource implements GeminiDataSource {

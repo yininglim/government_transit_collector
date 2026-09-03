@@ -44,23 +44,116 @@ void main() {
       },
     );
 
-    test('analyses no more than three routes sequentially', () async {
+    test('analyses no more than three routes with concurrency two', () async {
       final recommendationRepository = FakeRecommendationRepository();
       final coordinator = BusFrequencyDashboardCoordinator(
         routeRepository: FakeRouteRepository(const []),
         evidenceRepository: FakeEvidenceRepository(const {}),
         recommendationRepository: recommendationRepository,
       );
+      final batchCandidates = candidates(4);
 
       final entries = await coordinator.analyseBatch(
-        candidates: candidates(4),
+        candidates: batchCandidates,
         startUtc: periodStart,
         endExclusiveUtc: periodEnd,
       );
 
       expect(entries.length, 3);
       expect(recommendationRepository.routeIds, ['R1', 'R2', 'R3']);
-      expect(recommendationRepository.maximumConcurrentCalls, 1);
+      expect(recommendationRepository.maximumConcurrentCalls, 2);
+      expect(recommendationRepository.evidence, [
+        batchCandidates[0].evidence,
+        batchCandidates[1].evidence,
+        batchCandidates[2].evidence,
+      ]);
+    });
+
+    test('starts the third route after a slot and preserves order', () async {
+      final recommendationRepository = ControlledRecommendationRepository(
+        failingRouteId: 'R2',
+      );
+      final coordinator = BusFrequencyDashboardCoordinator(
+        routeRepository: FakeRouteRepository(const []),
+        evidenceRepository: FakeEvidenceRepository(const {}),
+        recommendationRepository: recommendationRepository,
+      );
+      final completedRouteIds = <String>[];
+
+      final pending = coordinator.analyseBatch(
+        candidates: candidates(3),
+        startUtc: periodStart,
+        endExclusiveUtc: periodEnd,
+        onCompleted: (_, _, entry) {
+          completedRouteIds.add(entry.route.routeId);
+        },
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(recommendationRepository.routeIds, ['R1', 'R2']);
+      expect(recommendationRepository.maximumConcurrentCalls, 2);
+      recommendationRepository.complete('R2');
+      await Future<void>.delayed(Duration.zero);
+      expect(recommendationRepository.routeIds, ['R1', 'R2', 'R3']);
+
+      recommendationRepository.complete('R3');
+      recommendationRepository.complete('R1');
+      final entries = await pending;
+
+      expect(entries.map((entry) => entry.route.routeId), ['R1', 'R2', 'R3']);
+      expect(completedRouteIds, ['R1', 'R2', 'R3']);
+      expect(
+        entries[0].result.status,
+        BusFrequencyRecommendationStatus.available,
+      );
+      expect(
+        entries[1].result.status,
+        BusFrequencyRecommendationStatus.temporarilyUnavailable,
+      );
+      expect(
+        entries[2].result.status,
+        BusFrequencyRecommendationStatus.available,
+      );
+    });
+
+    test('supports one-route and two-route batches', () async {
+      for (final count in [1, 2]) {
+        final recommendations = FakeRecommendationRepository();
+        final coordinator = BusFrequencyDashboardCoordinator(
+          routeRepository: FakeRouteRepository(const []),
+          evidenceRepository: FakeEvidenceRepository(const {}),
+          recommendationRepository: recommendations,
+        );
+
+        final entries = await coordinator.analyseBatch(
+          candidates: candidates(count),
+          startUtc: periodStart,
+          endExclusiveUtc: periodEnd,
+        );
+
+        expect(entries, hasLength(count));
+        expect(recommendations.maximumConcurrentCalls, count);
+      }
+    });
+
+    test('retry analyses one route with its retained evidence', () async {
+      final recommendations = FakeRecommendationRepository();
+      final coordinator = BusFrequencyDashboardCoordinator(
+        routeRepository: FakeRouteRepository(const []),
+        evidenceRepository: FakeEvidenceRepository(const {}),
+        recommendationRepository: recommendations,
+      );
+      final candidate = candidates(1).single;
+
+      final entry = await coordinator.retry(
+        candidate: candidate,
+        startUtc: periodStart,
+        endExclusiveUtc: periodEnd,
+      );
+
+      expect(entry.route.routeId, 'R1');
+      expect(recommendations.routeIds, ['R1']);
+      expect(recommendations.evidence.single, same(candidate.evidence));
     });
   });
 
@@ -469,6 +562,7 @@ class FakeEvidenceRepository implements BusFrequencyEvidenceRepository {
 class FakeRecommendationRepository
     implements BusFrequencyRecommendationRepository {
   final routeIds = <String>[];
+  final evidence = <BusFrequencyEvidence?>[];
   int activeCalls = 0;
   int maximumConcurrentCalls = 0;
 
@@ -477,8 +571,10 @@ class FakeRecommendationRepository
     required String routeId,
     required DateTime startUtc,
     required DateTime endExclusiveUtc,
+    BusFrequencyEvidence? evidence,
   }) async {
     routeIds.add(routeId);
+    this.evidence.add(evidence);
     activeCalls++;
     if (activeCalls > maximumConcurrentCalls) {
       maximumConcurrentCalls = activeCalls;
@@ -486,6 +582,42 @@ class FakeRecommendationRepository
     await Future<void>.delayed(Duration.zero);
     activeCalls--;
     return result(BusFrequencyRecommendationAction.maintainService);
+  }
+}
+
+class ControlledRecommendationRepository
+    implements BusFrequencyRecommendationRepository {
+  ControlledRecommendationRepository({this.failingRouteId});
+
+  final String? failingRouteId;
+  final routeIds = <String>[];
+  final _completers = <String, Completer<void>>{};
+  int activeCalls = 0;
+  int maximumConcurrentCalls = 0;
+
+  void complete(String routeId) => _completers[routeId]!.complete();
+
+  @override
+  Future<BusFrequencyRecommendationResult> generate({
+    required String routeId,
+    required DateTime startUtc,
+    required DateTime endExclusiveUtc,
+    BusFrequencyEvidence? evidence,
+  }) async {
+    routeIds.add(routeId);
+    activeCalls++;
+    maximumConcurrentCalls = activeCalls > maximumConcurrentCalls
+        ? activeCalls
+        : maximumConcurrentCalls;
+    final completer = Completer<void>();
+    _completers[routeId] = completer;
+    try {
+      await completer.future;
+      if (routeId == failingRouteId) throw StateError('route failure');
+      return result(BusFrequencyRecommendationAction.maintainService);
+    } finally {
+      activeCalls--;
+    }
   }
 }
 

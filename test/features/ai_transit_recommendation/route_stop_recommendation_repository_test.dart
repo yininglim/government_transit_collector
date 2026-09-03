@@ -269,6 +269,33 @@ void main() {
       );
     },
   );
+
+  test('uses retained evidence without loading it again', () async {
+    final retainedEvidence = evidence();
+    final evidenceRepository = FakeEvidenceRepository(retainedEvidence);
+    final gemini = FakeGeminiDataSource(
+      response: validResponse(RouteStopRecommendationAction.routeImprovement),
+    );
+    final recommendationRepository = DefaultRouteStopRecommendationRepository(
+      evidenceRepository: evidenceRepository,
+      geminiDataSource: gemini,
+    );
+
+    final result = await recommendationRepository.generate(
+      routeId: 'J15',
+      startUtc: periodStart,
+      endExclusiveUtc: periodEnd,
+      evidence: retainedEvidence,
+    );
+
+    expect(evidenceRepository.callCount, 0);
+    expect(result.evidence, same(retainedEvidence));
+    expect(gemini.request!.input, contains('route_stop_evidence'));
+    expect(
+      result.payload!.toJson()['evidence_references'],
+      contains('network.trip.0'),
+    );
+  });
 }
 
 final periodStart = DateTime.utc(2026, 7, 1);
@@ -468,13 +495,17 @@ Set<String> _allKeys(Object? value) {
 class FakeEvidenceRepository implements DistrictRouteStopEvidenceRepository {
   FakeEvidenceRepository(this.result);
   final DistrictRouteStopEvidence result;
+  int callCount = 0;
 
   @override
   Future<DistrictRouteStopEvidence> loadEvidence({
     required String routeId,
     required DateTime startUtc,
     required DateTime endExclusiveUtc,
-  }) async => result;
+  }) async {
+    callCount++;
+    return result;
+  }
 }
 
 class FakeGeminiDataSource implements GeminiDataSource {

@@ -50,21 +50,27 @@ void main() {
     );
   });
 
-  test('caps batches at three and awaits calls sequentially', () async {
+  test('caps batches at three with recommendation concurrency two', () async {
     final recommendations = FakeRecommendationRepository();
     final coordinator = CostDashboardCoordinator(
       routeRepository: FakeRouteRepository(const []),
       evidenceRepository: FakeEvidenceRepository(const {}),
       recommendationRepository: recommendations,
     );
+    final batchCandidates = candidates(4);
     await coordinator.analyseBatch(
-      candidates: candidates(4),
+      candidates: batchCandidates,
       startUtc: periodStart,
       endExclusiveUtc: periodEnd,
       referenceDate: referenceDate,
     );
     expect(recommendations.routeIds, ['R1', 'R2', 'R3']);
-    expect(recommendations.maximumConcurrentCalls, 1);
+    expect(recommendations.maximumConcurrentCalls, 2);
+    expect(recommendations.evidence, [
+      batchCandidates[0].evidence,
+      batchCandidates[1].evidence,
+      batchCandidates[2].evidence,
+    ]);
   });
 
   testWidgets('shows fixed period and requires an intentional action', (
@@ -416,6 +422,7 @@ class FakeEvidenceRepository implements FuelCostCalculationRepository {
 
 class FakeRecommendationRepository implements CostRecommendationRepository {
   final routeIds = <String>[];
+  final evidence = <FuelCostCalculationEvidence?>[];
   int activeCalls = 0;
   int maximumConcurrentCalls = 0;
 
@@ -425,8 +432,10 @@ class FakeRecommendationRepository implements CostRecommendationRepository {
     required DateTime startUtc,
     required DateTime endExclusiveUtc,
     required DateTime referenceDate,
+    FuelCostCalculationEvidence? evidence,
   }) async {
     routeIds.add(routeId);
+    this.evidence.add(evidence);
     activeCalls++;
     maximumConcurrentCalls = activeCalls > maximumConcurrentCalls
         ? activeCalls

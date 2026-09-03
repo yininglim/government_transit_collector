@@ -118,6 +118,7 @@ abstract interface class RouteStopRecommendationRepository {
     required String routeId,
     required DateTime startUtc,
     required DateTime endExclusiveUtc,
+    DistrictRouteStopEvidence? evidence,
   });
 }
 
@@ -146,14 +147,22 @@ class DefaultRouteStopRecommendationRepository
     required String routeId,
     required DateTime startUtc,
     required DateTime endExclusiveUtc,
+    DistrictRouteStopEvidence? evidence,
   }) async {
-    late final DistrictRouteStopEvidence evidence;
+    late final DistrictRouteStopEvidence resolvedEvidence;
     try {
-      evidence = await _evidenceRepository.loadEvidence(
-        routeId: routeId,
-        startUtc: startUtc,
-        endExclusiveUtc: endExclusiveUtc,
-      );
+      resolvedEvidence = evidence == null
+          ? await _evidenceRepository.loadEvidence(
+              routeId: routeId,
+              startUtc: startUtc,
+              endExclusiveUtc: endExclusiveUtc,
+            )
+          : _validatedEvidence(
+              evidence,
+              routeId: routeId,
+              startUtc: startUtc,
+              endExclusiveUtc: endExclusiveUtc,
+            );
     } on Object {
       return const RouteStopRecommendationResult(
         status: RouteStopRecommendationStatus.temporarilyUnavailable,
@@ -163,8 +172,8 @@ class DefaultRouteStopRecommendationRepository
         payload: null,
       );
     }
-    final payload = _payloadBuilder.build(evidence);
-    if (!_hasUsableNetworkEvidence(evidence)) {
+    final payload = _payloadBuilder.build(resolvedEvidence);
+    if (!_hasUsableNetworkEvidence(resolvedEvidence)) {
       return RouteStopRecommendationResult(
         status: RouteStopRecommendationStatus.insufficientEvidence,
         recommendation: const RouteStopRecommendation(
@@ -182,7 +191,7 @@ class DefaultRouteStopRecommendationRepository
           source: RouteStopRecommendationSource.deterministicGate,
         ),
         failure: null,
-        evidence: evidence,
+        evidence: resolvedEvidence,
         payload: payload,
       );
     }
@@ -207,7 +216,7 @@ class DefaultRouteStopRecommendationRepository
             : RouteStopRecommendationStatus.available,
         recommendation: recommendation,
         failure: null,
-        evidence: evidence,
+        evidence: resolvedEvidence,
         payload: payload,
       );
     } on RouteStopRecommendationValidationException catch (error) {
@@ -215,13 +224,33 @@ class DefaultRouteStopRecommendationRepository
         status: RouteStopRecommendationStatus.invalidAiResponse,
         recommendation: null,
         failure: error.failure,
-        evidence: evidence,
+        evidence: resolvedEvidence,
         payload: payload,
       );
     } on GeminiTransportException catch (error) {
-      return _transportFailure(error, evidence: evidence, payload: payload);
+      return _transportFailure(
+        error,
+        evidence: resolvedEvidence,
+        payload: payload,
+      );
     }
   }
+}
+
+DistrictRouteStopEvidence _validatedEvidence(
+  DistrictRouteStopEvidence evidence, {
+  required String routeId,
+  required DateTime startUtc,
+  required DateTime endExclusiveUtc,
+}) {
+  final source = evidence.routeStopEvidence;
+  if (source.routeId != routeId ||
+      source.network.route.routeId != routeId ||
+      !source.periodStart.isAtSameMomentAs(startUtc) ||
+      !source.periodEnd.isAtSameMomentAs(endExclusiveUtc)) {
+    throw ArgumentError('The retained evidence does not match the request.');
+  }
+  return evidence;
 }
 
 bool _hasUsableNetworkEvidence(DistrictRouteStopEvidence evidence) {

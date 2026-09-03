@@ -76,6 +76,7 @@ abstract interface class CostRecommendationRepository {
     required DateTime startUtc,
     required DateTime endExclusiveUtc,
     required DateTime referenceDate,
+    FuelCostCalculationEvidence? evidence,
   });
 }
 
@@ -104,15 +105,24 @@ class DefaultCostRecommendationRepository
     required DateTime startUtc,
     required DateTime endExclusiveUtc,
     required DateTime referenceDate,
+    FuelCostCalculationEvidence? evidence,
   }) async {
-    late final FuelCostCalculationEvidence evidence;
+    late final FuelCostCalculationEvidence resolvedEvidence;
     try {
-      evidence = await _evidenceRepository.calculate(
-        routeId: routeId,
-        startUtc: startUtc,
-        endExclusiveUtc: endExclusiveUtc,
-        referenceDate: referenceDate,
-      );
+      resolvedEvidence = evidence == null
+          ? await _evidenceRepository.calculate(
+              routeId: routeId,
+              startUtc: startUtc,
+              endExclusiveUtc: endExclusiveUtc,
+              referenceDate: referenceDate,
+            )
+          : _validatedEvidence(
+              evidence,
+              routeId: routeId,
+              startUtc: startUtc,
+              endExclusiveUtc: endExclusiveUtc,
+              referenceDate: referenceDate,
+            );
     } on Object {
       return const CostRecommendationResult(
         status: CostRecommendationStatus.temporarilyUnavailable,
@@ -122,8 +132,8 @@ class DefaultCostRecommendationRepository
         payload: null,
       );
     }
-    final payload = _payloadBuilder.build(evidence);
-    if (!hasUsableCostRecommendationEvidence(evidence)) {
+    final payload = _payloadBuilder.build(resolvedEvidence);
+    if (!hasUsableCostRecommendationEvidence(resolvedEvidence)) {
       return CostRecommendationResult(
         status: CostRecommendationStatus.insufficientEvidence,
         recommendation: const CostRecommendation(
@@ -141,7 +151,7 @@ class DefaultCostRecommendationRepository
           source: CostRecommendationSource.deterministicGate,
         ),
         failure: null,
-        evidence: evidence,
+        evidence: resolvedEvidence,
         payload: payload,
       );
     }
@@ -166,7 +176,7 @@ class DefaultCostRecommendationRepository
             : CostRecommendationStatus.available,
         recommendation: recommendation,
         failure: null,
-        evidence: evidence,
+        evidence: resolvedEvidence,
         payload: payload,
       );
     } on CostRecommendationValidationException catch (error) {
@@ -174,14 +184,39 @@ class DefaultCostRecommendationRepository
         status: CostRecommendationStatus.invalidAiResponse,
         recommendation: null,
         failure: error.failure,
-        evidence: evidence,
+        evidence: resolvedEvidence,
         payload: payload,
       );
     } on GeminiTransportException catch (error) {
-      return _transportFailure(error, evidence: evidence, payload: payload);
+      return _transportFailure(
+        error,
+        evidence: resolvedEvidence,
+        payload: payload,
+      );
     }
   }
 }
+
+FuelCostCalculationEvidence _validatedEvidence(
+  FuelCostCalculationEvidence evidence, {
+  required String routeId,
+  required DateTime startUtc,
+  required DateTime endExclusiveUtc,
+  required DateTime referenceDate,
+}) {
+  if (evidence.route.routeId != routeId ||
+      !evidence.periodStart.isAtSameMomentAs(startUtc) ||
+      !evidence.periodEnd.isAtSameMomentAs(endExclusiveUtc) ||
+      !_sameDate(evidence.referenceDate, referenceDate)) {
+    throw ArgumentError('The retained evidence does not match the request.');
+  }
+  return evidence;
+}
+
+bool _sameDate(DateTime first, DateTime second) =>
+    first.year == second.year &&
+    first.month == second.month &&
+    first.day == second.day;
 
 bool hasUsableCostRecommendationEvidence(FuelCostCalculationEvidence evidence) {
   final usableStatus =

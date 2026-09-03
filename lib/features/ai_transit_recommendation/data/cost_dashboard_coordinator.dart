@@ -6,6 +6,7 @@ import 'package:government_transit_collector/features/route_performance/data/rou
 import 'package:government_transit_collector/features/route_performance/data/route_performance_repository.dart';
 
 const costDashboardBatchSize = 3;
+const costDashboardMaximumConcurrency = 2;
 
 class CostDashboardCandidate {
   const CostDashboardCandidate({required this.route, required this.evidence});
@@ -74,31 +75,64 @@ class CostDashboardCoordinator {
     onCompleted,
   }) async {
     final batch = candidates.take(costDashboardBatchSize).toList();
-    final entries = <CostDashboardEntry>[];
-    for (var index = 0; index < batch.length; index++) {
-      final candidate = batch[index];
-      CostRecommendationResult result;
-      try {
-        result = await _recommendationRepository.generate(
-          routeId: candidate.route.routeId,
-          startUtc: startUtc,
-          endExclusiveUtc: endExclusiveUtc,
-          referenceDate: referenceDate,
+    final entries = List<CostDashboardEntry?>.filled(batch.length, null);
+    var nextIndex = 0;
+    var nextCompletedIndex = 0;
+    var completed = 0;
+
+    void reportCompleted() {
+      while (nextCompletedIndex < entries.length &&
+          entries[nextCompletedIndex] != null) {
+        completed++;
+        onCompleted?.call(
+          completed,
+          batch.length,
+          entries[nextCompletedIndex]!,
         );
-      } on Object {
-        result = const CostRecommendationResult(
-          status: CostRecommendationStatus.temporarilyUnavailable,
-          recommendation: null,
-          failure: CostRecommendationFailure.network,
-          evidence: null,
-          payload: null,
-        );
+        nextCompletedIndex++;
       }
-      final entry = CostDashboardEntry(route: candidate.route, result: result);
-      entries.add(entry);
-      onCompleted?.call(index + 1, batch.length, entry);
     }
-    return entries;
+
+    Future<void> worker() async {
+      while (nextIndex < batch.length) {
+        final index = nextIndex++;
+        final candidate = batch[index];
+        CostRecommendationResult result;
+        try {
+          result = await _recommendationRepository.generate(
+            routeId: candidate.route.routeId,
+            startUtc: startUtc,
+            endExclusiveUtc: endExclusiveUtc,
+            referenceDate: referenceDate,
+            evidence: candidate.evidence,
+          );
+        } on Object {
+          result = const CostRecommendationResult(
+            status: CostRecommendationStatus.temporarilyUnavailable,
+            recommendation: null,
+            failure: CostRecommendationFailure.network,
+            evidence: null,
+            payload: null,
+          );
+        }
+        final entry = CostDashboardEntry(
+          route: candidate.route,
+          result: result,
+        );
+        entries[index] = entry;
+        reportCompleted();
+      }
+    }
+
+    await Future.wait([
+      for (
+        var index = 0;
+        index < batch.length && index < costDashboardMaximumConcurrency;
+        index++
+      )
+        worker(),
+    ]);
+    return entries.cast<CostDashboardEntry>();
   }
 
   Future<CostDashboardEntry> retry({
@@ -112,6 +146,7 @@ class CostDashboardCoordinator {
       startUtc: startUtc,
       endExclusiveUtc: endExclusiveUtc,
       referenceDate: referenceDate,
+      evidence: candidate.evidence,
     );
     return CostDashboardEntry(route: candidate.route, result: result);
   }

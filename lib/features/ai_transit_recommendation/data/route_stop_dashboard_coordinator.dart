@@ -6,6 +6,7 @@ import 'package:government_transit_collector/features/route_performance/data/rou
 import 'package:government_transit_collector/features/route_performance/data/route_performance_repository.dart';
 
 const routeStopDashboardBatchSize = 3;
+const routeStopDashboardMaximumConcurrency = 2;
 
 class RouteStopDashboardCandidate {
   const RouteStopDashboardCandidate({
@@ -75,33 +76,63 @@ class RouteStopDashboardCoordinator {
     onCompleted,
   }) async {
     final batch = candidates.take(routeStopDashboardBatchSize).toList();
-    final entries = <RouteStopDashboardEntry>[];
-    for (var index = 0; index < batch.length; index++) {
-      final candidate = batch[index];
-      RouteStopRecommendationResult result;
-      try {
-        result = await _recommendationRepository.generate(
-          routeId: candidate.route.routeId,
-          startUtc: startUtc,
-          endExclusiveUtc: endExclusiveUtc,
+    final entries = List<RouteStopDashboardEntry?>.filled(batch.length, null);
+    var nextIndex = 0;
+    var nextCompletedIndex = 0;
+    var completed = 0;
+
+    void reportCompleted() {
+      while (nextCompletedIndex < entries.length &&
+          entries[nextCompletedIndex] != null) {
+        completed++;
+        onCompleted?.call(
+          completed,
+          batch.length,
+          entries[nextCompletedIndex]!,
         );
-      } on Object {
-        result = const RouteStopRecommendationResult(
-          status: RouteStopRecommendationStatus.temporarilyUnavailable,
-          recommendation: null,
-          failure: RouteStopRecommendationFailure.network,
-          evidence: null,
-          payload: null,
-        );
+        nextCompletedIndex++;
       }
-      final entry = RouteStopDashboardEntry(
-        route: candidate.route,
-        result: result,
-      );
-      entries.add(entry);
-      onCompleted?.call(index + 1, batch.length, entry);
     }
-    return entries;
+
+    Future<void> worker() async {
+      while (nextIndex < batch.length) {
+        final index = nextIndex++;
+        final candidate = batch[index];
+        RouteStopRecommendationResult result;
+        try {
+          result = await _recommendationRepository.generate(
+            routeId: candidate.route.routeId,
+            startUtc: startUtc,
+            endExclusiveUtc: endExclusiveUtc,
+            evidence: candidate.evidence,
+          );
+        } on Object {
+          result = const RouteStopRecommendationResult(
+            status: RouteStopRecommendationStatus.temporarilyUnavailable,
+            recommendation: null,
+            failure: RouteStopRecommendationFailure.network,
+            evidence: null,
+            payload: null,
+          );
+        }
+        final entry = RouteStopDashboardEntry(
+          route: candidate.route,
+          result: result,
+        );
+        entries[index] = entry;
+        reportCompleted();
+      }
+    }
+
+    await Future.wait([
+      for (
+        var index = 0;
+        index < batch.length && index < routeStopDashboardMaximumConcurrency;
+        index++
+      )
+        worker(),
+    ]);
+    return entries.cast<RouteStopDashboardEntry>();
   }
 
   Future<RouteStopDashboardEntry> retry({
@@ -113,6 +144,7 @@ class RouteStopDashboardCoordinator {
       routeId: candidate.route.routeId,
       startUtc: startUtc,
       endExclusiveUtc: endExclusiveUtc,
+      evidence: candidate.evidence,
     );
     return RouteStopDashboardEntry(route: candidate.route, result: result);
   }

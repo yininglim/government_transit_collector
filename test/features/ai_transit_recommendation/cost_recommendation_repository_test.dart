@@ -286,6 +286,31 @@ void main() {
       expect(keys, isNot(contains(prohibited)));
     }
   });
+
+  test('uses retained evidence without calculating it again', () async {
+    final retainedEvidence = evidence();
+    final evidenceRepository = FakeEvidenceRepository(retainedEvidence);
+    final gemini = FakeGeminiDataSource(
+      response: validResponse(CostRecommendationAction.costEfficiencyReview),
+    );
+    final recommendationRepository = DefaultCostRecommendationRepository(
+      evidenceRepository: evidenceRepository,
+      geminiDataSource: gemini,
+    );
+
+    final result = await recommendationRepository.generate(
+      routeId: 'J15',
+      startUtc: periodStart,
+      endExclusiveUtc: periodEnd,
+      referenceDate: referenceDate,
+      evidence: retainedEvidence,
+    );
+
+    expect(evidenceRepository.callCount, 0);
+    expect(result.evidence, same(retainedEvidence));
+    expect(gemini.request!.input, contains('cost_estimation_evidence'));
+    expect(result.payload!.toJson()['fuel_estimate'], isNotNull);
+  });
 }
 
 final periodStart = DateTime.utc(2026, 7, 1);
@@ -380,6 +405,7 @@ Set<String> _allKeys(Object? value) {
 class FakeEvidenceRepository implements FuelCostCalculationRepository {
   FakeEvidenceRepository(this.result);
   final FuelCostCalculationEvidence result;
+  int callCount = 0;
 
   @override
   Future<FuelCostCalculationEvidence> calculate({
@@ -387,7 +413,10 @@ class FakeEvidenceRepository implements FuelCostCalculationRepository {
     required DateTime startUtc,
     required DateTime endExclusiveUtc,
     required DateTime referenceDate,
-  }) async => result;
+  }) async {
+    callCount++;
+    return result;
+  }
 }
 
 class FakeGeminiDataSource implements GeminiDataSource {

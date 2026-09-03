@@ -42,26 +42,29 @@ void main() {
     expect(evidenceRepository.periods, everyElement((periodStart, periodEnd)));
   });
 
-  test(
-    'caps batches at three and awaits recommendation calls sequentially',
-    () async {
-      final recommendationRepository = FakeRecommendationRepository();
-      final coordinator = RouteStopDashboardCoordinator(
-        routeRepository: FakeRouteRepository(const []),
-        evidenceRepository: FakeEvidenceRepository(const {}),
-        recommendationRepository: recommendationRepository,
-      );
+  test('caps batches at three with recommendation concurrency two', () async {
+    final recommendationRepository = FakeRecommendationRepository();
+    final coordinator = RouteStopDashboardCoordinator(
+      routeRepository: FakeRouteRepository(const []),
+      evidenceRepository: FakeEvidenceRepository(const {}),
+      recommendationRepository: recommendationRepository,
+    );
+    final batchCandidates = candidates(4);
 
-      await coordinator.analyseBatch(
-        candidates: candidates(4),
-        startUtc: periodStart,
-        endExclusiveUtc: periodEnd,
-      );
+    await coordinator.analyseBatch(
+      candidates: batchCandidates,
+      startUtc: periodStart,
+      endExclusiveUtc: periodEnd,
+    );
 
-      expect(recommendationRepository.routeIds, ['R1', 'R2', 'R3']);
-      expect(recommendationRepository.maximumConcurrentCalls, 1);
-    },
-  );
+    expect(recommendationRepository.routeIds, ['R1', 'R2', 'R3']);
+    expect(recommendationRepository.maximumConcurrentCalls, 2);
+    expect(recommendationRepository.evidence, [
+      batchCandidates[0].evidence,
+      batchCandidates[1].evidence,
+      batchCandidates[2].evidence,
+    ]);
+  });
 
   testWidgets(
     'shows fixed period and waits for an intentional analysis action',
@@ -510,6 +513,7 @@ class FakeEvidenceRepository implements DistrictRouteStopEvidenceRepository {
 class FakeRecommendationRepository
     implements RouteStopRecommendationRepository {
   final routeIds = <String>[];
+  final evidence = <DistrictRouteStopEvidence?>[];
   int activeCalls = 0;
   int maximumConcurrentCalls = 0;
 
@@ -518,8 +522,10 @@ class FakeRecommendationRepository
     required String routeId,
     required DateTime startUtc,
     required DateTime endExclusiveUtc,
+    DistrictRouteStopEvidence? evidence,
   }) async {
     routeIds.add(routeId);
+    this.evidence.add(evidence);
     activeCalls++;
     maximumConcurrentCalls = activeCalls > maximumConcurrentCalls
         ? activeCalls
