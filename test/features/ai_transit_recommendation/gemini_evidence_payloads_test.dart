@@ -80,8 +80,8 @@ void main() {
             .toJson();
         final boundary = payload['district_boundary'] as Map<String, dynamic>;
         final network = payload['network'] as Map<String, dynamic>;
-        final trips = network['trip_variants'] as List<dynamic>;
-
+        final patterns = network['trip_patterns'] as List<dynamic>;
+        final catalog = network['stop_catalog'] as List<dynamic>;
         expect(boundary['status'], 'available');
         expect(boundary['polygon_included'], isFalse);
         expect(boundary['stop_occurrence_counts'], {
@@ -90,25 +90,42 @@ void main() {
           'unverifiable': 1,
           'total': 4,
         });
-        expect(trips, hasLength(2));
-        expect(trips.map((item) => item['trip_id']), ['trip-a', 'trip-b']);
-        expect(trips.map((item) => item['shape_id']), ['shape-a', 'shape-b']);
+        expect(patterns, hasLength(2));
         expect(
-          trips.every((item) => item['shape_coordinates_included'] == false),
+          patterns.expand((item) => item['trip_ids'] as List<dynamic>),
+          containsAll(['trip-a', 'trip-b']),
+        );
+        expect(
+          patterns.map((item) => item['shape_id']),
+          containsAll(['shape-a', 'shape-b']),
+        );
+        expect(
+          patterns.every((item) => item['shape_coordinates_included'] == false),
           isTrue,
         );
-        final firstStops = trips.first['stops'] as List<dynamic>;
+        expect(catalog, hasLength(3));
+        final stopA = catalog.singleWhere(
+          (item) => item['stop_id'] == 'stop-a',
+        );
+        expect(stopA['district_membership'], 'insideJohorBahruDistrict');
+        final stopB = catalog.singleWhere(
+          (item) => item['stop_id'] == 'stop-b',
+        );
+        expect(stopB['district_membership'], 'unverifiable');
+        expect(stopB['latitude'], isNull);
+        expect(stopB['longitude'], isNull);
+        expect(_allKeys(payload), isNot(contains('coordinate_available')));
+        final tripA = patterns.singleWhere(
+          (item) => (item['trip_ids'] as List<dynamic>).contains('trip-a'),
+        );
+        final firstStops = tripA['ordered_stops'] as List<dynamic>;
         expect(firstStops.map((item) => item['stop_id']), ['stop-a', 'stop-b']);
         expect(
-          firstStops.first['district_membership'],
-          'insideJohorBahruDistrict',
+          tripA['consecutive_spacing_meters'],
+          hasLength(firstStops.length - 1),
         );
-        expect(firstStops.last['district_membership'], 'unverifiable');
-        expect(firstStops.last['latitude'], isNull);
-        expect(firstStops.last['longitude'], isNull);
-        expect(firstStops.last['coordinate_available'], isFalse);
         expect(
-          trips.first['consecutive_stop_spacing'].single['distance_meters'],
+          (tripA['consecutive_spacing_meters'] as List<dynamic>).single,
           850.25,
         );
         final counts = _counts(payload['feedback'] as Map<String, dynamic>);
@@ -139,13 +156,282 @@ void main() {
           .build(districtEvidence(trips: trips, longComment: 'y' * 50000))
           .toJson();
       final network = payload['network'] as Map<String, dynamic>;
-      final included = network['trip_variants'] as List<dynamic>;
+      final included = network['trip_patterns'] as List<dynamic>;
 
       expect(included, hasLength(maxPayloadTripVariants));
       expect(network['omitted_trip_variant_count'], 3);
-      expect(included.first['stops'], hasLength(maxPayloadStopsPerTrip));
+      expect(
+        included.first['ordered_stops'],
+        hasLength(maxPayloadStopsPerTrip),
+      );
       expect(included.first['omitted_stop_count'], 2);
       expect(jsonEncode(payload), isNot(contains('y' * 100)));
+    });
+
+    test('groups identical patterns and summarises schedules exactly', () {
+      final trips = [
+        routeTrip(
+          'trip-1',
+          [
+            routeStop('a', 1, const MapCoordinate(1, 103), null, 100),
+            routeStop('b', 2, const MapCoordinate(2, 104), null, null, 220),
+          ],
+          shapeId: 'shared-shape',
+          distance: 900,
+        ),
+        routeTrip(
+          'trip-2',
+          [
+            routeStop('a', 1, const MapCoordinate(1, 103), null, 300),
+            routeStop('b', 2, const MapCoordinate(2, 104), null, null, 420),
+          ],
+          shapeId: 'shared-shape',
+          distance: 900,
+        ),
+      ];
+      final payload = const RouteStopGeminiPayloadBuilder()
+          .build(districtEvidence(trips: trips, spacingByTrip: const []))
+          .toJson();
+      final network = payload['network'] as Map<String, dynamic>;
+      final pattern = (network['trip_patterns'] as List<dynamic>).single;
+      final stops = pattern['ordered_stops'] as List<dynamic>;
+
+      expect(network['unique_trip_pattern_count'], 1);
+      expect(network['stop_catalog'], hasLength(2));
+      expect(pattern['trip_ids'], ['trip-1', 'trip-2']);
+      expect(pattern['evidence_refs'], ['network.trip.0', 'network.trip.1']);
+      expect(pattern['occurrence_count'], 2);
+      expect(stops.first['arrival_seconds_min_max_missing'], [100, 300, 0]);
+      expect(stops.last['departure_seconds_min_max_missing'], [220, 420, 0]);
+      expect(stops.last['arrival_seconds_min_max_missing'], [null, null, 2]);
+      expect(pattern['consecutive_spacing_meters'], [null]);
+      expect(
+        payload['evidence_references'],
+        containsAll(['network.trip.0', 'network.trip.1', 'stop.a', 'stop.b']),
+      );
+    });
+
+    test('keeps every materially different pattern distinct', () {
+      final standardStops = [
+        routeStop('a', 1, const MapCoordinate(1, 103)),
+        routeStop('b', 2, const MapCoordinate(2, 104)),
+      ];
+      final trips = [
+        routeTrip('base', standardStops, shapeId: 'shape', distance: 900),
+        routeTrip(
+          'ordered',
+          [standardStops.first, routeStop('c', 2)],
+          shapeId: 'shape',
+          distance: 900,
+        ),
+        routeTrip(
+          'reversed',
+          [routeStop('b', 2, const MapCoordinate(2, 104)), standardStops.first],
+          shapeId: 'shape',
+          distance: 900,
+        ),
+        routeTrip(
+          'sequence',
+          [standardStops.first, routeStop('b', 3, const MapCoordinate(2, 104))],
+          shapeId: 'shape',
+          distance: 900,
+        ),
+        routeTrip('shape', standardStops, shapeId: 'other', distance: 900),
+        routeTrip('distance', standardStops, shapeId: 'shape', distance: 901),
+        routeTrip(
+          'geometry',
+          standardStops,
+          shapeId: 'shape',
+          distance: 900,
+          shapeCoordinateCount: 2,
+        ),
+      ];
+      final payload = const RouteStopGeminiPayloadBuilder()
+          .build(districtEvidence(trips: trips, spacingByTrip: const []))
+          .toJson();
+      final network = payload['network'] as Map<String, dynamic>;
+
+      expect(network['unique_trip_pattern_count'], trips.length);
+    });
+
+    test('keeps different spacing patterns distinct and deterministic', () {
+      final stops = [routeStop('a', 1), routeStop('b', 2)];
+      final trips = [
+        routeTrip('trip-1', stops, shapeId: 'shape', distance: 900),
+        routeTrip('trip-2', stops, shapeId: 'shape', distance: 900),
+      ];
+      final evidence = districtEvidence(
+        trips: trips,
+        spacingByTrip: const [
+          TripStopSpacingEvidence(
+            tripId: 'trip-1',
+            consecutiveStops: [
+              ConsecutiveStopSpacingEvidence(
+                fromStopId: 'a',
+                fromStopSequence: 1,
+                toStopId: 'b',
+                toStopSequence: 2,
+                distanceMeters: 100,
+              ),
+            ],
+          ),
+          TripStopSpacingEvidence(
+            tripId: 'trip-2',
+            consecutiveStops: [
+              ConsecutiveStopSpacingEvidence(
+                fromStopId: 'a',
+                fromStopSequence: 1,
+                toStopId: 'b',
+                toStopSequence: 2,
+                distanceMeters: null,
+              ),
+            ],
+          ),
+        ],
+      );
+      final first = const RouteStopGeminiPayloadBuilder()
+          .build(evidence)
+          .toJson();
+      final second = const RouteStopGeminiPayloadBuilder()
+          .build(evidence)
+          .toJson();
+      final network = first['network'] as Map<String, dynamic>;
+
+      expect(network['unique_trip_pattern_count'], 2);
+      expect(
+        (network['trip_patterns'] as List<dynamic>).map(
+          (pattern) => pattern['consecutive_spacing_meters'],
+        ),
+        containsAll([
+          [100.0],
+          [null],
+        ]),
+      );
+      expect(jsonEncode(first), jsonEncode(second));
+    });
+
+    test('catalog and pattern ordering is stable across trip input order', () {
+      final firstTrip = routeTrip('first', [
+        routeStop('z', 1),
+        routeStop('b', 2),
+      ], shapeId: 'shape-z');
+      final secondTrip = routeTrip('second', [
+        routeStop('a', 1),
+        routeStop('c', 2),
+      ], shapeId: 'shape-a');
+      final first =
+          const RouteStopGeminiPayloadBuilder()
+                  .build(
+                    districtEvidence(
+                      trips: [firstTrip, secondTrip],
+                      spacingByTrip: const [],
+                    ),
+                  )
+                  .toJson()['network']
+              as Map<String, dynamic>;
+      final reversed =
+          const RouteStopGeminiPayloadBuilder()
+                  .build(
+                    districtEvidence(
+                      trips: [secondTrip, firstTrip],
+                      spacingByTrip: const [],
+                    ),
+                  )
+                  .toJson()['network']
+              as Map<String, dynamic>;
+
+      expect(
+        (first['stop_catalog'] as List<dynamic>).map((stop) => stop['stop_id']),
+        (reversed['stop_catalog'] as List<dynamic>).map(
+          (stop) => stop['stop_id'],
+        ),
+      );
+      expect(
+        (first['trip_patterns'] as List<dynamic>).map(
+          (pattern) => pattern['shape_id'],
+        ),
+        (reversed['trip_patterns'] as List<dynamic>).map(
+          (pattern) => pattern['shape_id'],
+        ),
+      );
+    });
+
+    test('rejects conflicting metadata for the same stop ID', () {
+      final trips = [
+        routeTrip('one', [routeStop('a', 1, null, 'First'), routeStop('b', 2)]),
+        routeTrip('two', [
+          routeStop('a', 1, null, 'Second'),
+          routeStop('c', 2),
+        ]),
+      ];
+
+      expect(
+        () => const RouteStopGeminiPayloadBuilder().build(
+          districtEvidence(trips: trips),
+        ),
+        throwsA(isA<RouteStopGeminiPayloadBuildException>()),
+      );
+    });
+
+    test('preserves repeated stop IDs in ordered loop topology', () {
+      final payload = const RouteStopGeminiPayloadBuilder()
+          .build(
+            districtEvidence(
+              trips: [
+                routeTrip('loop', [
+                  routeStop('a', 1),
+                  routeStop('b', 2),
+                  routeStop('a', 3),
+                ]),
+              ],
+              spacingByTrip: const [],
+            ),
+          )
+          .toJson();
+      final network = payload['network'] as Map<String, dynamic>;
+      final pattern = (network['trip_patterns'] as List<dynamic>).single;
+
+      expect(network['stop_catalog'], hasLength(2));
+      expect(
+        (pattern['ordered_stops'] as List<dynamic>).map(
+          (item) => item['stop_id'],
+        ),
+        ['a', 'b', 'a'],
+      );
+      expect(pattern['consecutive_spacing_meters'], [null, null]);
+    });
+
+    test('compacts repeated-pattern stress evidence', () {
+      final trips = List.generate(
+        maxPayloadTripVariants,
+        (tripIndex) => routeTrip(
+          'trip-$tripIndex',
+          List.generate(
+            50,
+            (stopIndex) => routeStop(
+              'shared-$stopIndex',
+              stopIndex + 1,
+              null,
+              null,
+              21600 + tripIndex * 1800 + stopIndex * 120,
+              21630 + tripIndex * 1800 + stopIndex * 120,
+            ),
+          ),
+          shapeId: 'shared-shape',
+          distance: 25000,
+          shapeCoordinateCount: 100,
+        ),
+      );
+      final payload = const RouteStopGeminiPayloadBuilder()
+          .build(districtEvidence(trips: trips, spacingByTrip: const []))
+          .toJson();
+      final network = payload['network'] as Map<String, dynamic>;
+      final size = utf8.encode(jsonEncode(payload)).length;
+
+      expect(network['trip_variant_count'], maxPayloadTripVariants);
+      expect(network['unique_trip_pattern_count'], 1);
+      expect(network['stop_catalog'], hasLength(50));
+      expect(size, lessThan(30000));
     });
   });
 
@@ -333,6 +619,7 @@ AiOperationalEvidence operationalEvidence() => AiOperationalEvidence(
 
 DistrictRouteStopEvidence districtEvidence({
   List<AiRouteTripEvidence>? trips,
+  List<TripStopSpacingEvidence>? spacingByTrip,
   String longComment = 'feedback',
 }) {
   final networkTrips =
@@ -378,20 +665,22 @@ DistrictRouteStopEvidence districtEvidence({
       },
       routeStopRelevantRecords: records,
     ),
-    stopSpacingByTrip: const [
-      TripStopSpacingEvidence(
-        tripId: 'trip-a',
-        consecutiveStops: [
-          ConsecutiveStopSpacingEvidence(
-            fromStopId: 'stop-a',
-            fromStopSequence: 1,
-            toStopId: 'stop-b',
-            toStopSequence: 2,
-            distanceMeters: 850.25,
+    stopSpacingByTrip:
+        spacingByTrip ??
+        const [
+          TripStopSpacingEvidence(
+            tripId: 'trip-a',
+            consecutiveStops: [
+              ConsecutiveStopSpacingEvidence(
+                fromStopId: 'stop-a',
+                fromStopSequence: 1,
+                toStopId: 'stop-b',
+                toStopSequence: 2,
+                distanceMeters: 850.25,
+              ),
+            ],
           ),
         ],
-      ),
-    ],
   );
   final membership = networkTrips
       .map(
@@ -439,13 +728,18 @@ AiRouteTripEvidence routeTrip(
   List<AiRouteStopEvidence> stops, {
   String? shapeId,
   double? distance,
+  int shapeCoordinateCount = 1,
 }) => AiRouteTripEvidence(
   tripId: tripId,
   shapeId: shapeId ?? '$tripId-shape',
   stops: stops,
-  shapePoints: const [
-    ShapePoint(sequence: 1, coordinate: MapCoordinate(9, 99)),
-  ],
+  shapePoints: List.generate(
+    shapeCoordinateCount,
+    (index) => ShapePoint(
+      sequence: index + 1,
+      coordinate: MapCoordinate(9 + index / 100, 99 + index / 100),
+    ),
+  ),
   routeDistanceMeters: distance,
 );
 
@@ -453,13 +747,16 @@ AiRouteStopEvidence routeStop(
   String stopId,
   int sequence, [
   MapCoordinate? coordinate,
+  String? stopName,
+  int? arrival,
+  int? departure,
 ]) => AiRouteStopEvidence(
   stopId: stopId,
-  stopName: 'Name $stopId',
+  stopName: stopName ?? 'Name $stopId',
   stopSequence: sequence,
   coordinate: coordinate,
-  scheduledArrivalSeconds: null,
-  scheduledDepartureSeconds: null,
+  scheduledArrivalSeconds: arrival,
+  scheduledDepartureSeconds: departure,
 );
 
 FuelCostCalculationEvidence costEvidence({

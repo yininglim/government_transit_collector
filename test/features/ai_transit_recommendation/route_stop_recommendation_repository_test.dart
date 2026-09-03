@@ -296,6 +296,106 @@ void main() {
       contains('network.trip.0'),
     );
   });
+
+  test('rejects non-consecutive and reversed candidate pairs', () async {
+    for (final pair in [
+      ('stop-a', 'Stop A', 'stop-c', 'Stop C'),
+      ('stop-b', 'Stop B', 'stop-a', 'Stop A'),
+    ]) {
+      final response = validResponse(
+        RouteStopRecommendationAction.additionalStopCoverage,
+      );
+      final area = response['candidateArea'] as Map<String, dynamic>;
+      area['fromStopId'] = pair.$1;
+      area['fromStopName'] = pair.$2;
+      area['toStopId'] = pair.$3;
+      area['toStopName'] = pair.$4;
+
+      final result =
+          await repository(
+            response: response,
+            sourceEvidence: evidence(stopCount: 3),
+          ).generate(
+            routeId: 'J15',
+            startUtc: periodStart,
+            endExclusiveUtc: periodEnd,
+          );
+
+      expect(
+        result.failure,
+        RouteStopRecommendationFailure.unknownStopReference,
+      );
+    }
+  });
+
+  test('rejects a candidate pair spanning different patterns', () {
+    final response = validResponse(
+      RouteStopRecommendationAction.additionalStopCoverage,
+    );
+    final area = response['candidateArea'] as Map<String, dynamic>;
+    area['toStopId'] = 'stop-d';
+    area['toStopName'] = 'Stop D';
+    final payload = <String, dynamic>{
+      'evidence_references': ['network.trip.0', 'stop.stop-a', 'stop.stop-b'],
+      'network': {
+        'stop_catalog': [
+          {'stop_id': 'stop-a', 'stop_name': 'Stop A'},
+          {'stop_id': 'stop-b', 'stop_name': 'Stop B'},
+          {'stop_id': 'stop-c', 'stop_name': 'Stop C'},
+          {'stop_id': 'stop-d', 'stop_name': 'Stop D'},
+        ],
+        'trip_patterns': [
+          {
+            'ordered_stops': [
+              {'stop_id': 'stop-a'},
+              {'stop_id': 'stop-b'},
+            ],
+          },
+          {
+            'ordered_stops': [
+              {'stop_id': 'stop-c'},
+              {'stop_id': 'stop-d'},
+            ],
+          },
+        ],
+      },
+    };
+
+    expect(
+      () => parseRouteStopRecommendation(response, payload: payload),
+      throwsA(
+        isA<RouteStopRecommendationValidationException>().having(
+          (error) => error.failure,
+          'failure',
+          RouteStopRecommendationFailure.unknownStopReference,
+        ),
+      ),
+    );
+  });
+
+  test('rejects conflicting retained stop metadata before Gemini', () async {
+    final retainedEvidence = evidence(conflictingMembership: true);
+    final gemini = FakeGeminiDataSource(
+      response: validResponse(RouteStopRecommendationAction.routeImprovement),
+    );
+
+    final result =
+        await repository(
+          gemini: gemini,
+          sourceEvidence: retainedEvidence,
+        ).generate(
+          routeId: 'J15',
+          startUtc: periodStart,
+          endExclusiveUtc: periodEnd,
+          evidence: retainedEvidence,
+        );
+
+    expect(result.status, RouteStopRecommendationStatus.temporarilyUnavailable);
+    expect(result.failure, RouteStopRecommendationFailure.evidenceUnavailable);
+    expect(result.evidence, same(retainedEvidence));
+    expect(result.payload, isNull);
+    expect(gemini.callCount, 0);
+  });
 }
 
 final periodStart = DateTime.utc(2026, 7, 1);
@@ -346,7 +446,10 @@ Map<String, dynamic> validResponse(RouteStopRecommendationAction action) => {
       : null,
 };
 
-DistrictRouteStopEvidence evidence({int stopCount = 2}) {
+DistrictRouteStopEvidence evidence({
+  int stopCount = 2,
+  bool conflictingMembership = false,
+}) {
   const route = RoutePerformanceRoute(
     routeId: 'J15',
     shortName: 'J15',
@@ -369,6 +472,24 @@ DistrictRouteStopEvidence evidence({int stopCount = 2}) {
         coordinate: MapCoordinate(1.50, 103.75),
         scheduledArrivalSeconds: 22200,
         scheduledDepartureSeconds: 22230,
+      ),
+    if (stopCount > 2)
+      const AiRouteStopEvidence(
+        stopId: 'stop-c',
+        stopName: 'Stop C',
+        stopSequence: 3,
+        coordinate: MapCoordinate(1.51, 103.76),
+        scheduledArrivalSeconds: 22800,
+        scheduledDepartureSeconds: 22830,
+      ),
+    if (conflictingMembership)
+      const AiRouteStopEvidence(
+        stopId: 'stop-a',
+        stopName: 'Stop A',
+        stopSequence: 3,
+        coordinate: MapCoordinate(1.49, 103.74),
+        scheduledArrivalSeconds: 22800,
+        scheduledDepartureSeconds: 22830,
       ),
   ];
   final network = AiRouteNetworkEvidence(
@@ -458,7 +579,9 @@ DistrictRouteStopEvidence evidence({int stopCount = 2}) {
               (stop) => DistrictStopEvidence(
                 stopId: stop.stopId,
                 stopSequence: stop.stopSequence,
-                membership: DistrictStopMembership.unverifiable,
+                membership: conflictingMembership && stop.stopSequence == 3
+                    ? DistrictStopMembership.insideJohorBahruDistrict
+                    : DistrictStopMembership.unverifiable,
               ),
             )
             .toList(),

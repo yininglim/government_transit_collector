@@ -172,7 +172,18 @@ class DefaultRouteStopRecommendationRepository
         payload: null,
       );
     }
-    final payload = _payloadBuilder.build(resolvedEvidence);
+    late final RouteStopGeminiEvidencePayload payload;
+    try {
+      payload = _payloadBuilder.build(resolvedEvidence);
+    } on RouteStopGeminiPayloadBuildException {
+      return RouteStopRecommendationResult(
+        status: RouteStopRecommendationStatus.temporarilyUnavailable,
+        recommendation: null,
+        failure: RouteStopRecommendationFailure.evidenceUnavailable,
+        evidence: resolvedEvidence,
+        payload: null,
+      );
+    }
     if (!_hasUsableNetworkEvidence(resolvedEvidence)) {
       return RouteStopRecommendationResult(
         status: RouteStopRecommendationStatus.insufficientEvidence,
@@ -398,11 +409,30 @@ bool _isSubmittedConsecutivePair(
 }) {
   final network = payload['network'];
   if (network is! Map<String, dynamic>) return false;
-  final variants = network['trip_variants'];
-  if (variants is! List<dynamic>) return false;
-  for (final variant in variants) {
-    if (variant is! Map<String, dynamic>) continue;
-    final stops = variant['stops'];
+  final catalog = network['stop_catalog'];
+  if (catalog is! List<dynamic>) return false;
+  final namesByStopId = <String, String?>{};
+  for (final stop in catalog) {
+    if (stop is! Map<String, dynamic> || stop['stop_id'] is! String) {
+      return false;
+    }
+    final stopId = stop['stop_id'] as String;
+    final stopName = stop['stop_name'];
+    if (stopName != null && stopName is! String) return false;
+    if (namesByStopId.containsKey(stopId) &&
+        namesByStopId[stopId] != stopName) {
+      return false;
+    }
+    namesByStopId[stopId] = stopName as String?;
+  }
+  if (namesByStopId[fromId] != fromName || namesByStopId[toId] != toName) {
+    return false;
+  }
+  final patterns = network['trip_patterns'];
+  if (patterns is! List<dynamic>) return false;
+  for (final pattern in patterns) {
+    if (pattern is! Map<String, dynamic>) continue;
+    final stops = pattern['ordered_stops'];
     if (stops is! List<dynamic>) continue;
     for (var index = 0; index + 1 < stops.length; index++) {
       final from = stops[index];
@@ -410,9 +440,7 @@ bool _isSubmittedConsecutivePair(
       if (from is Map<String, dynamic> &&
           to is Map<String, dynamic> &&
           from['stop_id'] == fromId &&
-          from['stop_name'] == fromName &&
-          to['stop_id'] == toId &&
-          to['stop_name'] == toName) {
+          to['stop_id'] == toId) {
         return true;
       }
     }
