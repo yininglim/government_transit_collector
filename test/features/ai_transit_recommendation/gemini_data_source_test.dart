@@ -62,6 +62,9 @@ void main() {
     expect(body['model'], defaultGeminiModel);
     expect(body['input'], request.input);
     expect(body['system_instruction'], request.instructions);
+    expect(body['generation_config'], {
+      'thinking_level': defaultGeminiThinkingLevel,
+    });
     expect(body['store'], isFalse);
     expect(body.containsKey('previous_interaction_id'), isFalse);
     expect(body['response_format'], {
@@ -74,6 +77,37 @@ void main() {
   test('parses structured JSON from the completed model output', () async {
     final source = _source(
       (_) async => http.Response(_successfulResponse(), 200),
+    );
+
+    final result = await source.createStructuredInteraction(request);
+
+    expect(result.interactionId, 'interaction-1');
+    expect(result.value, {'result': 'available'});
+  });
+
+  test('ignores thought steps and parses the final model output', () async {
+    final source = _source(
+      (_) async => http.Response(
+        jsonEncode({
+          'id': 'interaction-1',
+          'object': 'interaction',
+          'status': 'completed',
+          'steps': [
+            {
+              'type': 'thought',
+              'signature': 'encrypted-signature',
+              'summary': <Object>[],
+            },
+            {
+              'type': 'model_output',
+              'content': [
+                {'type': 'text', 'text': '{"result":"available"}'},
+              ],
+            },
+          ],
+        }),
+        200,
+      ),
     );
 
     final result = await source.createStructuredInteraction(request);
@@ -189,7 +223,11 @@ void main() {
   });
 
   test('maps a non-success HTTP response', () async {
-    final source = _source((_) async => http.Response('failure', 500));
+    var requestCount = 0;
+    final source = _source((_) async {
+      requestCount++;
+      return http.Response('failure', 500);
+    });
 
     await expectLater(
       source.createStructuredInteraction(request),
@@ -203,6 +241,7 @@ void main() {
             .having((error) => error.statusCode, 'statusCode', 500),
       ),
     );
+    expect(requestCount, 1);
   });
 
   for (final statusCode in [401, 403]) {

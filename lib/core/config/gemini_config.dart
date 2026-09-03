@@ -1,6 +1,7 @@
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
-const defaultGeminiModel = 'gemini-3.7-flash';
+const defaultGeminiModel = 'gemini-3.5-flash-lite';
+const defaultGeminiThinkingLevel = 'minimal';
 
 class GeminiConfig {
   const GeminiConfig({this.apiKey});
