@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_evidence_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/district_route_stop_evidence_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/fuel_cost_calculation_models.dart';
@@ -175,7 +177,8 @@ class RouteStopGeminiPayloadBuilder {
       'feedback.long_walking_distance',
       'feedback.incorrect_route_information',
     };
-    final tripPayloads = <Map<String, dynamic>>[];
+    final stopCatalog = <String, Map<String, dynamic>>{};
+    final patterns = <String, _RouteStopPatternAccumulator>{};
     for (var tripIndex = 0; tripIndex < includedTrips.length; tripIndex++) {
       final trip = includedTrips[tripIndex];
       final tripReference = 'network.trip.$tripIndex';
@@ -188,8 +191,11 @@ class RouteStopGeminiPayloadBuilder {
       final spacing = source.stopSpacingByTrip
           .where((item) => item.tripId == trip.tripId)
           .firstOrNull;
-      final stops = <Map<String, dynamic>>[];
-      for (final stop in trip.stops.take(maxPayloadStopsPerTrip)) {
+      final includedStops = trip.stops
+          .take(maxPayloadStopsPerTrip)
+          .toList(growable: false);
+      final orderedStops = <Map<String, dynamic>>[];
+      for (final stop in includedStops) {
         final membership = memberships
             .where(
               (item) =>
@@ -199,47 +205,95 @@ class RouteStopGeminiPayloadBuilder {
             .firstOrNull;
         final stopReference = 'stop.${Uri.encodeComponent(stop.stopId)}';
         references.add(stopReference);
-        stops.add({
+        final catalogEntry = {
           'evidence_ref': stopReference,
           'stop_id': stop.stopId,
           'stop_name': stop.stopName,
-          'stop_sequence': stop.stopSequence,
           'latitude': _finite(stop.coordinate?.latitude),
           'longitude': _finite(stop.coordinate?.longitude),
-          'coordinate_available': stop.coordinate != null,
           'district_membership':
               (membership?.membership ?? DistrictStopMembership.unverifiable)
                   .name,
+        };
+        final existingEntry = stopCatalog[stop.stopId];
+        if (existingEntry != null &&
+            !_sameStopCatalogEntry(existingEntry, catalogEntry)) {
+          throw RouteStopGeminiPayloadBuildException(
+            'Conflicting deterministic metadata for stop ${stop.stopId}.',
+          );
+        }
+        stopCatalog[stop.stopId] = catalogEntry;
+        orderedStops.add({
+          'stop_id': stop.stopId,
+          'stop_sequence': stop.stopSequence,
           'scheduled_arrival_seconds': stop.scheduledArrivalSeconds,
           'scheduled_departure_seconds': stop.scheduledDepartureSeconds,
         });
       }
-      tripPayloads.add({
-        'evidence_ref': tripReference,
-        'trip_id': trip.tripId,
-        'shape_id': trip.shapeId,
-        'route_distance_meters': _finite(trip.routeDistanceMeters),
-        'shape_coordinate_count': trip.shapePoints.length,
-        'shape_coordinates_included': false,
-        'stops': stops,
-        'omitted_stop_count': (trip.stops.length - maxPayloadStopsPerTrip)
-            .clamp(0, trip.stops.length),
-        'consecutive_stop_spacing':
-            spacing?.consecutiveStops
-                .take(maxPayloadStopsPerTrip)
-                .map(
-                  (item) => {
-                    'from_stop_id': item.fromStopId,
-                    'from_stop_sequence': item.fromStopSequence,
-                    'to_stop_id': item.toStopId,
-                    'to_stop_sequence': item.toStopSequence,
-                    'distance_meters': _finite(item.distanceMeters),
-                  },
-                )
-                .toList(growable: false) ??
-            const <Map<String, dynamic>>[],
-      });
+      final spacingValues = <double?>[];
+      for (
+        var stopIndex = 0;
+        stopIndex + 1 < includedStops.length;
+        stopIndex++
+      ) {
+        final from = includedStops[stopIndex];
+        final to = includedStops[stopIndex + 1];
+        final spacingItem = spacing?.consecutiveStops
+            .where(
+              (item) =>
+                  item.fromStopId == from.stopId &&
+                  item.fromStopSequence == from.stopSequence &&
+                  item.toStopId == to.stopId &&
+                  item.toStopSequence == to.stopSequence,
+            )
+            .firstOrNull;
+        spacingValues.add(_finite(spacingItem?.distanceMeters));
+      }
+      final omittedStopCount = (trip.stops.length - maxPayloadStopsPerTrip)
+          .clamp(0, trip.stops.length);
+      final completeSpacingValues = <double?>[];
+      for (var stopIndex = 0; stopIndex + 1 < trip.stops.length; stopIndex++) {
+        final from = trip.stops[stopIndex];
+        final to = trip.stops[stopIndex + 1];
+        final spacingItem = spacing?.consecutiveStops
+            .where(
+              (item) =>
+                  item.fromStopId == from.stopId &&
+                  item.fromStopSequence == from.stopSequence &&
+                  item.toStopId == to.stopId &&
+                  item.toStopSequence == to.stopSequence,
+            )
+            .firstOrNull;
+        completeSpacingValues.add(_finite(spacingItem?.distanceMeters));
+      }
+      final patternKey = jsonEncode([
+        trip.shapeId,
+        _finite(trip.routeDistanceMeters),
+        trip.shapePoints.length,
+        omittedStopCount,
+        [
+          for (final stop in trip.stops) [stop.stopId, stop.stopSequence],
+        ],
+        completeSpacingValues,
+      ]);
+      final pattern = patterns.putIfAbsent(
+        patternKey,
+        () => _RouteStopPatternAccumulator(
+          shapeId: trip.shapeId,
+          routeDistanceMeters: _finite(trip.routeDistanceMeters),
+          shapeCoordinateCount: trip.shapePoints.length,
+          omittedStopCount: omittedStopCount,
+          orderedStops: orderedStops,
+          consecutiveSpacingMeters: spacingValues,
+        ),
+      );
+      pattern.addTrip(trip.tripId, tripReference, orderedStops);
     }
+    final patternEntries = patterns.entries.toList(growable: false)
+      ..sort((left, right) => left.key.compareTo(right.key));
+    final tripPatternPayloads = patternEntries
+        .map((entry) => entry.value.toJson())
+        .toList(growable: false);
     final issueCounts = source.feedback.countByIssueType;
     final missingCoordinateCount = source.network.trips.fold<int>(
       0,
@@ -280,7 +334,14 @@ class RouteStopGeminiPayloadBuilder {
       },
       'network': {
         'trip_variant_count': source.network.trips.length,
-        'trip_variants': tripPayloads,
+        'unique_trip_pattern_count': patterns.length,
+        'stop_catalog': stopCatalog.values.toList(growable: false)
+          ..sort(
+            (left, right) => (left['stop_id'] as String).compareTo(
+              right['stop_id'] as String,
+            ),
+          ),
+        'trip_patterns': tripPatternPayloads,
         'omitted_trip_variant_count':
             (source.network.trips.length - maxPayloadTripVariants).clamp(
               0,
@@ -317,6 +378,126 @@ class RouteStopGeminiPayloadBuilder {
     });
   }
 }
+
+class RouteStopGeminiPayloadBuildException implements Exception {
+  const RouteStopGeminiPayloadBuildException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
+class _RouteStopPatternAccumulator {
+  _RouteStopPatternAccumulator({
+    required this.shapeId,
+    required this.routeDistanceMeters,
+    required this.shapeCoordinateCount,
+    required this.omittedStopCount,
+    required List<Map<String, dynamic>> orderedStops,
+    required this.consecutiveSpacingMeters,
+  }) : _scheduleSummaries = [
+         for (final stop in orderedStops) _StopScheduleSummary(stop),
+       ];
+
+  final String? shapeId;
+  final double? routeDistanceMeters;
+  final int shapeCoordinateCount;
+  final int omittedStopCount;
+  final List<double?> consecutiveSpacingMeters;
+  final List<_StopScheduleSummary> _scheduleSummaries;
+  final List<String> _tripIds = [];
+  final List<String> _evidenceReferences = [];
+
+  void addTrip(
+    String tripId,
+    String evidenceReference,
+    List<Map<String, dynamic>> orderedStops,
+  ) {
+    _tripIds.add(tripId);
+    _evidenceReferences.add(evidenceReference);
+    for (var index = 0; index < orderedStops.length; index++) {
+      _scheduleSummaries[index].add(orderedStops[index]);
+    }
+  }
+
+  Map<String, dynamic> toJson() => {
+    'evidence_refs': _evidenceReferences,
+    'trip_ids': _tripIds,
+    'occurrence_count': _tripIds.length,
+    'shape_id': shapeId,
+    'route_distance_meters': routeDistanceMeters,
+    'shape_coordinate_count': shapeCoordinateCount,
+    'shape_coordinates_included': false,
+    'ordered_stops': [
+      for (final summary in _scheduleSummaries) summary.toJson(),
+    ],
+    'consecutive_spacing_meters': consecutiveSpacingMeters,
+    'omitted_stop_count': omittedStopCount,
+  };
+}
+
+class _StopScheduleSummary {
+  _StopScheduleSummary(Map<String, dynamic> stop)
+    : stopId = stop['stop_id'] as String,
+      stopSequence = stop['stop_sequence'] as int;
+
+  final String stopId;
+  final int stopSequence;
+  int? _minimumArrivalSeconds;
+  int? _maximumArrivalSeconds;
+  int? _minimumDepartureSeconds;
+  int? _maximumDepartureSeconds;
+  int _missingArrivalCount = 0;
+  int _missingDepartureCount = 0;
+
+  void add(Map<String, dynamic> stop) {
+    final arrival = stop['scheduled_arrival_seconds'] as int?;
+    final departure = stop['scheduled_departure_seconds'] as int?;
+    if (arrival == null) {
+      _missingArrivalCount++;
+    } else {
+      _minimumArrivalSeconds = _minimum(_minimumArrivalSeconds, arrival);
+      _maximumArrivalSeconds = _maximum(_maximumArrivalSeconds, arrival);
+    }
+    if (departure == null) {
+      _missingDepartureCount++;
+    } else {
+      _minimumDepartureSeconds = _minimum(_minimumDepartureSeconds, departure);
+      _maximumDepartureSeconds = _maximum(_maximumDepartureSeconds, departure);
+    }
+  }
+
+  Map<String, dynamic> toJson() => {
+    'stop_id': stopId,
+    'stop_sequence': stopSequence,
+    'arrival_seconds_min_max_missing': [
+      _minimumArrivalSeconds,
+      _maximumArrivalSeconds,
+      _missingArrivalCount,
+    ],
+    'departure_seconds_min_max_missing': [
+      _minimumDepartureSeconds,
+      _maximumDepartureSeconds,
+      _missingDepartureCount,
+    ],
+  };
+}
+
+int _minimum(int? current, int value) =>
+    current == null || value < current ? value : current;
+
+int _maximum(int? current, int value) =>
+    current == null || value > current ? value : current;
+
+bool _sameStopCatalogEntry(
+  Map<String, dynamic> first,
+  Map<String, dynamic> second,
+) =>
+    first['stop_name'] == second['stop_name'] &&
+    first['latitude'] == second['latitude'] &&
+    first['longitude'] == second['longitude'] &&
+    first['district_membership'] == second['district_membership'];
 
 class CostGeminiPayloadBuilder {
   const CostGeminiPayloadBuilder();

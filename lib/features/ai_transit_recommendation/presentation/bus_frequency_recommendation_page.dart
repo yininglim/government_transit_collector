@@ -9,6 +9,7 @@ import 'package:timezone/timezone.dart' as timezone;
 
 class BusFrequencyRecommendationPage extends StatefulWidget {
   const BusFrequencyRecommendationPage({
+    this.session,
     this.coordinator,
     this.recommendationRepository,
     this.evidenceRepository,
@@ -17,6 +18,7 @@ class BusFrequencyRecommendationPage extends StatefulWidget {
     super.key,
   });
 
+  final BusFrequencyDashboardSession? session;
   final BusFrequencyDashboardCoordinator? coordinator;
   final BusFrequencyRecommendationRepository? recommendationRepository;
   final BusFrequencyEvidenceRepository? evidenceRepository;
@@ -31,22 +33,30 @@ class BusFrequencyRecommendationPage extends StatefulWidget {
 class _BusFrequencyRecommendationPageState
     extends State<BusFrequencyRecommendationPage> {
   late final BusFrequencyDashboardCoordinator _coordinator;
-  final _candidates = <BusFrequencyDashboardCandidate>[];
-  final _entries = <BusFrequencyDashboardEntry>[];
-  DateTime? _periodStartUtc;
-  DateTime? _periodEndUtc;
+  late final BusFrequencyDashboardSession _session;
   bool _screening = false;
   bool _analysing = false;
-  bool _empty = false;
-  bool _setupFailure = false;
-  int _completedInBatch = 0;
-  int _batchTotal = 0;
-  int _nextCandidateIndex = 0;
   String? _retryingRouteId;
+
+  List<BusFrequencyDashboardCandidate> get _candidates => _session.candidates;
+  List<BusFrequencyDashboardEntry> get _entries => _session.entries;
+  DateTime? get _periodStartUtc => _session.periodStartUtc;
+  DateTime? get _periodEndUtc => _session.periodEndUtc;
+  bool get _empty => _session.empty;
+  set _empty(bool value) => _session.empty = value;
+  bool get _setupFailure => _session.setupFailure;
+  set _setupFailure(bool value) => _session.setupFailure = value;
+  int get _completedInBatch => _session.completedInBatch;
+  set _completedInBatch(int value) => _session.completedInBatch = value;
+  int get _batchTotal => _session.batchTotal;
+  set _batchTotal(int value) => _session.batchTotal = value;
+  int get _nextCandidateIndex => _session.nextCandidateIndex;
+  set _nextCandidateIndex(int value) => _session.nextCandidateIndex = value;
 
   @override
   void initState() {
     super.initState();
+    _session = widget.session ?? BusFrequencyDashboardSession();
     _coordinator =
         widget.coordinator ??
         BusFrequencyDashboardCoordinator(
@@ -54,6 +64,11 @@ class _BusFrequencyRecommendationPageState
           evidenceRepository: widget.evidenceRepository,
           recommendationRepository: widget.recommendationRepository,
         );
+    final period = _newPeriod();
+    if (_session.periodStartUtc != null &&
+        !_session.matchesPeriod(period.startUtc, period.endUtc)) {
+      _session.clear();
+    }
   }
 
   ({DateTime startUtc, DateTime endUtc}) _newPeriod() {
@@ -74,16 +89,8 @@ class _BusFrequencyRecommendationPageState
     if (_screening || _analysing || _retryingRouteId != null) return;
     final period = _newPeriod();
     setState(() {
-      _periodStartUtc = period.startUtc;
-      _periodEndUtc = period.endUtc;
-      _candidates.clear();
-      _entries.clear();
-      _nextCandidateIndex = 0;
-      _empty = false;
-      _setupFailure = false;
+      _session.begin(period.startUtc, period.endUtc);
       _screening = true;
-      _completedInBatch = 0;
-      _batchTotal = 0;
     });
     try {
       final candidates = await _coordinator.screenCandidates(

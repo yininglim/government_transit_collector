@@ -1,10 +1,35 @@
 import 'package:flutter/material.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_dashboard_coordinator.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/cost_dashboard_coordinator.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_stop_dashboard_coordinator.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/presentation/bus_frequency_recommendation_page.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/presentation/cost_estimation_report_page.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/presentation/route_bus_stop_recommendation_page.dart';
 
-class AiRecommendationDashboardPage extends StatelessWidget {
-  const AiRecommendationDashboardPage({super.key});
+class AiRecommendationDashboardPage extends StatefulWidget {
+  const AiRecommendationDashboardPage({
+    this.busFrequencyPageBuilder,
+    this.routeStopPageBuilder,
+    this.costPageBuilder,
+    super.key,
+  });
+
+  final Widget Function(BusFrequencyDashboardSession session)?
+  busFrequencyPageBuilder;
+  final Widget Function(RouteStopDashboardSession session)?
+  routeStopPageBuilder;
+  final Widget Function(CostDashboardSession session)? costPageBuilder;
+
+  @override
+  State<AiRecommendationDashboardPage> createState() =>
+      _AiRecommendationDashboardPageState();
+}
+
+class _AiRecommendationDashboardPageState
+    extends State<AiRecommendationDashboardPage> {
+  final _busFrequencySession = BusFrequencyDashboardSession();
+  final _routeStopSession = RouteStopDashboardSession();
+  final _costSession = CostDashboardSession();
 
   @override
   Widget build(BuildContext context) {
@@ -28,7 +53,13 @@ class AiRecommendationDashboardPage extends StatelessWidget {
               title: 'Bus Frequency Recommendation',
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute<void>(
-                  builder: (_) => const BusFrequencyRecommendationPage(),
+                  builder: (_) =>
+                      widget.busFrequencyPageBuilder?.call(
+                        _busFrequencySession,
+                      ) ??
+                      BusFrequencyRecommendationPage(
+                        session: _busFrequencySession,
+                      ),
                 ),
               ),
             ),
@@ -37,7 +68,11 @@ class AiRecommendationDashboardPage extends StatelessWidget {
               title: 'Route & Bus Stop Recommendation',
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute<void>(
-                  builder: (_) => const RouteBusStopRecommendationPage(),
+                  builder: (_) =>
+                      widget.routeStopPageBuilder?.call(_routeStopSession) ??
+                      RouteBusStopRecommendationPage(
+                        session: _routeStopSession,
+                      ),
                 ),
               ),
             ),
@@ -46,7 +81,9 @@ class AiRecommendationDashboardPage extends StatelessWidget {
               title: 'Cost Estimation Report',
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute<void>(
-                  builder: (_) => const CostEstimationReportPage(),
+                  builder: (_) =>
+                      widget.costPageBuilder?.call(_costSession) ??
+                      CostEstimationReportPage(session: _costSession),
                 ),
               ),
             ),

@@ -54,6 +54,9 @@ class GeminiInteractionsDataSource implements GeminiDataSource {
               if (request.instructions != null &&
                   request.instructions!.trim().isNotEmpty)
                 'system_instruction': request.instructions,
+              'generation_config': {
+                'thinking_level': defaultGeminiThinkingLevel,
+              },
               'response_format': {
                 'type': 'text',
                 'mime_type': 'application/json',

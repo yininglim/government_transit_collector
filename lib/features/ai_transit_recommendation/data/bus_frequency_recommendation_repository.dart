@@ -78,6 +78,7 @@ abstract interface class BusFrequencyRecommendationRepository {
     required String routeId,
     required DateTime startUtc,
     required DateTime endExclusiveUtc,
+    BusFrequencyEvidence? evidence,
   });
 }
 
@@ -106,14 +107,22 @@ class DefaultBusFrequencyRecommendationRepository
     required String routeId,
     required DateTime startUtc,
     required DateTime endExclusiveUtc,
+    BusFrequencyEvidence? evidence,
   }) async {
-    late final BusFrequencyEvidence evidence;
+    late final BusFrequencyEvidence resolvedEvidence;
     try {
-      evidence = await _evidenceRepository.loadEvidence(
-        routeId: routeId,
-        startUtc: startUtc,
-        endExclusiveUtc: endExclusiveUtc,
-      );
+      resolvedEvidence = evidence == null
+          ? await _evidenceRepository.loadEvidence(
+              routeId: routeId,
+              startUtc: startUtc,
+              endExclusiveUtc: endExclusiveUtc,
+            )
+          : _validatedEvidence(
+              evidence,
+              routeId: routeId,
+              startUtc: startUtc,
+              endExclusiveUtc: endExclusiveUtc,
+            );
     } on Object {
       return const BusFrequencyRecommendationResult(
         status: BusFrequencyRecommendationStatus.temporarilyUnavailable,
@@ -124,14 +133,14 @@ class DefaultBusFrequencyRecommendationRepository
       );
     }
 
-    final payload = _payloadBuilder.build(evidence);
-    final localRecommendation = _deterministicGate(evidence);
+    final payload = _payloadBuilder.build(resolvedEvidence);
+    final localRecommendation = _deterministicGate(resolvedEvidence);
     if (localRecommendation != null) {
       return BusFrequencyRecommendationResult(
         status: BusFrequencyRecommendationStatus.insufficientEvidence,
         recommendation: localRecommendation,
         failure: null,
-        evidence: evidence,
+        evidence: resolvedEvidence,
         payload: payload,
       );
     }
@@ -159,7 +168,7 @@ class DefaultBusFrequencyRecommendationRepository
             : BusFrequencyRecommendationStatus.available,
         recommendation: recommendation,
         failure: null,
-        evidence: evidence,
+        evidence: resolvedEvidence,
         payload: payload,
       );
     } on BusFrequencyRecommendationValidationException catch (error) {
@@ -167,13 +176,33 @@ class DefaultBusFrequencyRecommendationRepository
         status: BusFrequencyRecommendationStatus.invalidAiResponse,
         recommendation: null,
         failure: error.failure,
-        evidence: evidence,
+        evidence: resolvedEvidence,
         payload: payload,
       );
     } on GeminiTransportException catch (error) {
-      return _transportFailure(error, evidence: evidence, payload: payload);
+      return _transportFailure(
+        error,
+        evidence: resolvedEvidence,
+        payload: payload,
+      );
     }
   }
+}
+
+BusFrequencyEvidence _validatedEvidence(
+  BusFrequencyEvidence evidence, {
+  required String routeId,
+  required DateTime startUtc,
+  required DateTime endExclusiveUtc,
+}) {
+  if (evidence.routeId != routeId ||
+      !evidence.periodStart.isAtSameMomentAs(startUtc) ||
+      !evidence.periodEnd.isAtSameMomentAs(endExclusiveUtc)) {
+    throw const BusFrequencyEvidenceReadException(
+      'The retained evidence does not match the requested analysis.',
+    );
+  }
+  return evidence;
 }
 
 BusFrequencyRecommendation? _deterministicGate(BusFrequencyEvidence evidence) {

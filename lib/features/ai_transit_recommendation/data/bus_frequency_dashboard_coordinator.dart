@@ -7,6 +7,7 @@ import 'package:government_transit_collector/features/route_performance/data/rou
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/scheduled_service_evidence_models.dart';
 
 const busFrequencyDashboardBatchSize = 3;
+const busFrequencyDashboardMaximumConcurrency = 2;
 
 class BusFrequencyDashboardCandidate {
   const BusFrequencyDashboardCandidate({
@@ -23,6 +24,46 @@ class BusFrequencyDashboardEntry {
 
   final RoutePerformanceRoute route;
   final BusFrequencyRecommendationResult result;
+}
+
+class BusFrequencyDashboardSession {
+  final candidates = <BusFrequencyDashboardCandidate>[];
+  final entries = <BusFrequencyDashboardEntry>[];
+  DateTime? periodStartUtc;
+  DateTime? periodEndUtc;
+  bool empty = false;
+  bool setupFailure = false;
+  int completedInBatch = 0;
+  int batchTotal = 0;
+  int nextCandidateIndex = 0;
+
+  bool matchesPeriod(DateTime startUtc, DateTime endExclusiveUtc) =>
+      periodStartUtc?.isAtSameMomentAs(startUtc) == true &&
+      periodEndUtc?.isAtSameMomentAs(endExclusiveUtc) == true;
+
+  void begin(DateTime startUtc, DateTime endExclusiveUtc) {
+    periodStartUtc = startUtc;
+    periodEndUtc = endExclusiveUtc;
+    candidates.clear();
+    entries.clear();
+    empty = false;
+    setupFailure = false;
+    completedInBatch = 0;
+    batchTotal = 0;
+    nextCandidateIndex = 0;
+  }
+
+  void clear() {
+    periodStartUtc = null;
+    periodEndUtc = null;
+    candidates.clear();
+    entries.clear();
+    empty = false;
+    setupFailure = false;
+    completedInBatch = 0;
+    batchTotal = 0;
+    nextCandidateIndex = 0;
+  }
 }
 
 class BusFrequencyDashboardCoordinator {
@@ -76,33 +117,66 @@ class BusFrequencyDashboardCoordinator {
     onCompleted,
   }) async {
     final batch = candidates.take(busFrequencyDashboardBatchSize).toList();
-    final entries = <BusFrequencyDashboardEntry>[];
-    for (var index = 0; index < batch.length; index++) {
-      final candidate = batch[index];
-      BusFrequencyRecommendationResult result;
-      try {
-        result = await _recommendationRepository.generate(
-          routeId: candidate.route.routeId,
-          startUtc: startUtc,
-          endExclusiveUtc: endExclusiveUtc,
+    final entries = List<BusFrequencyDashboardEntry?>.filled(
+      batch.length,
+      null,
+    );
+    var nextIndex = 0;
+    var nextCompletedIndex = 0;
+    var completed = 0;
+
+    void reportCompleted() {
+      while (nextCompletedIndex < entries.length &&
+          entries[nextCompletedIndex] != null) {
+        completed++;
+        onCompleted?.call(
+          completed,
+          batch.length,
+          entries[nextCompletedIndex]!,
         );
-      } on Object {
-        result = const BusFrequencyRecommendationResult(
-          status: BusFrequencyRecommendationStatus.temporarilyUnavailable,
-          recommendation: null,
-          failure: BusFrequencyRecommendationFailure.network,
-          evidence: null,
-          payload: null,
-        );
+        nextCompletedIndex++;
       }
-      final entry = BusFrequencyDashboardEntry(
-        route: candidate.route,
-        result: result,
-      );
-      entries.add(entry);
-      onCompleted?.call(index + 1, batch.length, entry);
     }
-    return entries;
+
+    Future<void> worker() async {
+      while (nextIndex < batch.length) {
+        final index = nextIndex++;
+        final candidate = batch[index];
+        BusFrequencyRecommendationResult result;
+        try {
+          result = await _recommendationRepository.generate(
+            routeId: candidate.route.routeId,
+            startUtc: startUtc,
+            endExclusiveUtc: endExclusiveUtc,
+            evidence: candidate.evidence,
+          );
+        } on Object {
+          result = const BusFrequencyRecommendationResult(
+            status: BusFrequencyRecommendationStatus.temporarilyUnavailable,
+            recommendation: null,
+            failure: BusFrequencyRecommendationFailure.network,
+            evidence: null,
+            payload: null,
+          );
+        }
+        final entry = BusFrequencyDashboardEntry(
+          route: candidate.route,
+          result: result,
+        );
+        entries[index] = entry;
+        reportCompleted();
+      }
+    }
+
+    await Future.wait([
+      for (
+        var index = 0;
+        index < batch.length && index < busFrequencyDashboardMaximumConcurrency;
+        index++
+      )
+        worker(),
+    ]);
+    return entries.cast<BusFrequencyDashboardEntry>();
   }
 
   Future<BusFrequencyDashboardEntry> retry({
@@ -114,6 +188,7 @@ class BusFrequencyDashboardCoordinator {
       routeId: candidate.route.routeId,
       startUtc: startUtc,
       endExclusiveUtc: endExclusiveUtc,
+      evidence: candidate.evidence,
     );
     return BusFrequencyDashboardEntry(route: candidate.route, result: result);
   }

@@ -50,21 +50,27 @@ void main() {
     );
   });
 
-  test('caps batches at three and awaits calls sequentially', () async {
+  test('caps batches at three with recommendation concurrency two', () async {
     final recommendations = FakeRecommendationRepository();
     final coordinator = CostDashboardCoordinator(
       routeRepository: FakeRouteRepository(const []),
       evidenceRepository: FakeEvidenceRepository(const {}),
       recommendationRepository: recommendations,
     );
+    final batchCandidates = candidates(4);
     await coordinator.analyseBatch(
-      candidates: candidates(4),
+      candidates: batchCandidates,
       startUtc: periodStart,
       endExclusiveUtc: periodEnd,
       referenceDate: referenceDate,
     );
     expect(recommendations.routeIds, ['R1', 'R2', 'R3']);
-    expect(recommendations.maximumConcurrentCalls, 1);
+    expect(recommendations.maximumConcurrentCalls, 2);
+    expect(recommendations.evidence, [
+      batchCandidates[0].evidence,
+      batchCandidates[1].evidence,
+      batchCandidates[2].evidence,
+    ]);
   });
 
   testWidgets('shows fixed period and requires an intentional action', (
@@ -263,15 +269,70 @@ void main() {
       expect(find.textContaining(unsupported), findsNothing);
     }
   });
+
+  testWidgets('recreated page restores cost results for the same date', (
+    tester,
+  ) async {
+    final session = CostDashboardSession();
+    final coordinator = FakeDashboardCoordinator(candidates: candidates(1));
+    await pumpDashboard(tester, coordinator, session: session);
+    await tapAnalyse(tester);
+    await tester.pumpAndSettle();
+    expect(coordinator.analysisRouteIds, ['R1']);
+
+    await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+    await tester.pump();
+    await pumpDashboard(tester, coordinator, session: session);
+
+    expect(find.byKey(const Key('route-result-R1')), findsOneWidget);
+    expect(coordinator.analysisRouteIds, ['R1']);
+    expect(session.referenceDate, referenceDate);
+  });
+
+  testWidgets('different reference date clears the retained cost session', (
+    tester,
+  ) async {
+    final session = CostDashboardSession()
+      ..begin(periodStart, periodEnd, referenceDate)
+      ..candidates.addAll(candidates(1))
+      ..entries.add(
+        CostDashboardEntry(
+          route: route('R1'),
+          result: result('R1', CostRecommendationAction.costEfficiencyReview),
+        ),
+      )
+      ..nextCandidateIndex = 1;
+    final coordinator = FakeDashboardCoordinator(candidates: candidates(1));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: CostEstimationReportPage(
+          session: session,
+          coordinator: coordinator,
+          now: () => fixedNow().add(const Duration(days: 1)),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byKey(const Key('route-result-R1')), findsNothing);
+    expect(session.referenceDate, isNull);
+    expect(coordinator.analysisRouteIds, isEmpty);
+  });
 }
 
 Future<void> pumpDashboard(
   WidgetTester tester,
-  CostDashboardCoordinator coordinator,
-) async {
+  CostDashboardCoordinator coordinator, {
+  CostDashboardSession? session,
+}) async {
   await tester.pumpWidget(
     MaterialApp(
-      home: CostEstimationReportPage(coordinator: coordinator, now: fixedNow),
+      home: CostEstimationReportPage(
+        session: session,
+        coordinator: coordinator,
+        now: fixedNow,
+      ),
     ),
   );
   await tester.pump();
@@ -416,6 +477,7 @@ class FakeEvidenceRepository implements FuelCostCalculationRepository {
 
 class FakeRecommendationRepository implements CostRecommendationRepository {
   final routeIds = <String>[];
+  final evidence = <FuelCostCalculationEvidence?>[];
   int activeCalls = 0;
   int maximumConcurrentCalls = 0;
 
@@ -425,8 +487,10 @@ class FakeRecommendationRepository implements CostRecommendationRepository {
     required DateTime startUtc,
     required DateTime endExclusiveUtc,
     required DateTime referenceDate,
+    FuelCostCalculationEvidence? evidence,
   }) async {
     routeIds.add(routeId);
+    this.evidence.add(evidence);
     activeCalls++;
     maximumConcurrentCalls = activeCalls > maximumConcurrentCalls
         ? activeCalls
