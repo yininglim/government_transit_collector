@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:government_transit_collector/features/departure_recommendation/data/saved_journey_repository.dart';
+import 'package:government_transit_collector/features/passenger_profile/data/travel_preferences_repository.dart';
+import 'package:government_transit_collector/features/passenger_profile/presentation/passenger_profile_page.dart';
 import 'package:government_transit_collector/features/authentication/data/auth_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/departure_stop_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/direct_trip_repository.dart';
@@ -27,6 +30,49 @@ class PassengerHomePage extends StatefulWidget {
 
 class _PassengerHomePageState extends State<PassengerHomePage> {
   bool _signingOut = false;
+  AppProfile? _updatedProfile;
+  late final _recentRepository = SqliteRecentSearchRepository(
+    userId: widget.profile.userId,
+  );
+  late final _preferencesRepository = SqliteTravelPreferencesRepository(
+    userId: widget.profile.userId,
+  );
+  late final _savedRepository = SupabaseSavedJourneyRepository();
+
+  void _openDeparture([SavedJourney? journey]) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => DepartureRecommendationPage(
+          stopRepository: SupabaseDepartureStopRepository(),
+          tripRepository: SupabaseDirectTripRepository(),
+          transferRepository: SupabaseTransferJourneyRepository(),
+          timetableRepository: SupabaseTimetableRecommendationRepository(),
+          recentSearchRepository: _recentRepository,
+          preferencesRepository: _preferencesRepository,
+          savedJourneyRepository: _savedRepository,
+          initialJourney: journey,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openProfile() async {
+    final journey = await Navigator.of(context).push<SavedJourney>(
+      MaterialPageRoute(
+        builder: (_) => PassengerProfilePage(
+          profile: _updatedProfile ?? widget.profile,
+          authRepository: widget.repository,
+          savedRepository: _savedRepository,
+          recentRepository: _recentRepository,
+          preferencesRepository: _preferencesRepository,
+          onProfileUpdated: (profile) {
+            if (mounted) setState(() => _updatedProfile = profile);
+          },
+        ),
+      ),
+    );
+    if (mounted && journey != null) _openDeparture(journey);
+  }
 
   Future<void> _logout() async {
     if (_signingOut) return;
@@ -77,26 +123,20 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
               ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
-            Text('Welcome, ${widget.profile.displayName}'),
+            Text('Welcome, ${(_updatedProfile ?? widget.profile).displayName}'),
             const SizedBox(height: 32),
+            _PlaceholderCard(
+              icon: Icons.person_outline,
+              title: 'My Travel Profile',
+              description: 'Saved journeys, nearby radius and recent searches.',
+              onTap: _openProfile,
+            ),
+            const SizedBox(height: 16),
             _PlaceholderCard(
               icon: Icons.departure_board,
               title: 'Departure Recommendation',
               description: 'Select your origin and destination stops.',
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => DepartureRecommendationPage(
-                      stopRepository: SupabaseDepartureStopRepository(),
-                      tripRepository: SupabaseDirectTripRepository(),
-                      transferRepository: SupabaseTransferJourneyRepository(),
-                      timetableRepository:
-                          SupabaseTimetableRecommendationRepository(),
-                      recentSearchRepository: SqliteRecentSearchRepository(),
-                    ),
-                  ),
-                );
-              },
+              onTap: _openDeparture,
             ),
             const SizedBox(height: 16),
             _PlaceholderCard(

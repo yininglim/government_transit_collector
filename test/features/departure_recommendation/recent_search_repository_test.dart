@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'dart:io';
 import 'package:government_transit_collector/features/departure_recommendation/data/recent_journey_search.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/recent_search_repository.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -7,6 +8,50 @@ void main() {
   late SqliteRecentSearchRepository repository;
 
   setUpAll(sqfliteFfiInit);
+
+  test(
+    'account files isolate new history and preserve legacy history',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'account_history_test',
+      );
+      final oldPath = await databaseFactoryFfi.getDatabasesPath();
+      await databaseFactoryFfi.setDatabasesPath(directory.path);
+      try {
+        final first = SqliteRecentSearchRepository(
+          databaseFactory: databaseFactoryFfi,
+          userId: 'first',
+        );
+        final second = SqliteRecentSearchRepository(
+          databaseFactory: databaseFactoryFfi,
+          userId: 'second',
+        );
+        final legacy = SqliteRecentSearchRepository(
+          databaseFactory: databaseFactoryFfi,
+        );
+        final item = RecentJourneySearch(
+          originStopId: 'a',
+          originStopName: 'A',
+          destinationStopId: 'b',
+          destinationStopName: 'B',
+          searchedAt: DateTime.utc(2026),
+        );
+        await legacy.saveRecentSearch(item);
+        expect(await first.getRecentSearches(), isEmpty);
+        await first.saveRecentSearch(item);
+        expect(await second.getRecentSearches(), isEmpty);
+        await second.clearRecentSearches();
+        expect(await first.getRecentSearches(), hasLength(1));
+        expect(await legacy.getRecentSearches(), hasLength(1));
+      } finally {
+        await databaseFactoryFfi.setDatabasesPath(oldPath);
+        for (final file in directory.listSync().whereType<File>()) {
+          await databaseFactoryFfi.deleteDatabase(file.path);
+        }
+        await directory.delete();
+      }
+    },
+  );
 
   setUp(() {
     repository = SqliteRecentSearchRepository(

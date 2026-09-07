@@ -646,6 +646,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
+      await tester.ensureVisible(find.byKey(const Key('recent-larkin-jb')));
       await tester.tap(find.byKey(const Key('recent-larkin-jb')));
       await tester.pump();
 

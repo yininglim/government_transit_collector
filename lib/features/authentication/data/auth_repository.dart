@@ -106,6 +106,35 @@ class AuthRepository {
     }
   }
 
+  Future<AppProfile> updateFullName(String fullName) async {
+    final user = _client.auth.currentUser;
+    final name = fullName.trim();
+    if (user == null) throw const AuthFlowException('Please sign in again.');
+    if (name.isEmpty || name.length > 100) {
+      throw const AuthFlowException(
+        'Enter a name between 1 and 100 characters.',
+      );
+    }
+    try {
+      final row = await _client
+          .from('profiles')
+          .update({'full_name': name})
+          .eq('user_id', user.id)
+          .select('user_id, full_name, role')
+          .single();
+      return AppProfile(
+        userId: row['user_id'] as String,
+        fullName: row['full_name'] as String,
+        role: row['role'] as String,
+        email: user.email,
+      );
+    } on Object {
+      throw const AuthFlowException(
+        'Unable to update your name. Please try again.',
+      );
+    }
+  }
+
   static String _friendlyAuthMessage(AuthException error) {
     final message = error.message.toLowerCase();
     if (message.contains('invalid login credentials')) {

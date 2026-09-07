@@ -12,6 +12,7 @@ class SqliteRecentSearchRepository implements RecentSearchRepository {
   SqliteRecentSearchRepository({
     sqflite.DatabaseFactory? databaseFactory,
     this.databasePath,
+    this.userId,
   }) : _databaseFactory = databaseFactory ?? sqflite.databaseFactory;
 
   static const String _table = 'recent_journey_searches';
@@ -19,6 +20,7 @@ class SqliteRecentSearchRepository implements RecentSearchRepository {
 
   final sqflite.DatabaseFactory _databaseFactory;
   final String? databasePath;
+  final String? userId;
   sqflite.Database? _database;
 
   Future<sqflite.Database> get _db async {
@@ -27,8 +29,10 @@ class SqliteRecentSearchRepository implements RecentSearchRepository {
     final resolvedDatabasePath =
         databasePath ??
         path.join(
-          await sqflite.getDatabasesPath(),
-          'government_transit_local.db',
+          await _databaseFactory.getDatabasesPath(),
+          userId == null
+              ? 'government_transit_local.db'
+              : 'government_transit_${Uri.encodeComponent(userId!)}.db',
         );
     return _database = await _databaseFactory.openDatabase(
       resolvedDatabasePath,
