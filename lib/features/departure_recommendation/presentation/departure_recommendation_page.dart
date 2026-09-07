@@ -90,6 +90,7 @@ class DepartureRecommendationPage extends StatefulWidget {
     required this.timetableRepository,
     required this.recentSearchRepository,
     this.initialJourney,
+    this.initialRecentSearch,
     this.savedJourneyRepository,
     this.preferencesRepository,
     this.nearbyStopRepository,
@@ -112,6 +113,7 @@ class DepartureRecommendationPage extends StatefulWidget {
   final TimetableRecommendationRepository timetableRepository;
   final RecentSearchRepository recentSearchRepository;
   final SavedJourney? initialJourney;
+  final RecentJourneySearch? initialRecentSearch;
   final SavedJourneyRepository? savedJourneyRepository;
   final TravelPreferencesRepository? preferencesRepository;
   final NearbyStopRepository? nearbyStopRepository;
@@ -148,6 +150,9 @@ class _DepartureRecommendationPageState
 
   bool? _routeStructureFound;
   bool _searching = false;
+  bool _restoringRecent = false;
+  bool get _inputsBusy => _searching || _restoringRecent;
+  final _scrollController = ScrollController();
 
   List<RecentJourneySearch>? _recentSearches;
   String? _historyError;
@@ -170,6 +175,7 @@ class _DepartureRecommendationPageState
 
   @override
   void dispose() {
+    _scrollController.dispose();
     _reminders?.removeListener(_remindersChanged);
     super.dispose();
   }
@@ -190,6 +196,12 @@ class _DepartureRecommendationPageState
     _travelTime = TimeOfDay.fromDateTime(initial);
 
     _loadRecentSearches();
+    final recent = widget.initialRecentSearch;
+    if (recent != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _restoreRecentSearch(recent);
+      });
+    }
   }
 
   Future<void> _loadRecentSearches() async {
@@ -358,7 +370,7 @@ class _DepartureRecommendationPageState
   }
 
   Future<void> _search() async {
-    if (_searching) return;
+    if (_inputsBusy) return;
 
     final validationMessage = validateDepartureStops(
       origin: _origin,
@@ -548,20 +560,59 @@ class _DepartureRecommendationPageState
     }
   }
 
-  void _restoreRecentSearch(RecentJourneySearch search) {
+  void _reverseJourney() {
+    if (_inputsBusy || (_origin == null && _destination == null)) return;
     setState(() {
-      _origin = DepartureStop(
-        id: search.originStopId,
-        name: search.originStopName,
-      );
-
-      _destination = DepartureStop(
-        id: search.destinationStopId,
-        name: search.destinationStopName,
-      );
-
+      final origin = _origin;
+      _origin = _destination;
+      _destination = origin;
       _resetSearchState();
     });
+  }
+
+  Future<void> _restoreRecentSearch(RecentJourneySearch search) async {
+    if (_inputsBusy) return;
+    setState(() => _restoringRecent = true);
+    try {
+      final stops = await Future.wait([
+        widget.stopRepository.getStopById(search.originStopId),
+        widget.stopRepository.getStopById(search.destinationStopId),
+      ]);
+      if (!mounted) return;
+      if (stops.any((stop) => stop == null)) {
+        setState(
+          () => _validationMessage =
+              'A previous stop is no longer available. Please select your stops again.',
+        );
+        return;
+      }
+      final fresh = currentTransitServiceDateTime(now: widget.now);
+      setState(() {
+        _origin = stops[0];
+        _destination = stops[1];
+        _travelDate = DateTime(fresh.year, fresh.month, fresh.day);
+        _travelTime = TimeOfDay.fromDateTime(fresh);
+        _resetSearchState();
+      });
+    } on Object {
+      if (mounted) {
+        setState(
+          () => _validationMessage =
+              'Unable to load the previous stops. Please try again.',
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _restoringRecent = false);
+        if (_scrollController.hasClients) {
+          _scrollController.animateTo(
+            0,
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeOut,
+          );
+        }
+      }
+    }
   }
 
   Future<void> _clearRecentSearches() async {
@@ -706,6 +757,7 @@ class _DepartureRecommendationPageState
 
             return SingleChildScrollView(
               key: const Key('departure-page-scroll'),
+              controller: _scrollController,
               padding: EdgeInsets.fromLTRB(padding, 16, padding, 32),
               child: Center(
                 child: ConstrainedBox(
@@ -726,7 +778,7 @@ class _DepartureRecommendationPageState
 
                       _buildStopFields(constraints.maxWidth),
                       TextButton.icon(
-                        onPressed: _searching
+                        onPressed: _inputsBusy
                             ? null
                             : () => _selectOrigin(nearby: true),
                         icon: const Icon(Icons.my_location),
@@ -746,6 +798,7 @@ class _DepartureRecommendationPageState
                       const SizedBox(height: 12),
 
                       _buildTravelFields(constraints.maxWidth),
+                      if (_restoringRecent) const LinearProgressIndicator(),
 
                       if (_validationMessage != null) ...[
                         const SizedBox(height: 12),
@@ -763,7 +816,7 @@ class _DepartureRecommendationPageState
 
                       FilledButton.icon(
                         key: const Key('journey-search-button'),
-                        onPressed: _searching ? null : _search,
+                        onPressed: _inputsBusy ? null : _search,
                         icon: _searching
                             ? const SizedBox.square(
                                 dimension: 18,
@@ -803,7 +856,7 @@ class _DepartureRecommendationPageState
       label: 'Origin / From stop',
       icon: Icons.trip_origin,
       stop: _origin,
-      onTap: _searching ? null : _selectOrigin,
+      onTap: _inputsBusy ? null : _selectOrigin,
     );
 
     final destination = _StopField(
@@ -811,7 +864,13 @@ class _DepartureRecommendationPageState
       label: 'Destination / To stop',
       icon: Icons.location_on_outlined,
       stop: _destination,
-      onTap: _searching ? null : _selectDestination,
+      onTap: _inputsBusy ? null : _selectDestination,
+    );
+
+    final reverse = IconButton(
+      tooltip: 'Reverse journey',
+      onPressed: _inputsBusy ? null : _reverseJourney,
+      icon: Icon(width >= 700 ? Icons.swap_horiz : Icons.swap_vert),
     );
 
     if (width >= 700) {
@@ -820,14 +879,14 @@ class _DepartureRecommendationPageState
         children: [
           Expanded(child: origin),
 
-          const SizedBox(width: 16),
+          reverse,
 
           Expanded(child: destination),
         ],
       );
     }
 
-    return Column(children: [origin, const SizedBox(height: 12), destination]);
+    return Column(children: [origin, reverse, destination]);
   }
 
   Widget _buildTravelFields(double width) {
@@ -838,7 +897,7 @@ class _DepartureRecommendationPageState
       label: 'Travel Date',
       value: localizations.formatMediumDate(_travelDate),
       icon: Icons.calendar_today_outlined,
-      onTap: _searching ? null : _selectTravelDate,
+      onTap: _inputsBusy ? null : _selectTravelDate,
     );
 
     final time = _PickerField(
@@ -846,7 +905,7 @@ class _DepartureRecommendationPageState
       label: 'Travel Time',
       value: localizations.formatTimeOfDay(_travelTime),
       icon: Icons.schedule,
-      onTap: _searching ? null : _selectTravelTime,
+      onTap: _inputsBusy ? null : _selectTravelTime,
     );
 
     if (width >= 700) {
@@ -1008,10 +1067,15 @@ class _DepartureRecommendationPageState
                       title: Text(
                         '${search.originStopName} → ${search.destinationStopName}',
                       ),
-                      trailing: const Icon(Icons.north_west),
-                      onTap: () {
-                        _restoreRecentSearch(search);
-                      },
+                      trailing: TextButton(
+                        onPressed: _inputsBusy
+                            ? null
+                            : () => _restoreRecentSearch(search),
+                        child: const Text('Search Again'),
+                      ),
+                      onTap: _inputsBusy
+                          ? null
+                          : () => _restoreRecentSearch(search),
                     ),
                   )
                   .toList(growable: false),

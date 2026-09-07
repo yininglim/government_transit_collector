@@ -9,6 +9,7 @@ class DepartureStop {
 
 abstract interface class DepartureStopRepository {
   Future<List<DepartureStop>> searchStops(String query);
+  Future<DepartureStop?> getStopById(String id);
 }
 
 typedef DepartureStopQuery =
@@ -67,6 +68,28 @@ class SupabaseDepartureStopRepository implements DepartureStopRepository {
       );
     } on Object {
       throw const DepartureStopReadException('Unable to load stops.');
+    }
+  }
+
+  @override
+  Future<DepartureStop?> getStopById(String id) async {
+    if (id.trim().isEmpty) return null;
+    try {
+      final row = await (_client ?? Supabase.instance.client)
+          .from('gtfs_stops')
+          .select('stop_id, stop_name')
+          .eq('stop_id', id)
+          .maybeSingle();
+      return row == null
+          ? null
+          : DepartureStop(
+              id: row['stop_id'] as String,
+              name: row['stop_name'] as String,
+            );
+    } on Object {
+      throw const DepartureStopReadException(
+        'Unable to load the previous stops. Please try again.',
+      );
     }
   }
 

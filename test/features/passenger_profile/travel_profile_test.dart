@@ -1,3 +1,4 @@
+import '../departure_recommendation/planning_actions_test.dart' as planning;
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -89,6 +90,83 @@ void main() {
     );
   });
   tearDown(() => client.dispose());
+  testWidgets(
+    'profile Search Again returns owned history and opens a fresh phone planning form',
+    (tester) async {
+      final f = planning.PlanningFixture();
+      Object? returned;
+      tester.view.physicalSize = const Size(360, 640);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: TextButton(
+                child: const Text('Open Profile'),
+                onPressed: () async {
+                  returned = await Navigator.of(context).push<Object>(
+                    MaterialPageRoute(
+                      builder: (_) => PassengerProfilePage(
+                        profile: profile,
+                        authRepository: ProfileAuth(client),
+                        savedRepository: SavedFake(),
+                        recentRepository: f.recent,
+                        preferencesRepository: PreferencesFake(),
+                        onProfileUpdated: (_) {},
+                      ),
+                    ),
+                  );
+                  if (!context.mounted || returned is! RecentJourneySearch) {
+                    return;
+                  }
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => f.page(
+                        initialRecent: returned as RecentJourneySearch,
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        ),
+      );
+      await planning.press(tester, find.text('Open Profile'));
+      await tester.scrollUntilVisible(
+        find.text('Search Again'),
+        250,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await planning.press(tester, find.text('Search Again'));
+      expect(returned, same(f.recent.searches.single));
+      expect(
+        planning.fieldText('origin-field', 'Larkin Sentral'),
+        findsOneWidget,
+      );
+      expect(
+        planning.fieldText('destination-field', 'JB Sentral'),
+        findsOneWidget,
+      );
+      expect(f.direct.origin, isNull);
+      expect(f.recent.writes, 0);
+      expect(f.realtime.calls, 0);
+      await planning.expectPicker(
+        tester,
+        'travel-date-field',
+        date: DateTime(2026, 9, 9),
+      );
+      await planning.expectPicker(
+        tester,
+        'travel-time-field',
+        time: const TimeOfDay(hour: 2, minute: 42),
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   test(
     'radius persists locally per account and validates supported options',
     () async {

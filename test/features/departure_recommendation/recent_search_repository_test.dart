@@ -84,6 +84,18 @@ void main() {
     expect(mapped.searchedAt, original.searchedAt);
   });
 
+  test(
+    'historical missing IDs map safely without inventing IDs from names',
+    () {
+      final row = search().toMap()
+        ..remove('origin_stop_id')
+        ..remove('destination_stop_id');
+      final mapped = RecentJourneySearch.fromMap(row);
+      expect(mapped.originStopId, '');
+      expect(mapped.destinationStopId, '');
+    },
+  );
+
   test('retrieves newest searches and deduplicates the same journey', () async {
     await repository.saveRecentSearch(
       search(searchedAt: DateTime.utc(2026, 8, 20)),

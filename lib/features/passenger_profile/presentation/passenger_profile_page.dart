@@ -354,6 +354,11 @@ class _PassengerProfilePageState extends State<PassengerProfilePage> {
                 else
                   for (final recent in _recent!)
                     ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      trailing: TextButton(
+                        onPressed: () => Navigator.pop(context, recent),
+                        child: const Text('Search Again'),
+                      ),
                       title: Text(
                         '${recent.originStopName} → ${recent.destinationStopName}',
                       ),

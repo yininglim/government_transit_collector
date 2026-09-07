@@ -19,6 +19,8 @@ class TestLocation implements PassengerLocationService {
 
 class TestStops implements DepartureStopRepository {
   @override
+  Future<DepartureStop?> getStopById(String id) async => null;
+  @override
   Future<List<DepartureStop>> searchStops(String query) async => const [
     DepartureStop(id: 'manual', name: 'Manual stop'),
   ];

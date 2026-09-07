@@ -11,9 +11,9 @@ class RecentJourneySearch {
   factory RecentJourneySearch.fromMap(Map<String, Object?> map) {
     return RecentJourneySearch(
       id: map['id'] as int?,
-      originStopId: map['origin_stop_id'] as String,
+      originStopId: map['origin_stop_id'] as String? ?? '',
       originStopName: map['origin_stop_name'] as String,
-      destinationStopId: map['destination_stop_id'] as String,
+      destinationStopId: map['destination_stop_id'] as String? ?? '',
       destinationStopName: map['destination_stop_name'] as String,
       searchedAt: DateTime.parse(map['searched_at'] as String),
     );

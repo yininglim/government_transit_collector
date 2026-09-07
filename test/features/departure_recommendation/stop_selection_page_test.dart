@@ -6,6 +6,8 @@ import 'package:government_transit_collector/features/departure_recommendation/d
 import 'package:government_transit_collector/features/departure_recommendation/presentation/stop_selection_page.dart';
 
 class FakeStopRepository implements DepartureStopRepository {
+  @override
+  Future<DepartureStop?> getStopById(String id) async => null;
   FakeStopRepository(this.onSearch);
 
   final Future<List<DepartureStop>> Function(String query) onSearch;

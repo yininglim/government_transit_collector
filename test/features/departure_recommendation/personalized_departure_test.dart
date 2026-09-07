@@ -153,13 +153,15 @@ void main() {
       await tester.pumpAndSettle(const Duration(milliseconds: 400));
       await tester.tap(find.byKey(const Key('stop-jb')));
       await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Reverse journey'));
+      await tester.pumpAndSettle();
       await tester.ensureVisible(
         find.byKey(const Key('journey-search-button')),
       );
       await tester.tap(find.byKey(const Key('journey-search-button')));
       await tester.pumpAndSettle();
-      expect(direct.origin, 'larkin');
-      expect(direct.destination, 'jb');
+      expect(direct.origin, 'jb');
+      expect(direct.destination, 'larkin');
     },
   );
 }

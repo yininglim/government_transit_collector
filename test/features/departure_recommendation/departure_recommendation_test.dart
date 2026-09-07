@@ -92,6 +92,9 @@ const transferRecommendation = TransferJourneyRecommendation(
 
 class FakeDepartureStopRepository implements DepartureStopRepository {
   @override
+  Future<DepartureStop?> getStopById(String id) async =>
+      [larkin, jbSentral].where((stop) => stop.id == id).firstOrNull;
+  @override
   Future<List<DepartureStop>> searchStops(String query) async {
     final normalized = query.toLowerCase();
     return [

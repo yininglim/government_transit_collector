@@ -1,3 +1,4 @@
+import 'package:government_transit_collector/features/departure_recommendation/data/recent_journey_search.dart';
 import 'package:flutter/material.dart';
 import 'package:government_transit_collector/features/journey_reminders/reminder_controller.dart';
 import 'package:government_transit_collector/features/journey_reminders/reminder_widgets.dart';
@@ -54,7 +55,7 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
   late final _savedRepository =
       widget.savedJourneyRepository ?? SupabaseSavedJourneyRepository();
 
-  void _openDeparture([SavedJourney? journey]) {
+  void _openDeparture([SavedJourney? journey, RecentJourneySearch? recent]) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => DepartureRecommendationPage(
@@ -67,13 +68,14 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
           preferencesRepository: _preferencesRepository,
           savedJourneyRepository: _savedRepository,
           initialJourney: journey,
+          initialRecentSearch: recent,
         ),
       ),
     );
   }
 
   Future<void> _openProfile() async {
-    final journey = await Navigator.of(context).push<SavedJourney>(
+    final journey = await Navigator.of(context).push<Object>(
       MaterialPageRoute(
         builder: (_) => PassengerProfilePage(
           profile: _updatedProfile ?? widget.profile,
@@ -88,7 +90,9 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
         ),
       ),
     );
-    if (mounted && journey != null) _openDeparture(journey);
+    if (!mounted) return;
+    if (journey is SavedJourney) _openDeparture(journey);
+    if (journey is RecentJourneySearch) _openDeparture(null, journey);
   }
 
   Future<void> _logout() async {
