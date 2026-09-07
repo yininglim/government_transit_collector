@@ -1,3 +1,5 @@
+import 'package:government_transit_collector/features/bus_feedback/data/feedback_issue_types.dart';
+
 class BusFeedback {
   const BusFeedback({
     this.feedbackId,
@@ -23,6 +25,7 @@ class BusFeedback {
   final String stopId;
 
   final String issueType;
+  List<String> get issueTypes => decodeFeedbackIssueTypes(issueType);
   final String comment;
 
   final DateTime createdAt;

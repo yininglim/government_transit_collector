@@ -66,7 +66,7 @@ class _MyReportsSectionState extends State<MyReportsSection> {
 
   void _details(BusFeedback report) {
     final fields = <String, String>{
-      'Issue Type': report.issueType,
+      'Issue Type': report.issueTypes.join('\n'),
       'Route': report.routeLabel ?? report.routeId,
       'Related Bus Stop':
           '${report.stopName ?? report.stopId} (${report.stopId})',
@@ -136,7 +136,7 @@ class _MyReportsSectionState extends State<MyReportsSection> {
         for (final report in _reports!)
           ListTile(
             contentPadding: EdgeInsets.zero,
-            title: Text(report.issueType),
+            title: Text(report.issueTypes.join('\n')),
             subtitle: Text(
               [
                 '${report.routeLabel ?? report.routeId} · ${report.stopName ?? report.stopId}',

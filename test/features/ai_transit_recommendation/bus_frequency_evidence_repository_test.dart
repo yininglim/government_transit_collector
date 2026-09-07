@@ -10,6 +10,27 @@ import 'package:government_transit_collector/features/route_performance/data/rou
 
 void main() {
   test(
+    'counts each selected issue once without duplicating relevant reports',
+    () async {
+      final result =
+          await repository(
+            feedbackRepository: FakeFeedbackRepository([
+              feedback('multi', '["Bus was late", "Bus overcrowded"]'),
+            ]),
+          ).loadEvidence(
+            routeId: 'J15',
+            startUtc: periodStart,
+            endExclusiveUtc: periodEnd,
+          );
+      expect(result.feedback.countByIssueType, {
+        'Bus was late': 1,
+        'Bus overcrowded': 1,
+      });
+      expect(result.feedback.frequencyRelevantRecords, hasLength(1));
+    },
+  );
+
+  test(
     'forwards the same route and half-open period to every repository',
     () async {
       final scheduledRepository = FakeScheduledRepository(scheduledEvidence());

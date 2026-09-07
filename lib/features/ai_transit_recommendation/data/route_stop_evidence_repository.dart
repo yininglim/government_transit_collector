@@ -61,16 +61,14 @@ class DefaultRouteStopEvidenceRepository
       final records = results[2] as List<AdminFeedbackRecord>;
       final counts = <String, int>{};
       for (final record in records) {
-        counts.update(
-          record.issueType,
-          (count) => count + 1,
-          ifAbsent: () => 1,
-        );
+        for (final issue in record.issueTypes) {
+          counts.update(issue, (count) => count + 1, ifAbsent: () => 1);
+        }
       }
       final relevantRecords = records
           .where(
-            (record) => RouteStopFeedbackIssueTypes.routeStopRelevant.contains(
-              record.issueType,
+            (record) => record.issueTypes.any(
+              RouteStopFeedbackIssueTypes.routeStopRelevant.contains,
             ),
           )
           .toList(growable: false);

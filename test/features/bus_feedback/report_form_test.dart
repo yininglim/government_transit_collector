@@ -105,11 +105,7 @@ Finder stopField() => find.byWidgetPredicate(
       w.decoration.labelText == 'Related Bus Stop',
 );
 Finder timeField() => find.byType(DropdownButtonFormField<int>);
-Finder issueField() => find.byWidgetPredicate(
-  (w) =>
-      w is DropdownButtonFormField<String> &&
-      w.decoration.labelText == 'Problem Type',
-);
+Finder issueField() => find.byKey(const Key('report-issues'));
 DropdownButton<T> dropdown<T>(WidgetTester tester, Finder field) =>
     tester.widget<DropdownButton<T>>(
       find.descendant(of: field, matching: find.byType(DropdownButton<T>)),
@@ -119,8 +115,13 @@ Future<void> choose(WidgetTester tester, Finder field, String label) async {
   await tester.pumpAndSettle();
   await tester.tap(field);
   await tester.pumpAndSettle();
+  await tester.ensureVisible(find.text(label).last);
   await tester.tap(find.text(label).last);
   await tester.pumpAndSettle();
+  if (find.text('Done').evaluate().isNotEmpty) {
+    await tester.tap(find.text('Done'));
+    await tester.pumpAndSettle();
+  }
 }
 
 Future<void> route(WidgetTester tester, String query) async {
@@ -167,6 +168,43 @@ Future<void> mountReport(
 }
 
 void main() {
+  testWidgets('no selected issues blocks submission', (tester) async {
+    final reports = ReportsFake();
+    await mountReport(tester, reports: reports, contextual: true);
+    await tester.ensureVisible(find.byType(TextFormField));
+    await tester.enterText(find.byType(TextFormField), 'Valid description');
+    await tester.ensureVisible(find.text('Submit Report'));
+    await tester.tap(find.text('Submit Report'));
+    await tester.pumpAndSettle();
+    expect(find.text('Please select a problem type.'), findsOneWidget);
+    expect(reports.rows, isEmpty);
+  });
+
+  testWidgets(
+    'phone selector scrolls with keyboard inset and preserves applied selections',
+    (tester) async {
+      await mountReport(tester, contextual: true, size: const Size(360, 640));
+      await tester.ensureVisible(find.byType(TextFormField));
+      await tester.tap(find.byType(TextFormField));
+      tester.view.viewInsets = const FakeViewPadding(bottom: 240);
+      addTearDown(tester.view.resetViewInsets);
+      await tester.pumpAndSettle();
+      await choose(tester, issueField(), 'Other');
+      expect(find.text('Other'), findsOneWidget);
+      await tester.ensureVisible(issueField());
+      await tester.tap(issueField());
+      await tester.pumpAndSettle();
+      final other = find.widgetWithText(CheckboxListTile, 'Other');
+      expect(tester.widget<CheckboxListTile>(other).value, isTrue);
+      await tester.ensureVisible(other);
+      await tester.tap(other);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(find.text('Other'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets(
     'route stays searchable; stop and schedule disabled until prerequisites; only selected route stops appear',
     (tester) async {
@@ -336,7 +374,7 @@ void main() {
 
   for (final contextual in [false, true]) {
     testWidgets(
-      '${contextual ? 'contextual' : 'generic'} submission preserves schedule, dropdown issue and description',
+      '${contextual ? 'contextual' : 'generic'} submission preserves schedule, selected issues and description',
       (tester) async {
         final reports = ReportsFake();
         final schedule = ScheduleFake();
@@ -360,6 +398,9 @@ void main() {
           );
         }
         await choose(tester, issueField(), 'Bus overcrowded');
+        await choose(tester, issueField(), 'Bus was late');
+        expect(find.text('Bus overcrowded'), findsOneWidget);
+        expect(find.text('Bus was late'), findsOneWidget);
         final description = find.byType(TextFormField);
         await tester.ensureVisible(description);
         await tester.enterText(description, 'The bus was overcrowded.');
@@ -375,7 +416,7 @@ void main() {
         expect(row.serviceDate, DateTime(2026, 9, 7));
         expect(row.scheduledDepartureSeconds, 48480);
         expect(row.description, 'The bus was overcrowded.');
-        expect(row.issueType, 'Bus overcrowded');
+        expect(row.issueTypes, ['Bus overcrowded', 'Bus was late']);
         expect(schedule.calls.last.trip, 'trip');
       },
     );
@@ -455,10 +496,12 @@ void main() {
           contextual: true,
           now: DateTime.utc(2026, 9, 7, 5, minute),
         );
-        final issues = dropdown<String>(
-          tester,
-          issueField(),
-        ).items!.map((item) => item.value);
+        await tester.ensureVisible(issueField());
+        await tester.tap(issueField());
+        await tester.pumpAndSettle();
+        final issues = tester
+            .widgetList<CheckboxListTile>(find.byType(CheckboxListTile))
+            .map((item) => (item.title! as Text).data);
         expect(issues.contains('Bus was late'), minute >= 28);
         expect(issues.contains('Bus did not arrive'), minute >= 38);
         expect(

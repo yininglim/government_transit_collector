@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:timezone/timezone.dart' as timezone;
 
 import '../data/bus_feedback.dart';
+import '../data/feedback_issue_types.dart';
 import '../data/bus_feedback_repository.dart';
 import '../data/feedback_reference_repository.dart';
 import 'feedback_route_selection_page.dart';
@@ -67,7 +68,7 @@ class _BusFeedbackPageState extends State<BusFeedbackPage> {
 
   static const int _missingBusGraceMinutes = 10;
 
-  String? _issueType;
+  Set<String> _issueTypes = {};
 
   FeedbackJourneyOption? _selectedJourneyOption;
 
@@ -153,6 +154,7 @@ class _BusFeedbackPageState extends State<BusFeedbackPage> {
       'Missing bus stop',
       'Long walking distance',
       'Incorrect route information',
+      'Bus location is incorrect',
       'Other',
     ];
 
@@ -166,6 +168,7 @@ class _BusFeedbackPageState extends State<BusFeedbackPage> {
         'Missing bus stop',
         'Long walking distance',
         'Incorrect route information',
+        'Bus location is incorrect',
         'Other',
       ];
     }
@@ -254,7 +257,7 @@ class _BusFeedbackPageState extends State<BusFeedbackPage> {
     _departures = [];
     _timeError = null;
     _loadingTimes = false;
-    _issueType = null;
+    _issueTypes = {};
   }
 
   void _applyJourney() {
@@ -467,7 +470,7 @@ class _BusFeedbackPageState extends State<BusFeedbackPage> {
                     _departure = _departures.firstWhere(
                       (d) => d.seconds == seconds,
                     );
-                    _issueType = null;
+                    _issueTypes = {};
                   });
                 },
         ),
@@ -499,10 +502,58 @@ class _BusFeedbackPageState extends State<BusFeedbackPage> {
 
       _applyJourney();
 
-      if (_issueType != null && !_availableIssueTypes.contains(_issueType)) {
-        _issueType = null;
-      }
+      _issueTypes.removeWhere((issue) => !_availableIssueTypes.contains(issue));
     });
+  }
+
+  Future<void> _selectIssues() async {
+    FocusManager.instance.primaryFocus?.unfocus();
+    final available = _availableIssueTypes;
+    final selected = _issueTypes.where(available.contains).toSet();
+    final result = await showDialog<Set<String>>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, update) => AlertDialog(
+          title: const Text('Problem Type'),
+          content: SizedBox(
+            width: 450,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (final issue in available)
+                    CheckboxListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(issue),
+                      value: selected.contains(issue),
+                      controlAffinity: ListTileControlAffinity.leading,
+                      onChanged: (checked) => update(() {
+                        if (checked == true) {
+                          selected.add(issue);
+                        } else {
+                          selected.remove(issue);
+                        }
+                      }),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, selected),
+              child: const Text('Done'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || result == null) return;
+    setState(() => _issueTypes = result);
   }
 
   Future<void> _submitFeedback() async {
@@ -534,9 +585,10 @@ class _BusFeedbackPageState extends State<BusFeedbackPage> {
       return;
     }
 
-    final issueType = _issueType;
+    final issueTypes = _issueTypes.toList();
 
-    if (issueType == null || !_availableIssueTypes.contains(issueType)) {
+    if (issueTypes.isEmpty ||
+        !issueTypes.every(_availableIssueTypes.contains)) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please select a valid problem type.')),
       );
@@ -612,7 +664,7 @@ class _BusFeedbackPageState extends State<BusFeedbackPage> {
         routeId: routeId,
         tripId: _selectedTripId,
         stopId: stop.id,
-        issueType: issueType,
+        issueType: encodeFeedbackIssueTypes(issueTypes),
         comment: _descriptionController.text.trim(),
         createdAt: DateTime.now().toUtc(),
       );
@@ -665,12 +717,6 @@ class _BusFeedbackPageState extends State<BusFeedbackPage> {
 
   @override
   Widget build(BuildContext context) {
-    final issueTypes = _availableIssueTypes;
-
-    final selectedIssue = _issueType != null && issueTypes.contains(_issueType)
-        ? _issueType
-        : null;
-
     return Scaffold(
       appBar: AppBar(title: const Text('Report Bus / Stop Issue')),
       body: SafeArea(
@@ -810,35 +856,35 @@ class _BusFeedbackPageState extends State<BusFeedbackPage> {
 
                     const SizedBox(height: 20),
 
-                    DropdownButtonFormField<String>(
-                      key: ValueKey('report-issue-${selectedIssue ?? "none"}'),
-                      initialValue: selectedIssue,
-                      isExpanded: true,
-                      decoration: const InputDecoration(
-                        labelText: 'Problem Type',
-                        border: OutlineInputBorder(),
-                        prefixIcon: Icon(Icons.error_outline),
+                    FormField<Set<String>>(
+                      key: ValueKey(_issueTypes.join('|')),
+                      initialValue: _issueTypes,
+                      validator: (_) => _issueTypes.isEmpty
+                          ? 'Please select a problem type.'
+                          : null,
+                      builder: (field) => InkWell(
+                        key: const Key('report-issues'),
+                        onTap: _submitting ? null : _selectIssues,
+                        child: InputDecorator(
+                          decoration: InputDecoration(
+                            labelText: 'Problem Type',
+                            border: const OutlineInputBorder(),
+                            prefixIcon: const Icon(Icons.error_outline),
+                            suffixIcon: const Icon(Icons.expand_more),
+                            errorText: field.errorText,
+                            enabled: !_submitting,
+                          ),
+                          child: _issueTypes.isEmpty
+                              ? const Text('Select problem types')
+                              : Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    for (final issue in _issueTypes)
+                                      Text(issue),
+                                  ],
+                                ),
+                        ),
                       ),
-                      items: issueTypes.map((issue) {
-                        return DropdownMenuItem<String>(
-                          value: issue,
-                          child: Text(issue),
-                        );
-                      }).toList(),
-                      onChanged: _submitting
-                          ? null
-                          : (value) {
-                              setState(() {
-                                _issueType = value;
-                              });
-                            },
-                      validator: (value) {
-                        if (value == null || value.isEmpty) {
-                          return 'Please select a problem type.';
-                        }
-
-                        return null;
-                      },
                     ),
 
                     const SizedBox(height: 20),

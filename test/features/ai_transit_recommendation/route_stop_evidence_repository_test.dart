@@ -12,6 +12,30 @@ import 'package:government_transit_collector/features/realtime_vehicle/data/rout
 import 'package:government_transit_collector/features/route_performance/data/route_performance_models.dart';
 
 void main() {
+  test(
+    'counts each selected issue once without duplicating relevant reports',
+    () async {
+      final result =
+          await repository(
+            feedbackRepository: FakeFeedbackRepository([
+              feedback(
+                'multi',
+                '["Missing bus stop", "Long walking distance"]',
+              ),
+            ]),
+          ).loadEvidence(
+            routeId: 'J15',
+            startUtc: periodStart,
+            endExclusiveUtc: periodEnd,
+          );
+      expect(result.feedback.countByIssueType, {
+        'Missing bus stop': 1,
+        'Long walking distance': 1,
+      });
+      expect(result.feedback.routeStopRelevantRecords, hasLength(1));
+    },
+  );
+
   test('forwards the selected route and same half-open period', () async {
     final networkRepository = FakeNetworkRepository(networkEvidence());
     final operationalRepository = FakeOperationalRepository(

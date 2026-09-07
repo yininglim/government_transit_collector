@@ -25,7 +25,10 @@ void main() {
   test('passes route, issue type, and half-open time filters', () async {
     final source = FakeAdminFeedbackDataSource()
       ..records = [
-        feedback(routeId: 'J15', issueType: 'Bus was late'),
+        feedback(
+          routeId: 'J15',
+          issueType: '["Bus was late","Bus overcrowded"]',
+        ),
         feedback(routeId: 'J10', issueType: 'Bus overcrowded'),
       ];
     final start = DateTime.utc(2026, 8, 1);
@@ -40,7 +43,7 @@ void main() {
         );
 
     expect(source.routeId, 'J15');
-    expect(source.issueType, 'Bus was late');
+    expect(source.issueType, isNull);
     expect(source.startUtc, start);
     expect(source.endExclusiveUtc, end);
     expect(records.map((record) => record.feedbackId), ['feedback-J15']);

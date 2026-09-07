@@ -65,16 +65,15 @@ class DefaultBusFrequencyEvidenceRepository
       final records = results[2] as List<AdminFeedbackRecord>;
       final counts = <String, int>{};
       for (final record in records) {
-        counts.update(
-          record.issueType,
-          (count) => count + 1,
-          ifAbsent: () => 1,
-        );
+        for (final issue in record.issueTypes) {
+          counts.update(issue, (count) => count + 1, ifAbsent: () => 1);
+        }
       }
       final relevantRecords = records
           .where(
-            (record) => BusFrequencyFeedbackIssueTypes.frequencyRelevant
-                .contains(record.issueType),
+            (record) => record.issueTypes.any(
+              BusFrequencyFeedbackIssueTypes.frequencyRelevant.contains,
+            ),
           )
           .toList(growable: false);
 

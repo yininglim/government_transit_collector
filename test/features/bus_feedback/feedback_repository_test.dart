@@ -27,6 +27,30 @@ BusFeedback report({
 
 void main() {
   test(
+    'multiple issues persist through insert and historical strings still decode',
+    () async {
+      Map<String, dynamic>? stored;
+      final client = await feedbackClient((request) async {
+        if (request.method == 'GET') return jsonResponse([]);
+        stored = jsonDecode(request.body) as Map<String, dynamic>;
+        return jsonResponse(null, status: 201);
+      });
+      addTearDown(client.dispose);
+      await SupabaseBusFeedbackRepository(
+        client: client,
+      ).submitFeedback(report(issue: '["Bus was late","Bus overcrowded"]'));
+      expect(stored!['issue_type'], '["Bus was late","Bus overcrowded"]');
+      expect(BusFeedback.fromMap(stored!).issueTypes, [
+        'Bus was late',
+        'Bus overcrowded',
+      ]);
+      expect(BusFeedback.fromMap(report().toMap()).issueTypes, [
+        'Bus was late',
+      ]);
+    },
+  );
+
+  test(
     'first report succeeds; identity excludes problem type and description and permits different events/users',
     () async {
       final rows = <Map<String, dynamic>>[];
@@ -62,6 +86,7 @@ void main() {
       for (final duplicate in [
         report(),
         report(issue: 'Bus overcrowded'),
+        report(issue: '["Bus was late","Bus overcrowded"]'),
         report(description: 'Another description'),
       ]) {
         await expectLater(

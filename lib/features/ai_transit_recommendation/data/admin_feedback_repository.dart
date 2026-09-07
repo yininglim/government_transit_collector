@@ -1,3 +1,4 @@
+import 'package:government_transit_collector/features/bus_feedback/data/feedback_issue_types.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class AdminFeedbackRecord {
@@ -28,6 +29,7 @@ class AdminFeedbackRecord {
   final String? tripId;
   final String stopId;
   final String issueType;
+  List<String> get issueTypes => decodeFeedbackIssueTypes(issueType);
   final String comment;
   final DateTime createdAt;
 }
@@ -72,7 +74,7 @@ class DefaultAdminFeedbackRepository implements AdminFeedbackRepository {
       for (var offset = 0; ; offset += pageSize) {
         final page = await _dataSource.fetchFeedback(
           routeId: routeId,
-          issueType: issueType,
+          issueType: null,
           startUtc: startUtc,
           endExclusiveUtc: endExclusiveUtc,
           offset: offset,
@@ -82,7 +84,7 @@ class DefaultAdminFeedbackRepository implements AdminFeedbackRepository {
           page.where(
             (record) =>
                 (routeId == null || record.routeId == routeId) &&
-                (issueType == null || record.issueType == issueType) &&
+                (issueType == null || record.issueTypes.contains(issueType)) &&
                 (startUtc == null || !record.createdAt.isBefore(startUtc)) &&
                 (endExclusiveUtc == null ||
                     record.createdAt.isBefore(endExclusiveUtc)),
@@ -123,7 +125,7 @@ class SupabaseAdminFeedbackDataSource implements AdminFeedbackDataSource {
             'feedback_id, route_id, trip_id, stop_id, issue_type, comment, created_at',
           );
       if (routeId != null) query = query.eq('route_id', routeId);
-      if (issueType != null) query = query.eq('issue_type', issueType);
+
       if (startUtc != null) {
         query = query.gte('created_at', startUtc.toUtc().toIso8601String());
       }

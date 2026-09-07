@@ -72,7 +72,7 @@ void main() {
     (tester) async {
       final reports = ReportsFake()
         ..rows.addAll([
-          report(),
+          report(issue: '["Bus was late","Bus overcrowded"]'),
           report(user: 'other', issue: 'Private report'),
           BusFeedback(
             userId: 'owner',
@@ -104,7 +104,8 @@ void main() {
         find.textContaining('Service date/time not recorded'),
         findsOneWidget,
       );
-      await tester.tap(find.text('Bus was late'));
+      expect(find.text('Bus was late\nBus overcrowded'), findsOneWidget);
+      await tester.tap(find.text('Bus was late\nBus overcrowded'));
       await tester.pumpAndSettle();
       expect(find.text('Description'), findsOneWidget);
       expect(find.text('Late bus'), findsOneWidget);
