@@ -1,4 +1,7 @@
 import 'dart:async';
+import 'package:government_transit_collector/features/journey_reminders/journey_reminder.dart';
+import 'package:government_transit_collector/features/journey_reminders/reminder_controller.dart';
+import 'package:government_transit_collector/features/journey_reminders/reminder_widgets.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/nearby_stop_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/saved_journey_repository.dart';
 import 'package:government_transit_collector/features/passenger_profile/data/travel_preferences_repository.dart';
@@ -98,10 +101,12 @@ class DepartureRecommendationPage extends StatefulWidget {
     this.realtimeRepository,
     this.feedbackRepository,
     this.feedbackReferenceRepository,
+    this.reminderController,
     super.key,
   });
 
   final DepartureStopRepository stopRepository;
+  final ReminderController? reminderController;
   final DirectTripRepository tripRepository;
   final TransferJourneyRepository transferRepository;
   final TimetableRecommendationRepository timetableRepository;
@@ -156,10 +161,23 @@ class _DepartureRecommendationPageState
   bool _liveStatusUnavailable = false;
 
   int _availabilityRequest = 0;
+  late final ReminderController? _reminders =
+      widget.reminderController ?? sharedReminderController;
+
+  void _remindersChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    _reminders?.removeListener(_remindersChanged);
+    super.dispose();
+  }
 
   @override
   void initState() {
     super.initState();
+    _reminders?.addListener(_remindersChanged);
     _origin = widget.initialJourney?.origin;
     _destination = widget.initialJourney?.destination;
 
@@ -916,6 +934,8 @@ class _DepartureRecommendationPageState
 
         ...recommendations.map(
           (recommendation) => _RecommendationCard(
+            reminders: _reminders,
+            now: widget.now,
             recommendation: recommendation,
             originStopName: _origin!.name,
             destinationStopName: _destination!.name,
@@ -1062,10 +1082,14 @@ class _RecommendationCard extends StatelessWidget {
     required this.liveStatusLoading,
     required this.liveStatusUnavailable,
     required this.onReportProblem,
+    this.reminders,
+    this.now,
     this.selectedJourneyTrackerBuilder,
   });
 
   final JourneyRecommendation recommendation;
+  final ReminderController? reminders;
+  final DateTime Function()? now;
 
   final String originStopName;
 
@@ -1094,6 +1118,16 @@ class _RecommendationCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final departure = formatServiceDaySeconds(recommendation.departureSeconds);
+    final reminderJourney = ReminderJourney.fromRecommendation(
+      recommendation,
+      travelDate,
+      originStopName,
+      destinationStopName,
+    );
+    final existingReminder = reminders?.matching(reminderJourney);
+    final futureDeparture = reminderJourney.departure.isAfter(
+      (now ?? DateTime.now)(),
+    );
 
     final arrival = formatServiceDaySeconds(recommendation.arrivalSeconds);
 
@@ -1159,71 +1193,129 @@ class _RecommendationCard extends StatelessWidget {
 
             const SizedBox(height: 12),
 
-            Align(
-              alignment: Alignment.centerRight,
-              child: Wrap(
+            LayoutBuilder(
+              builder: (context, constraints) => Wrap(
                 alignment: WrapAlignment.end,
-                spacing: 4,
+                spacing: 8,
                 runSpacing: 4,
-                children: [
-                  TextButton.icon(
-                    key: Key('report-bus-${recommendation.departureSeconds}'),
-                    onPressed: onReportProblem,
-                    icon: const Icon(Icons.report_problem_outlined),
-                    label: const Text('Report Problem'),
-                  ),
-
-                  TextButton.icon(
-                    key: Key('view-route-${recommendation.departureSeconds}'),
-                    onPressed: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) => RouteMapPage(
-                            recommendation: recommendation,
-                            originStopName: originStopName,
-                            destinationStopName: destinationStopName,
-                            repository: journeyMapRepository,
+                children:
+                    [
+                          TextButton.icon(
+                            key: Key(
+                              'report-bus-${recommendation.departureSeconds}',
+                            ),
+                            onPressed: onReportProblem,
+                            icon: const Icon(Icons.report_problem_outlined),
+                            label: const Text('Report Problem'),
                           ),
-                        ),
-                      );
-                    },
-                    icon: const Icon(Icons.map_outlined),
-                    label: const Text('View Route'),
-                  ),
 
-                  FilledButton.tonalIcon(
-                    key: Key(
-                      'track-journey-${recommendation.departureSeconds}',
-                    ),
-                    onPressed: () {
-                      final selected =
-                          SelectedJourneyTracking.fromRecommendation(
-                            recommendation: recommendation,
-                            originStopName: originStopName,
-                            destinationStopName: destinationStopName,
-                            travelDate: travelDate,
-                          );
+                          TextButton.icon(
+                            key: Key(
+                              'view-route-${recommendation.departureSeconds}',
+                            ),
+                            onPressed: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute<void>(
+                                  builder: (_) => RouteMapPage(
+                                    recommendation: recommendation,
+                                    originStopName: originStopName,
+                                    destinationStopName: destinationStopName,
+                                    repository: journeyMapRepository,
+                                  ),
+                                ),
+                              );
+                            },
+                            icon: const Icon(Icons.map_outlined),
+                            label: const Text('View Route'),
+                          ),
 
-                      Navigator.of(context).push(
-                        MaterialPageRoute<void>(
-                          builder: (_) =>
-                              selectedJourneyTrackerBuilder?.call(
-                                selected,
-                                journeyMapRepository,
-                              ) ??
-                              SelectedJourneyTrackerPage(
-                                journey: selected,
-                                realtimeRepository:
-                                    DataGovMyRealtimeVehicleRepository(),
-                                journeyMapRepository: journeyMapRepository,
+                          if (futureDeparture)
+                            TextButton.icon(
+                              key: Key(
+                                'remind-me-${recommendation.departureSeconds}',
                               ),
-                        ),
-                      );
-                    },
-                    icon: const Icon(Icons.directions_bus_outlined),
-                    label: const Text('Track Journey'),
-                  ),
-                ],
+                              onPressed: reminders == null
+                                  ? () {
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        const SnackBar(
+                                          content: Text(
+                                            'Please sign in to set a reminder.',
+                                          ),
+                                        ),
+                                      );
+                                    }
+                                  : () {
+                                      if (existingReminder != null) {
+                                        showExistingReminder(
+                                          context,
+                                          reminders!,
+                                          existingReminder,
+                                        );
+                                      } else {
+                                        showReminderSheet(
+                                          context,
+                                          reminders!,
+                                          reminderJourney,
+                                        );
+                                      }
+                                    },
+                              icon: Icon(
+                                existingReminder == null
+                                    ? Icons.notifications_none
+                                    : Icons.notifications_active,
+                              ),
+                              label: Text(
+                                existingReminder == null
+                                    ? 'Remind Me'
+                                    : 'Reminder Set',
+                              ),
+                            )
+                          else
+                            const SizedBox.shrink(),
+
+                          FilledButton.tonalIcon(
+                            key: Key(
+                              'track-journey-${recommendation.departureSeconds}',
+                            ),
+                            onPressed: () {
+                              final selected =
+                                  SelectedJourneyTracking.fromRecommendation(
+                                    recommendation: recommendation,
+                                    originStopName: originStopName,
+                                    destinationStopName: destinationStopName,
+                                    travelDate: travelDate,
+                                  );
+
+                              Navigator.of(context).push(
+                                MaterialPageRoute<void>(
+                                  builder: (_) =>
+                                      selectedJourneyTrackerBuilder?.call(
+                                        selected,
+                                        journeyMapRepository,
+                                      ) ??
+                                      SelectedJourneyTrackerPage(
+                                        journey: selected,
+                                        realtimeRepository:
+                                            DataGovMyRealtimeVehicleRepository(),
+                                        journeyMapRepository:
+                                            journeyMapRepository,
+                                      ),
+                                ),
+                              );
+                            },
+                            icon: const Icon(Icons.directions_bus_outlined),
+                            label: const Text('Track Journey'),
+                          ),
+                        ]
+                        .map(
+                          (action) => SizedBox(
+                            width: (constraints.maxWidth - 8) / 2,
+                            child: action,
+                          ),
+                        )
+                        .toList(),
               ),
             ),
           ],

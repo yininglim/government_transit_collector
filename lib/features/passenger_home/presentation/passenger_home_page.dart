@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:government_transit_collector/features/journey_reminders/reminder_controller.dart';
+import 'package:government_transit_collector/features/journey_reminders/reminder_widgets.dart';
 import 'package:government_transit_collector/features/bus_feedback/data/bus_feedback_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/saved_journey_repository.dart';
 import 'package:government_transit_collector/features/passenger_profile/data/travel_preferences_repository.dart';
@@ -23,10 +25,12 @@ class PassengerHomePage extends StatefulWidget {
     this.preferencesRepository,
     this.savedJourneyRepository,
     this.feedbackRepository,
+    this.reminderController,
     super.key,
   });
 
   final AppProfile profile;
+  final ReminderController? reminderController;
   final AuthRepository repository;
   final RecentSearchRepository? recentSearchRepository;
   final TravelPreferencesRepository? preferencesRepository;
@@ -39,6 +43,7 @@ class PassengerHomePage extends StatefulWidget {
 
 class _PassengerHomePageState extends State<PassengerHomePage> {
   bool _signingOut = false;
+  late final _reminders = widget.reminderController ?? sharedReminderController;
   AppProfile? _updatedProfile;
   late final _recentRepository =
       widget.recentSearchRepository ??
@@ -53,6 +58,7 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => DepartureRecommendationPage(
+          reminderController: _reminders,
           stopRepository: SupabaseDepartureStopRepository(),
           tripRepository: SupabaseDirectTripRepository(),
           transferRepository: SupabaseTransferJourneyRepository(),
@@ -141,6 +147,7 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
             const SizedBox(height: 8),
             Text('Welcome, ${(_updatedProfile ?? widget.profile).displayName}'),
             const SizedBox(height: 32),
+            if (_reminders != null) UpcomingJourneys(controller: _reminders),
             _PlaceholderCard(
               icon: Icons.departure_board,
               title: 'Departure Recommendation',
