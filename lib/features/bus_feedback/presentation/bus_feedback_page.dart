@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:government_transit_collector/core/time/transit_service_time.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:timezone/timezone.dart' as timezone;
 
 import '../data/bus_feedback.dart';
 import '../data/bus_feedback_repository.dart';
 import '../data/feedback_reference_repository.dart';
 import 'feedback_route_selection_page.dart';
-import 'feedback_stop_selection_page.dart';
+import '../data/feedback_schedule_repository.dart';
 
 class FeedbackJourneyOption {
   const FeedbackJourneyOption({
@@ -15,6 +16,7 @@ class FeedbackJourneyOption {
     required this.routeLabel,
     required this.tripId,
     required this.departureSeconds,
+    this.boardingStop,
   });
 
   final String label;
@@ -25,90 +27,93 @@ class FeedbackJourneyOption {
   final String tripId;
 
   final int departureSeconds;
+  final FeedbackStop? boardingStop;
 }
 
-class BusFeedbackPage
-    extends StatefulWidget {
+class BusFeedbackPage extends StatefulWidget {
   const BusFeedbackPage({
     required this.repository,
     required this.referenceRepository,
     this.journeyOptions = const [],
     this.travelDate,
     this.now,
+    this.scheduleRepository,
+    this.currentUserId,
     super.key,
   });
 
-  final BusFeedbackRepository
-  repository;
+  final BusFeedbackRepository repository;
 
-  final FeedbackReferenceRepository
-  referenceRepository;
+  final FeedbackReferenceRepository referenceRepository;
 
-  final List<FeedbackJourneyOption>
-  journeyOptions;
+  final List<FeedbackJourneyOption> journeyOptions;
 
   final DateTime? travelDate;
 
   final DateTime Function()? now;
+  final FeedbackScheduleRepository? scheduleRepository;
+  final String? Function()? currentUserId;
 
-  bool get hasJourneyContext =>
-      journeyOptions.isNotEmpty &&
-          travelDate != null;
+  bool get hasJourneyContext => journeyOptions.isNotEmpty && travelDate != null;
 
   @override
-  State<BusFeedbackPage> createState() =>
-      _BusFeedbackPageState();
+  State<BusFeedbackPage> createState() => _BusFeedbackPageState();
 }
 
-class _BusFeedbackPageState
-    extends State<BusFeedbackPage> {
-  final _formKey =
-  GlobalKey<FormState>();
+class _BusFeedbackPageState extends State<BusFeedbackPage> {
+  final _formKey = GlobalKey<FormState>();
 
-  final _commentController =
-  TextEditingController();
+  final _descriptionController = TextEditingController();
 
-  static const int
-  _missingBusGraceMinutes = 10;
+  static const int _missingBusGraceMinutes = 10;
 
   String? _issueType;
 
-  FeedbackJourneyOption?
-  _selectedJourneyOption;
+  FeedbackJourneyOption? _selectedJourneyOption;
 
   FeedbackRoute? _selectedRoute;
 
   FeedbackStop? _selectedStop;
 
   bool _submitting = false;
+  late final FeedbackScheduleRepository _schedule =
+      widget.scheduleRepository ?? SupabaseFeedbackScheduleRepository();
+  late DateTime _serviceDate;
+  List<FeedbackStop> _stops = [];
+  List<FeedbackDeparture> _departures = [];
+  FeedbackDeparture? _departure;
+  bool _loadingStops = false, _loadingTimes = false;
+  String? _stopError, _timeError;
+  int _stopRequest = 0, _timeRequest = 0;
+  bool get _fixedStop =>
+      widget.hasJourneyContext && _selectedJourneyOption?.boardingStop != null;
+  int? get _departureSeconds => _departure?.seconds;
 
   @override
   void initState() {
     super.initState();
+    final date = widget.travelDate ?? _currentTransitTime;
+    _serviceDate = DateTime(date.year, date.month, date.day);
 
-    if (widget.journeyOptions.length ==
-        1) {
-      _selectedJourneyOption =
-          widget.journeyOptions.first;
+    if (widget.journeyOptions.length == 1) {
+      _selectedJourneyOption = widget.journeyOptions.first;
+      _applyJourney();
     }
   }
 
   @override
   void dispose() {
-    _commentController.dispose();
+    _descriptionController.dispose();
 
     super.dispose();
   }
 
   DateTime get _currentTransitTime {
-    return currentTransitServiceDateTime(
-      now: widget.now,
-    );
+    return currentTransitServiceDateTime(now: widget.now);
   }
 
   String? get _selectedRouteId {
-    final journey =
-        _selectedJourneyOption;
+    final journey = _selectedJourneyOption;
 
     if (journey != null) {
       return journey.routeId;
@@ -118,8 +123,7 @@ class _BusFeedbackPageState
   }
 
   String? get _selectedRouteLabel {
-    final journey =
-        _selectedJourneyOption;
+    final journey = _selectedJourneyOption;
 
     if (journey != null) {
       return journey.routeLabel;
@@ -129,66 +133,22 @@ class _BusFeedbackPageState
   }
 
   String? get _selectedTripId {
-    return _selectedJourneyOption
-        ?.tripId;
+    return _selectedJourneyOption?.tripId ?? _departure?.tripId;
   }
 
   DateTime? get _scheduledDeparture {
-    final option =
-        _selectedJourneyOption;
-
-    final travelDate =
-        widget.travelDate;
-
-    if (option == null ||
-        travelDate == null) {
-      return null;
-    }
-
-    final seconds =
-        option.departureSeconds;
-
-    final serviceDays =
-        seconds ~/
-            Duration.secondsPerDay;
-
-    final remainingSeconds =
-        seconds %
-            Duration.secondsPerDay;
-
-    final hour =
-        remainingSeconds ~/ 3600;
-
-    final minute =
-        (remainingSeconds % 3600) ~/
-            60;
-
-    final second =
-        remainingSeconds % 60;
-
-    final baseDate = DateTime(
-      travelDate.year,
-      travelDate.month,
-      travelDate.day,
-    ).add(
-      Duration(
-        days: serviceDays,
-      ),
-    );
-
-    return DateTime(
-      baseDate.year,
-      baseDate.month,
-      baseDate.day,
-      hour,
-      minute,
-      second,
-    );
+    final seconds = _departureSeconds;
+    if (seconds == null) return null;
+    return timezone.TZDateTime(
+      transitServiceLocation,
+      _serviceDate.year,
+      _serviceDate.month,
+      _serviceDate.day,
+    ).add(Duration(seconds: seconds));
   }
 
   List<String> get _availableIssueTypes {
-    const generalIssues =
-    <String>[
+    const generalIssues = <String>[
       'Bus overcrowded',
       'Missing bus stop',
       'Long walking distance',
@@ -196,8 +156,7 @@ class _BusFeedbackPageState
       'Other',
     ];
 
-    final departure =
-        _scheduledDeparture;
+    final departure = _scheduledDeparture;
 
     if (departure == null) {
       return const [
@@ -211,86 +170,51 @@ class _BusFeedbackPageState
       ];
     }
 
-    final now =
-        _currentTransitTime;
+    final now = _currentTransitTime;
 
-    final issues =
-    <String>[
-      ...generalIssues,
-    ];
+    final issues = <String>[...generalIssues];
 
-    if (!now.isBefore(
-      departure,
-    )) {
-      issues.insert(
-        0,
-        'Bus was late',
-      );
+    if (!now.isBefore(departure)) {
+      issues.insert(0, 'Bus was late');
     }
 
-    final missingBusAvailableAt =
-    departure.add(
-      const Duration(
-        minutes:
-        _missingBusGraceMinutes,
-      ),
+    final missingBusAvailableAt = departure.add(
+      const Duration(minutes: _missingBusGraceMinutes),
     );
 
-    if (!now.isBefore(
-      missingBusAvailableAt,
-    )) {
-      issues.insert(
-        0,
-        'Bus did not arrive',
-      );
+    if (!now.isBefore(missingBusAvailableAt)) {
+      issues.insert(0, 'Bus did not arrive');
     }
 
     return issues;
   }
 
-  String _formatTime(
-      DateTime value,
-      ) {
+  String _formatTime(DateTime value) {
     return MaterialLocalizations.of(
       context,
-    ).formatTimeOfDay(
-      TimeOfDay.fromDateTime(
-        value,
-      ),
-    );
+    ).formatTimeOfDay(TimeOfDay.fromDateTime(value));
   }
 
   String get _timingMessage {
-    final departure =
-        _scheduledDeparture;
+    final departure = _scheduledDeparture;
 
     if (departure == null) {
-      return 'Select the related route and bus stop. '
-          'For a previous journey, include the approximate date and time in your description.';
+      return 'Select a route, related stop, service date and scheduled departure.';
     }
 
-    final now =
-        _currentTransitTime;
+    final now = _currentTransitTime;
 
-    if (now.isBefore(
-      departure,
-    )) {
+    if (now.isBefore(departure)) {
       return 'Scheduled departure: '
           '${_formatTime(departure)}. '
           'Late and missing-bus reports are not available before the scheduled departure.';
     }
 
-    final missingBusAvailableAt =
-    departure.add(
-      const Duration(
-        minutes:
-        _missingBusGraceMinutes,
-      ),
+    final missingBusAvailableAt = departure.add(
+      const Duration(minutes: _missingBusGraceMinutes),
     );
 
-    if (now.isBefore(
-      missingBusAvailableAt,
-    )) {
+    if (now.isBefore(missingBusAvailableAt)) {
       return 'Scheduled departure: '
           '${_formatTime(departure)}. '
           'A missing-bus report becomes available at '
@@ -306,20 +230,14 @@ class _BusFeedbackPageState
       return;
     }
 
-    final route =
-    await Navigator.of(context)
-        .push<FeedbackRoute>(
+    final route = await Navigator.of(context).push<FeedbackRoute>(
       MaterialPageRoute(
         builder: (_) =>
-            FeedbackRouteSelectionPage(
-              repository:
-              widget.referenceRepository,
-            ),
+            FeedbackRouteSelectionPage(repository: widget.referenceRepository),
       ),
     );
 
-    if (!mounted ||
-        route == null) {
+    if (!mounted || route == null) {
       return;
     }
 
@@ -327,137 +245,300 @@ class _BusFeedbackPageState
       _selectedRoute = route;
       _selectedStop = null;
     });
+    _loadStops();
   }
 
-  Future<void> _selectStop() async {
-    final routeId =
-        _selectedRouteId;
+  void _clearTimes() {
+    _timeRequest++;
+    _departure = null;
+    _departures = [];
+    _timeError = null;
+    _loadingTimes = false;
+    _issueType = null;
+  }
 
-    final routeLabel =
-        _selectedRouteLabel;
+  void _applyJourney() {
+    _stopRequest++;
+    _loadingStops = false;
+    _clearTimes();
+    final option = _selectedJourneyOption;
+    _selectedStop = option?.boardingStop;
+    _stops = [];
+    _stopError = null;
+    if (_selectedStop != null && option != null) {
+      _departure = FeedbackDeparture(
+        tripId: option.tripId,
+        seconds: option.departureSeconds,
+      );
+    } else if (option != null) {
+      _loadStops();
+    }
+  }
 
-    if (routeId == null ||
-        routeLabel == null) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Please select a route first.',
+  Future<void> _loadStops() async {
+    final route = _selectedRouteId;
+    final request = ++_stopRequest;
+    setState(() {
+      _selectedStop = null;
+      _stops = [];
+      _stopError = null;
+      _loadingStops = route != null;
+      _clearTimes();
+    });
+    if (route == null) return;
+    try {
+      final rows = await _schedule.loadRouteStops(
+        route,
+        tripId: _selectedJourneyOption?.tripId,
+      );
+      if (!mounted || request != _stopRequest) return;
+      setState(() => _stops = rows);
+    } on Object {
+      if (mounted && request == _stopRequest) {
+        setState(
+          () => _stopError = 'Unable to load related stops. Please try again.',
+        );
+      }
+    } finally {
+      if (mounted && request == _stopRequest) {
+        setState(() => _loadingStops = false);
+      }
+    }
+  }
+
+  Future<void> _loadTimes() async {
+    final route = _selectedRouteId;
+    final stop = _selectedStop;
+    final date = _serviceDate;
+    _clearTimes();
+    final request = _timeRequest;
+    setState(() => _loadingTimes = route != null && stop != null);
+    if (route == null || stop == null) return;
+    try {
+      final rows = await _schedule.loadDepartures(
+        routeId: route,
+        stopId: stop.id,
+        serviceDate: date,
+        tripId: _selectedJourneyOption?.tripId,
+      );
+      if (!mounted || request != _timeRequest) return;
+      setState(() {
+        _departures = rows;
+        if (widget.hasJourneyContext) {
+          final exact = rows.where(
+            (r) => r.seconds == _selectedJourneyOption?.departureSeconds,
+          );
+          if (exact.isNotEmpty) {
+            _departure = exact.first;
+          } else if (rows.length == 1) {
+            _departure = rows.first;
+          } else if (rows.length > 1) {
+            _timeError =
+                'This trip visits the stop more than once. Reopen the report from the boarding journey.';
+          }
+        }
+      });
+    } on Object {
+      if (mounted && request == _timeRequest) {
+        setState(
+          () => _timeError =
+              'Unable to load scheduled departures. Please try again.',
+        );
+      }
+    } finally {
+      if (mounted && request == _timeRequest) {
+        setState(() => _loadingTimes = false);
+      }
+    }
+  }
+
+  Future<void> _pickServiceDate() async {
+    final date = await showDatePicker(
+      context: context,
+      initialDate: _serviceDate,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+    );
+    if (!mounted || date == null) return;
+    setState(() => _serviceDate = date);
+    _loadTimes();
+  }
+
+  Widget _stopAndScheduleFields() => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      if (_fixedStop)
+        Card(
+          child: ListTile(
+            title: const Text('Related Bus Stop'),
+            subtitle: Text('${_selectedStop!.name} (${_selectedStop!.id})'),
+          ),
+        )
+      else
+        DropdownButtonFormField<String>(
+          key: ValueKey('report-stop-$_selectedRouteId-${_selectedStop?.id}'),
+          initialValue: _selectedStop?.id,
+          isExpanded: true,
+          decoration: const InputDecoration(
+            labelText: 'Related Bus Stop',
+            border: OutlineInputBorder(),
+          ),
+          hint: Text(
+            _selectedRouteId == null
+                ? 'Select a route first'
+                : 'Select related bus stop',
+          ),
+          items: [
+            for (final stop in _stops)
+              DropdownMenuItem(
+                value: stop.id,
+                child: Text(
+                  '${stop.name} (${stop.id})',
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+          ],
+          onChanged: _submitting || _loadingStops || _stops.isEmpty
+              ? null
+              : (id) {
+                  setState(
+                    () => _selectedStop = _stops.firstWhere((s) => s.id == id),
+                  );
+                  _loadTimes();
+                },
+        ),
+      if (_loadingStops) const LinearProgressIndicator(),
+      if (_stopError != null) ...[
+        Text(_stopError!),
+        TextButton(
+          onPressed: _loadStops,
+          child: const Text('Retry related stops'),
+        ),
+      ] else if (!_fixedStop &&
+          _selectedRouteId != null &&
+          !_loadingStops &&
+          _stops.isEmpty)
+        const Text('No related stops found for this route.'),
+      const SizedBox(height: 16),
+      if (widget.hasJourneyContext)
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              'Service Date: ${MaterialLocalizations.of(context).formatMediumDate(_serviceDate)}, ${_serviceDate.year}'
+              '\nScheduled departure: ${_departureSeconds == null ? 'Select a journey leg and related stop' : feedbackDepartureLabel(_departureSeconds!)}',
+            ),
+          ),
+        )
+      else ...[
+        OutlinedButton.icon(
+          key: const Key('report-service-date'),
+          onPressed: _submitting ? null : _pickServiceDate,
+          icon: const Icon(Icons.calendar_today_outlined),
+          label: Text(
+            'Service Date: ${MaterialLocalizations.of(context).formatMediumDate(_serviceDate)}, ${_serviceDate.year}',
           ),
         ),
-      );
+        const SizedBox(height: 16),
+        DropdownButtonFormField<int>(
+          key: ValueKey('report-time-$_timeRequest-${_departure?.seconds}'),
+          initialValue: _departure?.seconds,
+          isExpanded: true,
+          decoration: const InputDecoration(
+            labelText: 'Scheduled Time',
+            border: OutlineInputBorder(),
+          ),
+          hint: Text(
+            _selectedStop == null
+                ? 'Select a route and stop first'
+                : 'Select scheduled departure',
+          ),
+          items: [
+            for (final departure in _departures)
+              DropdownMenuItem(
+                value: departure.seconds,
+                child: Text(feedbackDepartureLabel(departure.seconds)),
+              ),
+          ],
+          onChanged: _submitting || _loadingTimes || _departures.isEmpty
+              ? null
+              : (seconds) {
+                  setState(() {
+                    _departure = _departures.firstWhere(
+                      (d) => d.seconds == seconds,
+                    );
+                    _issueType = null;
+                  });
+                },
+        ),
+      ],
+      if (_loadingTimes) const LinearProgressIndicator(),
+      if (_timeError != null) ...[
+        Text(_timeError!),
+        TextButton(
+          onPressed: _loadTimes,
+          child: const Text('Retry scheduled departures'),
+        ),
+      ] else if (!_fixedStop &&
+          _selectedStop != null &&
+          !_loadingTimes &&
+          _departures.isEmpty)
+        const Text(
+          'No scheduled departures found for this stop on the selected date.',
+        ),
+    ],
+  );
 
-      return;
-    }
-
-    final stop =
-    await Navigator.of(context)
-        .push<FeedbackStop>(
-      MaterialPageRoute(
-        builder: (_) =>
-            FeedbackStopSelectionPage(
-              repository:
-              widget.referenceRepository,
-              routeId:
-              routeId,
-              routeLabel:
-              routeLabel,
-              tripId:
-              _selectedTripId,
-            ),
-      ),
-    );
-
-    if (!mounted ||
-        stop == null) {
-      return;
-    }
-
-    setState(() {
-      _selectedStop = stop;
-    });
-  }
-
-  void _selectJourneyOption(
-      FeedbackJourneyOption? option,
-      ) {
+  void _selectJourneyOption(FeedbackJourneyOption? option) {
     if (option == null) {
       return;
     }
 
     setState(() {
-      _selectedJourneyOption =
-          option;
+      _selectedJourneyOption = option;
 
-      _selectedStop = null;
+      _applyJourney();
 
-      if (_issueType != null &&
-          !_availableIssueTypes
-              .contains(
-            _issueType,
-          )) {
+      if (_issueType != null && !_availableIssueTypes.contains(_issueType)) {
         _issueType = null;
       }
     });
   }
 
   Future<void> _submitFeedback() async {
-    if (_submitting) {
+    if (_submitting || _departure == null || _loadingTimes || _loadingStops) {
       return;
     }
 
-    if (!_formKey.currentState!
-        .validate()) {
+    if (!_formKey.currentState!.validate()) {
       return;
     }
 
-    final routeId =
-        _selectedRouteId;
+    final routeId = _selectedRouteId;
 
     if (routeId == null) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Please select a route.',
-          ),
-        ),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Please select a route.')));
 
       return;
     }
 
-    final stop =
-        _selectedStop;
+    final stop = _selectedStop;
 
     if (stop == null) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Please select a related bus stop.',
-          ),
-        ),
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select a related bus stop.')),
       );
 
       return;
     }
 
-    final issueType =
-        _issueType;
+    final issueType = _issueType;
 
-    if (issueType == null ||
-        !_availableIssueTypes
-            .contains(
-          issueType,
-        )) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Please select a valid problem type.',
-          ),
-        ),
+    if (issueType == null || !_availableIssueTypes.contains(issueType)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select a valid problem type.')),
       );
 
       return;
@@ -468,15 +549,10 @@ class _BusFeedbackPageState
     });
 
     try {
-      final valid =
-      await widget.referenceRepository
-          .stopBelongsToSelection(
-        routeId:
-        routeId,
-        stopId:
-        stop.id,
-        tripId:
-        _selectedTripId,
+      final valid = await widget.referenceRepository.stopBelongsToSelection(
+        routeId: routeId,
+        stopId: stop.id,
+        tripId: _selectedTripId,
       );
 
       if (!valid) {
@@ -485,11 +561,11 @@ class _BusFeedbackPageState
         }
 
         setState(() {
-          _selectedStop = null;
+          if (!_fixedStop) _selectedStop = null;
+          _clearTimes();
         });
 
-        ScaffoldMessenger.of(context)
-            .showSnackBar(
+        ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
               'The selected stop is not related to the selected route or journey.',
@@ -500,105 +576,83 @@ class _BusFeedbackPageState
         return;
       }
 
-      final user =
-          Supabase.instance.client.auth
-              .currentUser;
+      final choices = await _schedule.loadDepartures(
+        routeId: routeId,
+        stopId: stop.id,
+        serviceDate: _serviceDate,
+        tripId: _selectedTripId,
+      );
+      if (!choices.any((d) => d.seconds == _departureSeconds)) {
+        throw const BusFeedbackException(
+          'This scheduled departure is no longer available. Please select it again.',
+        );
+      }
+      final userId = widget.currentUserId != null
+          ? widget.currentUserId!()
+          : Supabase.instance.client.auth.currentUser?.id;
 
-      if (user == null) {
+      if (userId == null) {
         if (!mounted) {
           return;
         }
 
-        ScaffoldMessenger.of(context)
-            .showSnackBar(
+        ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text(
-              'Please log in before submitting feedback.',
-            ),
+            content: Text('Please log in before submitting feedback.'),
           ),
         );
 
         return;
       }
 
-      final feedback =
-      BusFeedback(
-        userId:
-        user.id,
-        routeId:
-        routeId,
-        tripId:
-        _selectedTripId,
-        stopId:
-        stop.id,
-        issueType:
-        issueType,
-        comment:
-        _commentController.text
-            .trim(),
-        createdAt:
-        DateTime.now().toUtc(),
+      final feedback = BusFeedback(
+        userId: userId,
+        serviceDate: _serviceDate,
+        scheduledDepartureSeconds: _departureSeconds,
+        routeId: routeId,
+        tripId: _selectedTripId,
+        stopId: stop.id,
+        issueType: issueType,
+        comment: _descriptionController.text.trim(),
+        createdAt: DateTime.now().toUtc(),
       );
 
-      await widget.repository
-          .submitFeedback(
-        feedback,
-      );
+      await widget.repository.submitFeedback(feedback);
 
       if (!mounted) {
         return;
       }
 
-      ScaffoldMessenger.of(context)
-          .showSnackBar(
+      ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text(
-            'Thank you. Your report has been submitted.',
-          ),
+          content: Text('Thank you. Your report has been submitted.'),
         ),
       );
 
       Navigator.of(context).pop();
-    } on FeedbackReferenceException catch (
-    error) {
+    } on FeedbackReferenceException catch (error) {
       if (!mounted) {
         return;
       }
 
-      ScaffoldMessenger.of(context)
-          .showSnackBar(
-        SnackBar(
-          content: Text(
-            error.message,
-          ),
-        ),
-      );
-    } on BusFeedbackException catch (
-    error) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
+    } on BusFeedbackException catch (error) {
       if (!mounted) {
         return;
       }
 
-      ScaffoldMessenger.of(context)
-          .showSnackBar(
-        SnackBar(
-          content: Text(
-            error.message,
-          ),
-        ),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
     } on Object {
       if (!mounted) {
         return;
       }
 
-      ScaffoldMessenger.of(context)
-          .showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Unable to submit feedback.',
-          ),
-        ),
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to submit feedback.')),
       );
     } finally {
       if (mounted) {
@@ -610,159 +664,88 @@ class _BusFeedbackPageState
   }
 
   @override
-  Widget build(
-      BuildContext context,
-      ) {
-    final issueTypes =
-        _availableIssueTypes;
+  Widget build(BuildContext context) {
+    final issueTypes = _availableIssueTypes;
 
-    final selectedIssue =
-    _issueType != null &&
-        issueTypes.contains(
-          _issueType,
-        )
+    final selectedIssue = _issueType != null && issueTypes.contains(_issueType)
         ? _issueType
         : null;
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text(
-          'Report Bus / Stop Issue',
-        ),
-      ),
+      appBar: AppBar(title: const Text('Report Bus / Stop Issue')),
       body: SafeArea(
         child: SingleChildScrollView(
-          padding:
-          const EdgeInsets.all(16),
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.all(16),
           child: Center(
             child: ConstrainedBox(
-              constraints:
-              const BoxConstraints(
-                maxWidth: 650,
-              ),
+              constraints: const BoxConstraints(maxWidth: 650),
               child: Form(
-                key:
-                _formKey,
+                key: _formKey,
                 child: Column(
-                  crossAxisAlignment:
-                  CrossAxisAlignment
-                      .stretch,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const Icon(
-                      Icons
-                          .report_problem_outlined,
-                      size: 56,
-                    ),
+                    const Icon(Icons.report_problem_outlined, size: 56),
 
-                    const SizedBox(
-                      height: 16,
-                    ),
+                    const SizedBox(height: 16),
 
                     Text(
                       'Report a Transit Problem',
-                      textAlign:
-                      TextAlign.center,
-                      style:
-                      Theme.of(context)
-                          .textTheme
-                          .headlineSmall,
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.headlineSmall,
                     ),
 
-                    const SizedBox(
-                      height: 8,
-                    ),
+                    const SizedBox(height: 8),
 
                     const Text(
                       'Choose the related route and bus stop, then describe the problem.',
-                      textAlign:
-                      TextAlign.center,
+                      textAlign: TextAlign.center,
                     ),
 
-                    const SizedBox(
-                      height: 24,
-                    ),
+                    const SizedBox(height: 24),
 
                     Card(
                       child: Padding(
-                        padding:
-                        const EdgeInsets
-                            .all(16),
+                        padding: const EdgeInsets.all(16),
                         child: Row(
-                          crossAxisAlignment:
-                          CrossAxisAlignment
-                              .start,
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Icon(
                               Icons.schedule,
-                              color:
-                              Theme.of(
-                                context,
-                              )
-                                  .colorScheme
-                                  .primary,
+                              color: Theme.of(context).colorScheme.primary,
                             ),
 
-                            const SizedBox(
-                              width: 12,
-                            ),
+                            const SizedBox(width: 12),
 
-                            Expanded(
-                              child: Text(
-                                _timingMessage,
-                              ),
-                            ),
+                            Expanded(child: Text(_timingMessage)),
                           ],
                         ),
                       ),
                     ),
 
-                    if (widget
-                        .journeyOptions
-                        .length >
-                        1) ...[
-                      const SizedBox(
-                        height: 16,
-                      ),
+                    if (widget.journeyOptions.length > 1) ...[
+                      const SizedBox(height: 16),
 
-                      DropdownButtonFormField<
-                          FeedbackJourneyOption>(
-                        value:
-                        _selectedJourneyOption,
-                        decoration:
-                        const InputDecoration(
-                          labelText:
-                          'Bus / Journey Leg',
-                          border:
-                          OutlineInputBorder(),
-                          prefixIcon:
-                          Icon(
-                            Icons
-                                .directions_bus_outlined,
-                          ),
+                      DropdownButtonFormField<FeedbackJourneyOption>(
+                        initialValue: _selectedJourneyOption,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Bus / Journey Leg',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.directions_bus_outlined),
                         ),
-                        items: widget
-                            .journeyOptions
-                            .map(
-                              (option) {
-                            return DropdownMenuItem<
-                                FeedbackJourneyOption>(
-                              value:
-                              option,
-                              child:
-                              Text(
-                                '${option.label} - ${option.routeLabel}',
-                              ),
-                            );
-                          },
-                        ).toList(),
-                        onChanged:
-                        _submitting
-                            ? null
-                            : _selectJourneyOption,
-                        validator:
-                            (value) {
-                          if (value ==
-                              null) {
+                        items: widget.journeyOptions.map((option) {
+                          return DropdownMenuItem<FeedbackJourneyOption>(
+                            value: option,
+                            child: Text(
+                              '${option.label} - ${option.routeLabel}',
+                            ),
+                          );
+                        }).toList(),
+                        onChanged: _submitting ? null : _selectJourneyOption,
+                        validator: (value) {
+                          if (value == null) {
                             return 'Please select the bus or journey leg.';
                           }
 
@@ -771,225 +754,86 @@ class _BusFeedbackPageState
                       ),
                     ],
 
-                    const SizedBox(
-                      height: 16,
-                    ),
+                    const SizedBox(height: 16),
 
-                    if (widget
-                        .hasJourneyContext)
+                    if (widget.hasJourneyContext)
                       Card(
                         child: ListTile(
-                          leading:
-                          const Icon(
-                            Icons.route,
-                          ),
-                          title:
-                          const Text(
-                            'Route',
-                          ),
+                          leading: const Icon(Icons.route),
+                          title: const Text('Route'),
                           subtitle: Text(
-                            _selectedRouteLabel ??
-                                'Select a journey leg',
+                            _selectedRouteLabel ?? 'Select a journey leg',
                           ),
                         ),
                       )
                     else
                       Card(
-                        clipBehavior:
-                        Clip.antiAlias,
+                        clipBehavior: Clip.antiAlias,
                         child: InkWell(
-                          onTap:
-                          _submitting
-                              ? null
-                              : _selectRoute,
-                          child:
-                          Padding(
-                            padding:
-                            const EdgeInsets
-                                .all(16),
-                            child:
-                            Row(
+                          onTap: _submitting ? null : _selectRoute,
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Row(
                               children: [
                                 Icon(
-                                  Icons
-                                      .route,
-                                  color:
-                                  Theme.of(
-                                    context,
-                                  )
-                                      .colorScheme
-                                      .primary,
+                                  Icons.route,
+                                  color: Theme.of(context).colorScheme.primary,
                                 ),
 
-                                const SizedBox(
-                                  width:
-                                  16,
-                                ),
+                                const SizedBox(width: 16),
 
                                 Expanded(
-                                  child:
-                                  Column(
+                                  child: Column(
                                     crossAxisAlignment:
-                                    CrossAxisAlignment
-                                        .start,
+                                        CrossAxisAlignment.start,
                                     children: [
-                                      const Text(
-                                        'Route',
-                                      ),
-                                      const SizedBox(
-                                        height:
-                                        4,
-                                      ),
+                                      const Text('Route'),
+                                      const SizedBox(height: 4),
                                       Text(
-                                        _selectedRoute
-                                            ?.displayName ??
+                                        _selectedRoute?.displayName ??
                                             'Tap to search and select a route',
                                       ),
                                     ],
                                   ),
                                 ),
 
-                                const Icon(
-                                  Icons
-                                      .chevron_right,
-                                ),
+                                const Icon(Icons.chevron_right),
                               ],
                             ),
                           ),
                         ),
                       ),
 
-                    const SizedBox(
-                      height: 12,
-                    ),
+                    const SizedBox(height: 12),
 
-                    Card(
-                      clipBehavior:
-                      Clip.antiAlias,
-                      child: InkWell(
-                        onTap:
-                        _submitting ||
-                            _selectedRouteId ==
-                                null
-                            ? null
-                            : _selectStop,
-                        child: Padding(
-                          padding:
-                          const EdgeInsets
-                              .all(16),
-                          child: Row(
-                            children: [
-                              Icon(
-                                Icons
-                                    .location_on_outlined,
-                                color:
-                                _selectedRouteId ==
-                                    null
-                                    ? Theme.of(
-                                  context,
-                                )
-                                    .disabledColor
-                                    : Theme.of(
-                                  context,
-                                )
-                                    .colorScheme
-                                    .primary,
-                              ),
+                    _stopAndScheduleFields(),
 
-                              const SizedBox(
-                                width: 16,
-                              ),
+                    const SizedBox(height: 20),
 
-                              Expanded(
-                                child:
-                                Column(
-                                  crossAxisAlignment:
-                                  CrossAxisAlignment
-                                      .start,
-                                  children: [
-                                    const Text(
-                                      'Related Bus Stop',
-                                    ),
-
-                                    const SizedBox(
-                                      height:
-                                      4,
-                                    ),
-
-                                    Text(
-                                      _selectedRouteId ==
-                                          null
-                                          ? 'Select a route first'
-                                          : _selectedStop
-                                          ?.name ??
-                                          'Tap to search related bus stops',
-                                    ),
-                                  ],
-                                ),
-                              ),
-
-                              const Icon(
-                                Icons
-                                    .chevron_right,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-
-                    const SizedBox(
-                      height: 20,
-                    ),
-
-                    DropdownButtonFormField<
-                        String>(
-                      value:
-                      selectedIssue,
+                    DropdownButtonFormField<String>(
+                      key: ValueKey('report-issue-${selectedIssue ?? "none"}'),
+                      initialValue: selectedIssue,
                       isExpanded: true,
-                      decoration:
-                      const InputDecoration(
-                        labelText:
-                        'Problem Type',
-                        border:
-                        OutlineInputBorder(),
-                        prefixIcon:
-                        Icon(
-                          Icons
-                              .error_outline,
-                        ),
+                      decoration: const InputDecoration(
+                        labelText: 'Problem Type',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.error_outline),
                       ),
-                      items:
-                      issueTypes.map(
-                            (issue) {
-                          return DropdownMenuItem<
-                              String>(
-                            value:
-                            issue,
-                            child:
-                            Text(
-                              issue,
-                            ),
-                          );
-                        },
-                      ).toList(),
-                      onChanged:
-                      _submitting
+                      items: issueTypes.map((issue) {
+                        return DropdownMenuItem<String>(
+                          value: issue,
+                          child: Text(issue),
+                        );
+                      }).toList(),
+                      onChanged: _submitting
                           ? null
                           : (value) {
-                        setState(
-                              () {
-                            _issueType =
-                                value;
-                          },
-                        );
-                      },
-                      validator:
-                          (value) {
-                        if (value ==
-                            null ||
-                            value
-                                .isEmpty) {
+                              setState(() {
+                                _issueType = value;
+                              });
+                            },
+                      validator: (value) {
+                        if (value == null || value.isEmpty) {
                           return 'Please select a problem type.';
                         }
 
@@ -997,42 +841,29 @@ class _BusFeedbackPageState
                       },
                     ),
 
-                    const SizedBox(
-                      height: 20,
-                    ),
+                    const SizedBox(height: 20),
 
                     TextFormField(
-                      controller:
-                      _commentController,
-                      enabled:
-                      !_submitting,
+                      controller: _descriptionController,
+                      enabled: !_submitting,
                       minLines: 4,
                       maxLines: 6,
                       maxLength: 500,
-                      decoration:
-                      const InputDecoration(
-                        labelText:
-                        'Describe the Problem',
+                      decoration: const InputDecoration(
+                        labelText: 'Describe the Problem',
                         hintText:
-                        'Include useful details such as the approximate time and what happened.',
-                        border:
-                        OutlineInputBorder(),
-                        alignLabelWithHint:
-                        true,
+                            'Describe what happened at the selected service.',
+                        border: OutlineInputBorder(),
+                        alignLabelWithHint: true,
                       ),
-                      validator:
-                          (value) {
-                        final text =
-                            value
-                                ?.trim() ??
-                                '';
+                      validator: (value) {
+                        final text = value?.trim() ?? '';
 
                         if (text.isEmpty) {
                           return 'Please describe the problem.';
                         }
 
-                        if (text.length <
-                            5) {
+                        if (text.length < 5) {
                           return 'Please provide more detail.';
                         }
 
@@ -1040,33 +871,25 @@ class _BusFeedbackPageState
                       },
                     ),
 
-                    const SizedBox(
-                      height: 24,
-                    ),
+                    const SizedBox(height: 24),
 
                     FilledButton.icon(
                       onPressed:
-                      _submitting
+                          _submitting ||
+                              _departure == null ||
+                              _selectedStop == null ||
+                              _loadingTimes ||
+                              _loadingStops
                           ? null
                           : _submitFeedback,
                       icon: _submitting
-                          ? const SizedBox
-                          .square(
-                        dimension:
-                        18,
-                        child:
-                        CircularProgressIndicator(
-                          strokeWidth:
-                          2,
-                        ),
-                      )
-                          : const Icon(
-                        Icons.send,
-                      ),
+                          ? const SizedBox.square(
+                              dimension: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.send),
                       label: Text(
-                        _submitting
-                            ? 'Submitting...'
-                            : 'Submit Report',
+                        _submitting ? 'Submitting...' : 'Submit Report',
                       ),
                     ),
                   ],

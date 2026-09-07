@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:government_transit_collector/features/bus_feedback/data/bus_feedback_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/saved_journey_repository.dart';
 import 'package:government_transit_collector/features/passenger_profile/data/travel_preferences_repository.dart';
 import 'package:government_transit_collector/features/passenger_profile/presentation/passenger_profile_page.dart';
@@ -18,11 +19,19 @@ class PassengerHomePage extends StatefulWidget {
   const PassengerHomePage({
     required this.profile,
     required this.repository,
+    this.recentSearchRepository,
+    this.preferencesRepository,
+    this.savedJourneyRepository,
+    this.feedbackRepository,
     super.key,
   });
 
   final AppProfile profile;
   final AuthRepository repository;
+  final RecentSearchRepository? recentSearchRepository;
+  final TravelPreferencesRepository? preferencesRepository;
+  final SavedJourneyRepository? savedJourneyRepository;
+  final BusFeedbackRepository? feedbackRepository;
 
   @override
   State<PassengerHomePage> createState() => _PassengerHomePageState();
@@ -31,13 +40,14 @@ class PassengerHomePage extends StatefulWidget {
 class _PassengerHomePageState extends State<PassengerHomePage> {
   bool _signingOut = false;
   AppProfile? _updatedProfile;
-  late final _recentRepository = SqliteRecentSearchRepository(
-    userId: widget.profile.userId,
-  );
-  late final _preferencesRepository = SqliteTravelPreferencesRepository(
-    userId: widget.profile.userId,
-  );
-  late final _savedRepository = SupabaseSavedJourneyRepository();
+  late final _recentRepository =
+      widget.recentSearchRepository ??
+      SqliteRecentSearchRepository(userId: widget.profile.userId);
+  late final _preferencesRepository =
+      widget.preferencesRepository ??
+      SqliteTravelPreferencesRepository(userId: widget.profile.userId);
+  late final _savedRepository =
+      widget.savedJourneyRepository ?? SupabaseSavedJourneyRepository();
 
   void _openDeparture([SavedJourney? journey]) {
     Navigator.of(context).push(
@@ -65,6 +75,7 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
           savedRepository: _savedRepository,
           recentRepository: _recentRepository,
           preferencesRepository: _preferencesRepository,
+          feedbackRepository: widget.feedbackRepository,
           onProfileUpdated: (profile) {
             if (mounted) setState(() => _updatedProfile = profile);
           },
@@ -101,6 +112,11 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
         title: const Text('Government Transit Collector'),
         actions: [
           IconButton(
+            tooltip: 'My Travel Profile',
+            onPressed: _signingOut ? null : _openProfile,
+            icon: const Icon(Icons.person_outline),
+          ),
+          IconButton(
             tooltip: 'Sign out',
             onPressed: _signingOut ? null : _logout,
             icon: _signingOut
@@ -125,13 +141,6 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
             const SizedBox(height: 8),
             Text('Welcome, ${(_updatedProfile ?? widget.profile).displayName}'),
             const SizedBox(height: 32),
-            _PlaceholderCard(
-              icon: Icons.person_outline,
-              title: 'My Travel Profile',
-              description: 'Saved journeys, nearby radius and recent searches.',
-              onTap: _openProfile,
-            ),
-            const SizedBox(height: 16),
             _PlaceholderCard(
               icon: Icons.departure_board,
               title: 'Departure Recommendation',

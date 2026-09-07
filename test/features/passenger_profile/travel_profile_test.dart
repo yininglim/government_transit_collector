@@ -142,18 +142,24 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.text('Rider'), findsOneWidget);
-      expect(find.text('rider@example.test'), findsOneWidget);
+      expect(find.text('Rider'), findsNWidgets(2));
+      expect(find.text('rider@example.test'), findsNWidgets(2));
       expect(find.byType(TextField), findsOneWidget);
       await tester.enterText(find.byType(TextField), 'New Rider');
       await tester.tap(find.text('Update Name'));
       await tester.pumpAndSettle();
       expect(updated?.fullName, 'New Rider');
       await tester.ensureVisible(find.text('500 m'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('500 m'));
       await tester.pumpAndSettle();
       expect(prefs.radius, 500);
-      await tester.ensureVisible(find.text('College'));
+      await tester.scrollUntilVisible(
+        find.text('College'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
       expect(find.text('Stop A → Stop B'), findsOneWidget);
       await tester.tap(find.byTooltip('Delete College'));
       await tester.pumpAndSettle();
@@ -162,7 +168,12 @@ void main() {
       expect(saved.rows, isEmpty);
       await tester.pump(const Duration(seconds: 5));
       await tester.pumpAndSettle();
-      await tester.ensureVisible(find.text('Clear History'));
+      await tester.scrollUntilVisible(
+        find.text('Clear History'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Clear History'));
       await tester.pumpAndSettle();
       expect(recent.rows, isEmpty);
@@ -199,7 +210,12 @@ void main() {
     );
     await tester.tap(find.text('Open'));
     await tester.pumpAndSettle();
-    await tester.ensureVisible(find.text('College'));
+    await tester.scrollUntilVisible(
+      find.text('College'),
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
     await tester.tap(find.text('College'));
     await tester.pumpAndSettle();
     expect(selected?.origin?.id, 'a');

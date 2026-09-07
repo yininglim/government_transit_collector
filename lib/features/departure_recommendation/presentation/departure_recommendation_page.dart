@@ -597,6 +597,10 @@ class _DepartureRecommendationPageState
             recommendation.routeShortName,
           ),
           tripId: recommendation.tripId,
+          boardingStop: FeedbackStop(
+            id: recommendation.originStopId,
+            name: _origin?.name ?? recommendation.originStopId,
+          ),
           departureSeconds: recommendation.departureSeconds,
         ),
       );
@@ -612,6 +616,10 @@ class _DepartureRecommendationPageState
             recommendation.firstRouteShortName,
           ),
           tripId: recommendation.firstTripId,
+          boardingStop: FeedbackStop(
+            id: recommendation.originStopId,
+            name: _origin?.name ?? recommendation.originStopId,
+          ),
           departureSeconds: recommendation.departureSeconds,
         ),
       );
@@ -625,7 +633,11 @@ class _DepartureRecommendationPageState
             recommendation.secondRouteShortName,
           ),
           tripId: recommendation.secondTripId,
-          departureSeconds: recommendation.departureSeconds,
+          boardingStop: FeedbackStop(
+            id: recommendation.transferStopId,
+            name: recommendation.transferStopName,
+          ),
+          departureSeconds: recommendation.secondDepartureSeconds,
         ),
       );
     }

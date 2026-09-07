@@ -1,3 +1,5 @@
+import 'package:government_transit_collector/features/bus_feedback/data/bus_feedback_repository.dart';
+import 'my_reports_section.dart';
 import 'package:flutter/material.dart';
 import 'package:government_transit_collector/features/authentication/data/auth_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/recent_journey_search.dart';
@@ -14,8 +16,10 @@ class PassengerProfilePage extends StatefulWidget {
     required this.recentRepository,
     required this.preferencesRepository,
     required this.onProfileUpdated,
+    this.feedbackRepository,
   });
   final AppProfile profile;
+  final BusFeedbackRepository? feedbackRepository;
   final AuthRepository authRepository;
   final SavedJourneyRepository savedRepository;
   final RecentSearchRepository recentRepository;
@@ -27,6 +31,7 @@ class PassengerProfilePage extends StatefulWidget {
 
 class _PassengerProfilePageState extends State<PassengerProfilePage> {
   late final TextEditingController _name;
+  late String _displayName;
   List<SavedJourney>? _saved;
   List<RecentJourneySearch>? _recent;
   String? _savedError, _recentError, _preferenceError;
@@ -37,6 +42,7 @@ class _PassengerProfilePageState extends State<PassengerProfilePage> {
   void initState() {
     super.initState();
     _name = TextEditingController(text: widget.profile.fullName);
+    _displayName = widget.profile.displayName;
     _loadSaved();
     _loadRecent();
     _loadRadius();
@@ -126,6 +132,7 @@ class _PassengerProfilePageState extends State<PassengerProfilePage> {
     try {
       final profile = await widget.authRepository.updateFullName(_name.text);
       if (!mounted) return;
+      setState(() => _displayName = profile.displayName);
       widget.onProfileUpdated(profile);
       _message('Name updated.');
     } on Object catch (error) {
@@ -176,100 +183,191 @@ class _PassengerProfilePageState extends State<PassengerProfilePage> {
     }
   }
 
-  Widget _title(String text) => Padding(
-    padding: const EdgeInsets.only(top: 24, bottom: 8),
-    child: Text(text, style: Theme.of(context).textTheme.titleLarge),
-  );
+  Widget _section(String title, IconData icon, List<Widget> children) =>
+      Padding(
+        padding: const EdgeInsets.only(top: 24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  icon,
+                  color: Theme.of(context).colorScheme.primary,
+                  size: 22,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Card(
+              margin: EdgeInsets.zero,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: children,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(title: const Text('My Travel Profile')),
     body: SafeArea(
-      child: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          _title('Account Information'),
-          TextField(
-            controller: _name,
-            maxLength: 100,
-            decoration: const InputDecoration(labelText: 'Full Name'),
-          ),
-          FilledButton(
-            onPressed: _savingName ? null : _saveName,
-            child: Text(_savingName ? 'Saving…' : 'Update Name'),
-          ),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Email (read-only)'),
-            subtitle: Text(widget.profile.email ?? 'No email'),
-          ),
-          _title('Travel Preferences'),
-          const Text('Default Nearby Stop Radius'),
-          Wrap(
-            spacing: 8,
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 700),
+          child: ListView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(16, 24, 16, 32),
             children: [
-              for (final radius in [500, 1000, 2000])
-                ChoiceChip(
-                  label: Text(radius == 500 ? '500 m' : '${radius ~/ 1000} km'),
-                  selected: radius == _radius,
-                  onSelected: _savingRadius ? null : (_) => _saveRadius(radius),
+              Center(
+                child: CircleAvatar(
+                  radius: 32,
+                  backgroundColor: Theme.of(
+                    context,
+                  ).colorScheme.primaryContainer,
+                  child: Icon(
+                    Icons.person_outline,
+                    size: 36,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
                 ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                _displayName,
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.headlineSmall,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                widget.profile.email ?? 'No email',
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              _section('Account Information', Icons.person_outline, [
+                TextField(
+                  controller: _name,
+                  maxLength: 100,
+                  decoration: const InputDecoration(
+                    labelText: 'Full Name',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                FilledButton(
+                  onPressed: _savingName ? null : _saveName,
+                  child: Text(_savingName ? 'Saving…' : 'Update Name'),
+                ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Email (read-only)'),
+                  subtitle: Text(widget.profile.email ?? 'No email'),
+                ),
+              ]),
+              _section('Travel Preferences', Icons.tune, [
+                const Text('Default Nearby Stop Radius'),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    for (final radius in [500, 1000, 2000])
+                      ChoiceChip(
+                        label: Text(
+                          radius == 500 ? '500 m' : '${radius ~/ 1000} km',
+                        ),
+                        selected: radius == _radius,
+                        onSelected: _savingRadius
+                            ? null
+                            : (_) => _saveRadius(radius),
+                      ),
+                  ],
+                ),
+                if (_preferenceError != null) Text(_preferenceError!),
+              ]),
+              _section('Saved Journeys', Icons.bookmark_outline, [
+                if (_savedError != null) ...[
+                  Text(_savedError!),
+                  TextButton(
+                    onPressed: _loadSaved,
+                    child: const Text('Retry saved journeys'),
+                  ),
+                ] else if (_saved == null)
+                  const Center(child: CircularProgressIndicator())
+                else if (_saved!.isEmpty)
+                  const Text(
+                    'Save an origin and destination in Departure Recommendation.',
+                  )
+                else
+                  for (final journey in _saved!)
+                    ListTile(
+                      title: Text(journey.name),
+                      subtitle: Text(
+                        journey.usable
+                            ? '${journey.origin!.name} → ${journey.destination!.name}'
+                            : 'A saved stop is no longer available. Please save a new journey.',
+                      ),
+                      onTap: journey.usable && !_deleting.contains(journey.id)
+                          ? () => Navigator.pop(context, journey)
+                          : null,
+                      trailing: IconButton(
+                        tooltip: 'Delete ${journey.name}',
+                        onPressed: _deleting.contains(journey.id)
+                            ? null
+                            : () => _delete(journey),
+                        icon: const Icon(Icons.delete_outline),
+                      ),
+                    ),
+              ]),
+              _section('Recent Searches', Icons.history, [
+                const Text(
+                  'Recent searches on this device, not completed trips.',
+                ),
+                TextButton(
+                  onPressed: _clear,
+                  child: const Text('Clear History'),
+                ),
+                if (_recentError != null) ...[
+                  Text(_recentError!),
+                  TextButton(
+                    onPressed: _loadRecent,
+                    child: const Text('Retry recent searches'),
+                  ),
+                ] else if (_recent == null)
+                  const Center(child: CircularProgressIndicator())
+                else if (_recent!.isEmpty)
+                  const Text('No recent searches.')
+                else
+                  for (final recent in _recent!)
+                    ListTile(
+                      title: Text(
+                        '${recent.originStopName} → ${recent.destinationStopName}',
+                      ),
+                    ),
+              ]),
+              _section('My Reports', Icons.receipt_long_outlined, [
+                MyReportsSection(
+                  userId: widget.profile.userId,
+                  repository: widget.feedbackRepository,
+                ),
+              ]),
             ],
           ),
-          if (_preferenceError != null) Text(_preferenceError!),
-          _title('Saved Journeys'),
-          if (_savedError != null) ...[
-            Text(_savedError!),
-            TextButton(
-              onPressed: _loadSaved,
-              child: const Text('Retry saved journeys'),
-            ),
-          ] else if (_saved == null)
-            const Center(child: CircularProgressIndicator())
-          else if (_saved!.isEmpty)
-            const Text(
-              'Save an origin and destination in Departure Recommendation.',
-            )
-          else
-            for (final journey in _saved!)
-              ListTile(
-                title: Text(journey.name),
-                subtitle: Text(
-                  journey.usable
-                      ? '${journey.origin!.name} → ${journey.destination!.name}'
-                      : 'A saved stop is no longer available. Please save a new journey.',
-                ),
-                onTap: journey.usable && !_deleting.contains(journey.id)
-                    ? () => Navigator.pop(context, journey)
-                    : null,
-                trailing: IconButton(
-                  tooltip: 'Delete ${journey.name}',
-                  onPressed: _deleting.contains(journey.id)
-                      ? null
-                      : () => _delete(journey),
-                  icon: const Icon(Icons.delete_outline),
-                ),
-              ),
-          _title('Recent Searches'),
-          const Text('Recent searches on this device, not completed trips.'),
-          TextButton(onPressed: _clear, child: const Text('Clear History')),
-          if (_recentError != null) ...[
-            Text(_recentError!),
-            TextButton(
-              onPressed: _loadRecent,
-              child: const Text('Retry recent searches'),
-            ),
-          ] else if (_recent == null)
-            const Center(child: CircularProgressIndicator())
-          else if (_recent!.isEmpty)
-            const Text('No recent searches.')
-          else
-            for (final recent in _recent!)
-              ListTile(
-                title: Text(
-                  '${recent.originStopName} → ${recent.destinationStopName}',
-                ),
-              ),
-        ],
+        ),
       ),
     ),
   );
