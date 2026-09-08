@@ -15,6 +15,7 @@ const maxPayloadPeakBuckets = 48;
 const maxPayloadTripVariants = 20;
 const maxPayloadStopsPerTrip = 100;
 const maxPayloadUncostableDepartures = 100;
+const maxBusFrequencyFeatureRoutes = 20;
 
 abstract interface class GeminiEvidencePayload {
   Map<String, dynamic> toJson();
@@ -157,6 +158,59 @@ class BusFrequencyGeminiPayloadBuilder {
       },
       'known_limitations': limitations,
       'evidence_references': references.toList()..sort(),
+    });
+  }
+
+  BusFrequencyGeminiEvidencePayload buildFeature(
+    List<BusFrequencyEvidence> evidence,
+  ) {
+    if (evidence.isEmpty || evidence.length > maxBusFrequencyFeatureRoutes) {
+      throw ArgumentError.value(evidence.length, 'evidence');
+    }
+    final first = evidence.first;
+    final routes = <Map<String, dynamic>>[];
+    final references = <String>[];
+    for (final routeEvidence in evidence) {
+      if (!routeEvidence.periodStart.isAtSameMomentAs(first.periodStart) ||
+          !routeEvidence.periodEnd.isAtSameMomentAs(first.periodEnd)) {
+        throw ArgumentError('All route evidence must use the same period.');
+      }
+      final single = build(routeEvidence).toJson();
+      final namespace = 'route.${Uri.encodeComponent(routeEvidence.routeId)}.';
+      Object? qualify(Object? value) {
+        if (value is List<dynamic>) return value.map(qualify).toList();
+        if (value is Map<String, dynamic>) {
+          return value.map((key, item) => MapEntry(key, qualify(item)));
+        }
+        if (value is String &&
+            (value.startsWith('scheduled.') ||
+                value.startsWith('operational.') ||
+                value.startsWith('feedback.'))) {
+          return '$namespace$value';
+        }
+        return value;
+      }
+
+      final routeReferences = (single['evidence_references'] as List<dynamic>)
+          .cast<String>()
+          .map((item) => '$namespace$item')
+          .toList(growable: false);
+      references.addAll(routeReferences);
+      routes.add({
+        'route': single['route'],
+        'scheduled_service': qualify(single['scheduled_service']),
+        'operational': qualify(single['operational']),
+        'feedback': qualify(single['feedback']),
+        'known_limitations': single['known_limitations'],
+        'evidence_references': routeReferences,
+      });
+    }
+    return BusFrequencyGeminiEvidencePayload({
+      'payload_type': 'bus_frequency_feature_evidence',
+      'analysis_period': _period(first.periodStart, first.periodEnd),
+      'eligible_route_ids': evidence.map((item) => item.routeId).toList(),
+      'routes': routes,
+      'evidence_references': references..sort(),
     });
   }
 }

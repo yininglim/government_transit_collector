@@ -19,14 +19,12 @@ class BusFrequencyRecommendationPage extends StatefulWidget {
     this.now,
     super.key,
   });
-
   final BusFrequencyDashboardSession? session;
   final BusFrequencyDashboardCoordinator? coordinator;
   final BusFrequencyRecommendationRepository? recommendationRepository;
   final BusFrequencyEvidenceRepository? evidenceRepository;
   final RoutePerformanceRepository? routeRepository;
   final DateTime Function()? now;
-
   @override
   State<BusFrequencyRecommendationPage> createState() =>
       _BusFrequencyRecommendationPageState();
@@ -38,28 +36,6 @@ class _BusFrequencyRecommendationPageState
   late final BusFrequencyDashboardSession _session;
   bool _screening = false;
   bool _analysing = false;
-  String? _retryingRouteId;
-
-  List<BusFrequencyDashboardCandidate> get _candidates => _session.candidates;
-  List<BusFrequencyDashboardExcludedRoute> get _excludedRoutes =>
-      _session.excludedRoutes;
-  List<BusFrequencyDashboardEntry> get _entries => _session.entries;
-  DateTime? get _periodStartUtc => _session.periodStartUtc;
-  DateTime? get _periodEndUtc => _session.periodEndUtc;
-  bool get _empty => _session.empty;
-  set _empty(bool value) => _session.empty = value;
-  bool get _setupFailure => _session.setupFailure;
-  set _setupFailure(bool value) => _session.setupFailure = value;
-  bool get _screeningComplete => _session.screeningComplete;
-  set _screeningComplete(bool value) => _session.screeningComplete = value;
-  int get _routesAnalysed => _session.routesAnalysed;
-  set _routesAnalysed(int value) => _session.routesAnalysed = value;
-  int get _completedInBatch => _session.completedInBatch;
-  set _completedInBatch(int value) => _session.completedInBatch = value;
-  int get _batchTotal => _session.batchTotal;
-  set _batchTotal(int value) => _session.batchTotal = value;
-  int get _nextCandidateIndex => _session.nextCandidateIndex;
-  set _nextCandidateIndex(int value) => _session.nextCandidateIndex = value;
 
   @override
   void initState() {
@@ -74,9 +50,8 @@ class _BusFrequencyRecommendationPageState
         );
     final period = _newPeriod();
     if (_session.periodStartUtc != null &&
-        !_session.matchesPeriod(period.startUtc, period.endUtc)) {
+        !_session.matchesPeriod(period.startUtc, period.endUtc))
       _session.clear();
-    }
     if (!_session.screeningComplete) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _prepareEvidence();
@@ -99,7 +74,7 @@ class _BusFrequencyRecommendationPageState
   }
 
   Future<void> _prepareEvidence() async {
-    if (_screening || _analysing || _retryingRouteId != null) return;
+    if (_screening || _analysing) return;
     final period = _newPeriod();
     setState(() {
       _session.begin(period.startUtc, period.endUtc);
@@ -112,92 +87,62 @@ class _BusFrequencyRecommendationPageState
       );
       if (!mounted) return;
       setState(() {
-        _candidates.addAll(result.candidates);
-        _excludedRoutes.addAll(result.excludedRoutes);
-        _routesAnalysed = result.routesAnalysed;
+        _session.candidates.addAll(result.candidates);
+        _session.excludedRoutes.addAll(result.excludedRoutes);
+        _session.routesAnalysed = result.routesAnalysed;
+        _session.screeningComplete = true;
+        _session.empty = result.candidates.isEmpty;
         _screening = false;
-        _screeningComplete = true;
-        _empty = result.candidates.isEmpty;
       });
     } on Object {
       if (!mounted) return;
       setState(() {
         _screening = false;
-        _setupFailure = true;
+        _session.setupFailure = true;
       });
     }
   }
 
-  Future<void> _generateRecommendations() async {
-    if (!_screeningComplete || _candidates.isEmpty || _entries.isNotEmpty) {
-      return;
-    }
-    await _analyseNextBatch();
-  }
-
-  Future<void> _analyseNextBatch() async {
-    final start = _periodStartUtc;
-    final end = _periodEndUtc;
-    if (_analysing ||
-        _retryingRouteId != null ||
+  Future<void> _generate() async {
+    final start = _session.periodStartUtc;
+    final end = _session.periodEndUtc;
+    if (_screening ||
+        _analysing ||
+        !_session.screeningComplete ||
+        _session.candidates.isEmpty ||
+        _session.recommendationResult != null ||
         start == null ||
-        end == null) {
+        end == null)
       return;
-    }
-    final remaining = _candidates.skip(_nextCandidateIndex).toList();
-    if (remaining.isEmpty) return;
-    final total = remaining.length.clamp(0, busFrequencyDashboardBatchSize);
-    setState(() {
-      _analysing = true;
-      _completedInBatch = 0;
-      _batchTotal = total;
-    });
-    await _coordinator.analyseBatch(
-      candidates: remaining,
+    setState(() => _analysing = true);
+    final result = await _coordinator.analyse(
+      candidates: _session.candidates,
       startUtc: start,
       endExclusiveUtc: end,
-      onCompleted: (completed, batchTotal, entry) {
-        if (!mounted) return;
-        setState(() {
-          _entries.add(entry);
-          _completedInBatch = completed;
-          _batchTotal = batchTotal;
-          _nextCandidateIndex++;
-        });
-      },
     );
     if (!mounted) return;
-    setState(() => _analysing = false);
+    setState(() {
+      _session.recommendationResult = result;
+      _analysing = false;
+    });
   }
 
-  Future<void> _retry(BusFrequencyDashboardEntry entry) async {
-    if (_screening || _analysing || _retryingRouteId != null) return;
-    final start = _periodStartUtc;
-    final end = _periodEndUtc;
-    final candidate = _candidates
-        .where((item) => item.route.routeId == entry.route.routeId)
-        .firstOrNull;
-    if (start == null || end == null || candidate == null) return;
-    setState(() => _retryingRouteId = entry.route.routeId);
-    try {
-      final replacement = await _coordinator.retry(
-        candidate: candidate,
-        startUtc: start,
-        endExclusiveUtc: end,
-      );
-      if (!mounted) return;
-      final index = _entries.indexWhere(
-        (item) => item.route.routeId == entry.route.routeId,
-      );
-      if (index >= 0) setState(() => _entries[index] = replacement);
-    } on Object {
-      if (!mounted) return;
-    } finally {
-      if (mounted) setState(() => _retryingRouteId = null);
-    }
+  Future<void> _retry() async {
+    final start = _session.periodStartUtc;
+    final end = _session.periodEndUtc;
+    if (_screening || _analysing || start == null || end == null) return;
+    setState(() => _analysing = true);
+    final result = await _coordinator.retry(
+      candidates: _session.candidates,
+      startUtc: start,
+      endExclusiveUtc: end,
+    );
+    if (!mounted) return;
+    setState(() {
+      _session.recommendationResult = result;
+      _analysing = false;
+    });
   }
-
-  int get _remainingCount => _candidates.length - _nextCandidateIndex;
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -209,71 +154,77 @@ class _BusFrequencyRecommendationPageState
           Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _header(),
+              Text(
+                'Bus Frequency Recommendations',
+                style: Theme.of(context).textTheme.headlineSmall,
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Review deterministic service evidence before generating an AI recommendation.',
+              ),
               const SizedBox(height: 16),
-              _analysisCard(),
-              if (_screeningComplete) ...[
-                const SizedBox(height: 16),
-                _evidenceOverviewCard(),
-                const SizedBox(height: 12),
-                _generationCard(),
-              ],
-              if (_screening || _analysing) ...[
-                const SizedBox(height: 16),
-                const LinearProgressIndicator(key: Key('analysis-progress')),
-                const SizedBox(height: 8),
-                Text(
-                  _screening
-                      ? 'Screening routes using deterministic evidence…'
-                      : 'Analysing route ${(_completedInBatch + 1).clamp(1, _batchTotal)} of $_batchTotal',
-                  key: const Key('analysis-progress-label'),
-                  textAlign: TextAlign.center,
-                ),
-              ],
-              if (_setupFailure) ...[
-                const SizedBox(height: 16),
-                _messageCard(
-                  'Route evidence could not be prepared.',
-                  'Start a new analysis when the data service is available.',
-                ),
-              ],
-              if (_empty && _screeningComplete) ...[
-                const SizedBox(height: 16),
-                _messageCard(
-                  'No eligible routes',
-                  'No routes currently have enough deterministic evidence for AI frequency analysis over the past 30 days.',
-                ),
-              ],
-              if (_entries.isNotEmpty || _analysing) ...[
-                const SizedBox(height: 24),
-                Text(
-                  'Recommendation Results',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const SizedBox(height: 12),
-                for (final entry in _entries) ...[
-                  _resultCard(entry),
-                  const SizedBox(height: 12),
-                ],
-                Text(
-                  '${_entries.length} of ${_candidates.length} eligible routes analysed',
-                  key: const Key('analysed-count'),
-                ),
-                if (_remainingCount > 0) ...[
-                  const SizedBox(height: 12),
-                  FilledButton.icon(
-                    key: const Key('analyse-next-routes'),
-                    onPressed:
-                        _analysing || _screening || _retryingRouteId != null
-                        ? null
-                        : _analyseNextBatch,
-                    icon: const Icon(Icons.navigate_next),
-                    label: Text(
-                      'Analyse Next Routes ($_remainingCount remaining)',
+              if (_screening)
+                const Card(
+                  child: Padding(
+                    padding: EdgeInsets.all(20),
+                    child: Row(
+                      children: [
+                        CircularProgressIndicator(),
+                        SizedBox(width: 16),
+                        Expanded(
+                          child: Text('Preparing frequency evidence...'),
+                        ),
+                      ],
                     ),
+                  ),
+                )
+              else if (_session.setupFailure)
+                _messageCard(
+                  context,
+                  'Frequency evidence is temporarily unavailable.',
+                )
+              else if (_session.screeningComplete) ...[
+                _evidenceOverview(context),
+                const SizedBox(height: 16),
+                FilledButton.icon(
+                  key: const Key('generate-ai-recommendation'),
+                  onPressed:
+                      _session.candidates.isEmpty ||
+                          _session.recommendationResult != null ||
+                          _analysing
+                      ? null
+                      : _generate,
+                  icon: _analysing
+                      ? const SizedBox.square(
+                          dimension: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.auto_awesome),
+                  label: Text(
+                    _analysing
+                        ? 'Generating Recommendation...'
+                        : 'Generate AI Recommendation',
+                  ),
+                ),
+                if (_analysing) ...[
+                  const SizedBox(height: 12),
+                  const LinearProgressIndicator(key: Key('analysis-progress')),
+                ],
+                if (_session.recommendationResult != null) ...[
+                  const SizedBox(height: 24),
+                  _recommendationResult(
+                    context,
+                    _session.recommendationResult!,
                   ),
                 ],
               ],
+              const SizedBox(height: 24),
+              OutlinedButton.icon(
+                key: const Key('analyse-routes'),
+                onPressed: _screening || _analysing ? null : _prepareEvidence,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Start New Analysis'),
+              ),
             ],
           ),
         ],
@@ -281,393 +232,85 @@ class _BusFrequencyRecommendationPageState
     ),
   );
 
-  Widget _header() => Row(
-    children: [
-      Icon(
-        Icons.schedule,
-        size: 40,
-        color: Theme.of(context).colorScheme.primary,
-      ),
-      const SizedBox(width: 12),
-      Expanded(
+  Widget _evidenceOverview(BuildContext context) {
+    final evidence = _session.candidates.map((item) => item.evidence).toList();
+    return Card(
+      key: const Key('frequency-evidence-overview'),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              'Bus Frequency Recommendations',
+              'Frequency Evidence Coverage',
               style: Theme.of(context).textTheme.titleLarge,
             ),
-            const SizedBox(height: 4),
-            Text(
-              'Review evidence-grounded service actions across eligible routes.',
-              style: TextStyle(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ],
-        ),
-      ),
-    ],
-  );
-
-  Widget _analysisCard() => Card(
-    child: Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            'Analysis Period',
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
-          const SizedBox(height: 6),
-          const Text('Past 30 Days', key: Key('analysis-period')),
-          if (_screeningComplete || _setupFailure) ...[
-            const SizedBox(height: 16),
-            OutlinedButton.icon(
-              key: const Key('analyse-routes'),
-              onPressed: _screening || _analysing || _retryingRouteId != null
-                  ? null
-                  : _prepareEvidence,
-              icon: const Icon(Icons.refresh),
-              label: const Text('Start New Analysis'),
-            ),
-          ],
-        ],
-      ),
-    ),
-  );
-
-  Widget _evidenceOverviewCard() => Card(
-    key: const Key('frequency-evidence-overview'),
-    child: Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            'Frequency Evidence Coverage',
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
-          const SizedBox(height: 12),
-          _coverageItems([
-            ('Routes Analysed', '$_routesAnalysed'),
-            ('Eligible Routes', '${_candidates.length}'),
-            ('Limited / Excluded Routes', '${_excludedRoutes.length}'),
-            ('Scheduled Service', _scheduledCoverage),
-            ('Headway Evidence', _headwayCoverage),
-            ('Operational Evidence', _operationalCoverage),
-            ('Frequency-related Feedback', _feedbackCoverage),
-          ]),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              OutlinedButton(
-                key: const Key('view-evidence-details'),
-                onPressed: _showEvidenceDetails,
-                child: const Text('View Evidence Details'),
-              ),
-              if (_excludedRoutes.isNotEmpty)
-                OutlinedButton(
-                  key: const Key('view-limited-routes'),
-                  onPressed: _showLimitedRoutes,
-                  child: const Text('View Limited / Excluded Routes'),
-                ),
-            ],
-          ),
-        ],
-      ),
-    ),
-  );
-
-  Widget _generationCard() => Card(
-    child: Padding(
-      padding: const EdgeInsets.all(16),
-      child: FilledButton.icon(
-        key: const Key('generate-ai-recommendation'),
-        onPressed:
-            _screening ||
-                _analysing ||
-                _retryingRouteId != null ||
-                _candidates.isEmpty ||
-                _entries.isNotEmpty
-            ? null
-            : _generateRecommendations,
-        icon: const Icon(Icons.auto_awesome),
-        label: const Text('Generate AI Recommendation'),
-      ),
-    ),
-  );
-
-  Widget _coverageItems(List<(String, String)> items) => LayoutBuilder(
-    builder: (context, constraints) {
-      final width = constraints.maxWidth >= 560
-          ? (constraints.maxWidth - 12) / 2
-          : constraints.maxWidth;
-      return Wrap(
-        spacing: 12,
-        runSpacing: 8,
-        children: [
-          for (final item in items)
-            SizedBox(width: width, child: _detail(item.$1, item.$2)),
-        ],
-      );
-    },
-  );
-
-  List<BusFrequencyEvidence> get _retainedEvidence => [
-    ..._candidates.map((candidate) => candidate.evidence),
-    ..._excludedRoutes
-        .map((route) => route.evidence)
-        .whereType<BusFrequencyEvidence>(),
-  ];
-
-  String get _scheduledCoverage => _aggregateCoverage(
-    _retainedEvidence.map((evidence) {
-      final scheduled = evidence.scheduledService;
-      if (scheduled.status == ScheduledServiceEvidenceStatus.noDepartures ||
-          scheduled.scheduledDepartureCount == 0) {
-        return _EvidenceAvailability.missing;
-      }
-      return scheduled.status == ScheduledServiceEvidenceStatus.available
-          ? _EvidenceAvailability.available
-          : _EvidenceAvailability.limited;
-    }),
-  );
-
-  String get _headwayCoverage => _aggregateCoverage(
-    _retainedEvidence.map(
-      (evidence) =>
-          evidence.scheduledService.directionGroups.any(
-            (group) => group.headwaysSeconds.isNotEmpty,
-          )
-          ? _EvidenceAvailability.available
-          : _EvidenceAvailability.missing,
-    ),
-  );
-
-  String get _operationalCoverage => _aggregateCoverage(
-    _retainedEvidence.map((evidence) {
-      final operational = evidence.operational;
-      return operational.peakOperationSummary.observationCount > 0 ||
-              operational.routePerformanceSummary.totalObservations > 0
-          ? _EvidenceAvailability.available
-          : _EvidenceAvailability.missing;
-    }),
-  );
-
-  String get _feedbackCoverage => _aggregateCoverage([
-    for (var index = 0; index < _retainedEvidence.length; index++)
-      _EvidenceAvailability.available,
-  ]);
-
-  String _aggregateCoverage(Iterable<_EvidenceAvailability> values) {
-    final coverage = values.toList(growable: false);
-    if (coverage.isEmpty) return 'Missing';
-    if (coverage.length < _routesAnalysed) return 'Limited';
-    if (coverage.every((value) => value == _EvidenceAvailability.available)) {
-      return 'Available';
-    }
-    if (coverage.every((value) => value == _EvidenceAvailability.missing)) {
-      return 'Missing';
-    }
-    return 'Limited';
-  }
-
-  Future<void> _showEvidenceDetails() => showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    builder: (context) => DraggableScrollableSheet(
-      expand: false,
-      initialChildSize: 0.8,
-      builder: (context, controller) => ListView(
-        key: const Key('frequency-evidence-details'),
-        controller: controller,
-        padding: const EdgeInsets.all(24),
-        children: [
-          Text(
-            'Frequency Evidence Details',
-            style: Theme.of(context).textTheme.titleLarge,
-          ),
-          const SizedBox(height: 8),
-          const Text('Analysis Period: Past 30 Days'),
-          const SizedBox(height: 16),
-          for (final evidence in _retainedEvidence) ...[
-            _evidenceRouteCard(evidence),
             const SizedBox(height: 12),
-          ],
-          if (_retainedEvidence.isEmpty)
-            const Text('No deterministic route evidence is available.'),
-        ],
-      ),
-    ),
-  );
-
-  Widget _evidenceRouteCard(BusFrequencyEvidence evidence) {
-    final scheduled = evidence.scheduledService;
-    final peak = evidence.operational.peakOperationSummary;
-    final performance = evidence.operational.routePerformanceSummary;
-    final headways = scheduled.directionGroups
-        .expand((group) => group.headwaysSeconds)
-        .toList(growable: false);
-    final limitations = <String>[
-      if (scheduled.status != ScheduledServiceEvidenceStatus.available)
-        'Scheduled service is ${scheduled.status.name}.',
-      if (!scheduled.hasCompleteDirectionData)
-        'Direction-level scheduled service is incomplete.',
-      if (scheduled.incompleteTripIds.isNotEmpty)
-        '${scheduled.incompleteTripIds.length} scheduled trips are incomplete.',
-      if (peak.hasLimitedCoverage) 'Peak-operation coverage is limited.',
-      if (!peak.hasReliablePeak) 'No reliable peak period was established.',
-      if (performance.completeTrips.isEmpty)
-        'No sufficiently covered route-performance trips are available.',
-      if (evidence.feedback.totalRecordCount == 0)
-        'Zero feedback records do not confirm that service has no problems.',
-    ];
-    return Card(
-      margin: EdgeInsets.zero,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              scheduled.route.displayName,
-              style: Theme.of(context).textTheme.titleMedium,
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                _metric('Analysis Period', 'Past 30 Days'),
+                _metric('Routes Analysed', '${_session.routesAnalysed}'),
+                _metric('Eligible Routes', '${_session.candidates.length}'),
+                _metric(
+                  'Limited / Excluded Routes',
+                  '${_session.excludedRoutes.length}',
+                ),
+              ],
             ),
-            _detail(
-              'Scheduled Departures',
-              '${scheduled.scheduledDepartureCount}',
-            ),
-            _detail('Scheduled Service Status', scheduled.status.name),
-            _detail('Headway Observations', '${headways.length}'),
-            if (headways.isNotEmpty)
-              _detail(
-                'Headway Range',
-                '${headways.reduce((a, b) => a < b ? a : b)}–'
-                    '${headways.reduce((a, b) => a > b ? a : b)} seconds',
+            const SizedBox(height: 16),
+            _coverageRow(
+              'Scheduled Service',
+              _coverage(
+                evidence,
+                (item) =>
+                    item.scheduledService.status ==
+                    ScheduledServiceEvidenceStatus.available,
               ),
-            _detail('Peak-operation Observations', '${peak.observationCount}'),
-            _detail(
-              'Route-performance Observations',
-              '${performance.totalObservations}',
             ),
-            _detail(
-              'Sufficiently Covered Trips',
-              '${performance.completeTrips.length}',
-            ),
-            _detail(
-              'Frequency-related Feedback',
-              '${evidence.feedback.frequencyRelevantRecordCount}',
-            ),
-            if (limitations.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              _section('Known Limitations', limitations),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  Future<void> _showLimitedRoutes() => showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    builder: (context) => DraggableScrollableSheet(
-      expand: false,
-      initialChildSize: 0.7,
-      builder: (context, controller) => ListView(
-        key: const Key('limited-routes-details'),
-        controller: controller,
-        padding: const EdgeInsets.all(24),
-        children: [
-          Text(
-            'Limited / Excluded Routes',
-            style: Theme.of(context).textTheme.titleLarge,
-          ),
-          const SizedBox(height: 16),
-          for (final route in _excludedRoutes)
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      route.route.displayName,
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const SizedBox(height: 6),
-                    Text(_exclusionReasonLabel(route.reason)),
-                  ],
+            _coverageRow(
+              'Headway Evidence',
+              _coverage(
+                evidence,
+                (item) => item.scheduledService.directionGroups.any(
+                  (direction) => direction.headwaysSeconds.isNotEmpty,
                 ),
               ),
             ),
-        ],
-      ),
-    ),
-  );
-
-  Widget _resultCard(BusFrequencyDashboardEntry entry) {
-    final recommendation = entry.result.recommendation;
-    final failure =
-        entry.result.status ==
-            BusFrequencyRecommendationStatus.temporarilyUnavailable ||
-        entry.result.status ==
-            BusFrequencyRecommendationStatus.invalidAiResponse;
-    return Card(
-      key: Key('route-result-${entry.route.routeId}'),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              entry.route.displayName,
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              failure
-                  ? _routeFailureTitle(entry.result)
-                  : _actionLabel(recommendation!.action),
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
-            if (recommendation != null) ...[
-              const SizedBox(height: 4),
-              Text(
-                'Evidence: ${_sufficiencyLabel(recommendation.evidenceSufficiency)}',
+            _coverageRow(
+              'Operational Evidence',
+              _coverage(
+                evidence,
+                (item) =>
+                    item.operational.peakOperationSummary.observationCount >
+                        0 ||
+                    item.operational.routePerformanceSummary.totalObservations >
+                        0,
               ),
-              const SizedBox(height: 8),
-              Text(recommendation.summary),
-            ] else ...[
-              const SizedBox(height: 8),
-              Text(_failureMessage(entry.result.failure)),
-            ],
+            ),
+            _coverageRow(
+              'Frequency-related Feedback',
+              _coverage(
+                evidence,
+                (item) => item.feedback.frequencyRelevantRecordCount > 0,
+              ),
+            ),
             const SizedBox(height: 12),
             Wrap(
               spacing: 8,
+              runSpacing: 8,
               children: [
                 OutlinedButton(
-                  key: Key('view-details-${entry.route.routeId}'),
-                  onPressed: () => _showDetails(entry),
-                  child: const Text('View Details'),
+                  key: const Key('view-evidence-details'),
+                  onPressed: () => _showEvidenceDetails(context),
+                  child: const Text('View Evidence Details'),
                 ),
-                if (failure)
-                  TextButton.icon(
-                    key: Key('retry-${entry.route.routeId}'),
-                    onPressed: _retryingRouteId == null && !_analysing
-                        ? () => _retry(entry)
-                        : null,
-                    icon: _retryingRouteId == entry.route.routeId
-                        ? const SizedBox.square(
-                            dimension: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.refresh),
-                    label: const Text('Retry'),
+                if (_session.excludedRoutes.isNotEmpty)
+                  OutlinedButton(
+                    key: const Key('view-limited-routes'),
+                    onPressed: () => _showLimitedRoutes(context),
+                    child: const Text('View Limited / Excluded Routes'),
                   ),
               ],
             ),
@@ -677,178 +320,293 @@ class _BusFrequencyRecommendationPageState
     );
   }
 
-  Future<void> _showDetails(BusFrequencyDashboardEntry entry) =>
-      showModalBottomSheet<void>(
-        context: context,
-        isScrollControlled: true,
-        builder: (context) => DraggableScrollableSheet(
-          expand: false,
-          initialChildSize: 0.8,
-          builder: (context, controller) => ListView(
-            key: const Key('recommendation-details'),
-            controller: controller,
-            padding: const EdgeInsets.all(24),
+  Widget _recommendationResult(
+    BuildContext context,
+    BusFrequencyRecommendationResult result,
+  ) {
+    final synthesis = result.synthesis;
+    if (synthesis == null) {
+      return Card(
+        key: const Key('feature-recommendation-failure'),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(
-                'Recommendation Details',
-                style: Theme.of(context).textTheme.titleLarge,
+                result.status ==
+                        BusFrequencyRecommendationStatus.invalidAiResponse
+                    ? 'Invalid AI Response'
+                    : 'Recommendation Temporarily Unavailable',
+                style: Theme.of(context).textTheme.titleMedium,
               ),
-              const SizedBox(height: 16),
-              _detail('Route', entry.route.displayName),
-              _detail('Analysis Period', 'Past 30 Days'),
-              if (entry.result.recommendation case final recommendation?) ...[
-                _detail('Recommendation', _actionLabel(recommendation.action)),
-                _detail(
-                  'Evidence Sufficiency',
-                  _sufficiencyLabel(recommendation.evidenceSufficiency),
-                ),
-                const Divider(height: 32),
-                Text(recommendation.summary),
-                if (recommendation.rationale.isNotEmpty) ...[
-                  const SizedBox(height: 20),
-                  _section('Rationale', recommendation.rationale),
-                ],
-                if (recommendation.evidenceReferences.isNotEmpty) ...[
-                  const SizedBox(height: 20),
-                  _section(
-                    'Supporting Evidence',
-                    recommendation.evidenceReferences
-                        .map(
-                          (reference) =>
-                              '${_evidenceLabel(reference)} ($reference)',
-                        )
-                        .toList(),
-                  ),
-                ],
-                if (recommendation.limitations.isNotEmpty) ...[
-                  const SizedBox(height: 20),
-                  _section('Limitations', recommendation.limitations),
-                ],
-              ] else ...[
-                _detail('Recommendation', _routeFailureTitle(entry.result)),
-                const SizedBox(height: 12),
-                Text(_failureMessage(entry.result.failure)),
-              ],
+              const SizedBox(height: 8),
+              Text(_failureMessage(result.failure)),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                key: const Key('retry-feature-recommendation'),
+                onPressed: _analysing ? null : _retry,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Retry Recommendation'),
+              ),
             ],
           ),
         ),
       );
+    }
+    return Column(
+      key: const Key('grouped-recommendation-result'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          'Recommendation Results',
+          style: Theme.of(context).textTheme.titleLarge,
+        ),
+        const SizedBox(height: 8),
+        Text(synthesis.overallSummary),
+        const SizedBox(height: 12),
+        for (final group in synthesis.recommendationGroups) ...[
+          _groupCard(context, group),
+          const SizedBox(height: 12),
+        ],
+        if (synthesis.needsMoreEvidence != null)
+          _needsEvidenceCard(context, synthesis.needsMoreEvidence!),
+      ],
+    );
+  }
 
-  Widget _messageCard(String title, String body) => Card(
+  Widget _groupCard(
+    BuildContext context,
+    BusFrequencyRecommendationGroup group,
+  ) => Card(
+    key: Key('action-group-${group.action.name}'),
     child: Padding(
       padding: const EdgeInsets.all(16),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(title, style: Theme.of(context).textTheme.titleMedium),
+          Text(
+            _actionLabel(group.action),
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
           const SizedBox(height: 8),
-          Text(body),
+          Text(group.summary),
+          const SizedBox(height: 12),
+          for (final routeId in group.routeIds)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Text(
+                '• ${_routeDisplay(routeId)}',
+                key: Key('group-route-$routeId'),
+              ),
+            ),
         ],
       ),
     ),
   );
 
-  Widget _detail(String label, String value) => Padding(
-    padding: const EdgeInsets.only(top: 8),
-    child: LayoutBuilder(
-      builder: (context, constraints) {
-        final labelText = Text(
-          label,
-          style: const TextStyle(fontWeight: FontWeight.w600),
-        );
-        if (constraints.maxWidth < 320) {
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [labelText, const SizedBox(height: 2), Text(value)],
-          );
-        }
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(width: 140, child: labelText),
-            const SizedBox(width: 8),
-            Expanded(child: Text(value)),
-          ],
-        );
-      },
+  Widget _needsEvidenceCard(
+    BuildContext context,
+    BusFrequencyRecommendationGroup group,
+  ) => Card(
+    key: const Key('post-gemini-needs-evidence'),
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Needs More Evidence',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 8),
+          Text(group.summary),
+          const SizedBox(height: 8),
+          for (final routeId in group.routeIds)
+            Text('• ${_routeDisplay(routeId)}'),
+        ],
+      ),
     ),
   );
 
-  Widget _section(String title, List<String> items) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Text(title, style: Theme.of(context).textTheme.titleSmall),
-      const SizedBox(height: 6),
-      for (final item in items)
-        Padding(padding: const EdgeInsets.only(top: 4), child: Text('• $item')),
-    ],
+  String _routeDisplay(String routeId) =>
+      _session.candidates
+          .where((candidate) => candidate.route.routeId == routeId)
+          .map((candidate) => candidate.route.displayName)
+          .firstOrNull ??
+      routeId;
+
+  Widget _metric(String label, String value) => ConstrainedBox(
+    constraints: const BoxConstraints(minWidth: 135),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label),
+        Text(value, style: const TextStyle(fontWeight: FontWeight.w600)),
+      ],
+    ),
+  );
+
+  Widget _coverageRow(String label, String status) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 4),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(child: Text(label)),
+        const SizedBox(width: 12),
+        Flexible(
+          child: Text(
+            status,
+            textAlign: TextAlign.end,
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+        ),
+      ],
+    ),
+  );
+
+  String _coverage(
+    List<BusFrequencyEvidence> evidence,
+    bool Function(BusFrequencyEvidence) available,
+  ) {
+    if (evidence.isEmpty) return 'Missing';
+    final count = evidence.where(available).length;
+    if (count == evidence.length) return 'Available';
+    return count == 0 ? 'Missing' : 'Limited';
+  }
+
+  Future<void> _showEvidenceDetails(BuildContext context) =>
+      showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        builder: (context) => FractionallySizedBox(
+          heightFactor: .85,
+          child: ListView(
+            key: const Key('frequency-evidence-details'),
+            padding: const EdgeInsets.all(20),
+            children: [
+              Text(
+                'Frequency Evidence Details',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 12),
+              for (final candidate in _session.candidates)
+                _evidenceCard(context, candidate),
+            ],
+          ),
+        ),
+      );
+
+  Widget _evidenceCard(
+    BuildContext context,
+    BusFrequencyDashboardCandidate candidate,
+  ) {
+    final evidence = candidate.evidence;
+    final scheduled = evidence.scheduledService;
+    final headways = scheduled.directionGroups
+        .expand((direction) => direction.headwaysSeconds)
+        .length;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              candidate.route.displayName,
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            Text('Scheduled departures: ${scheduled.scheduledDepartureCount}'),
+            Text('Headway intervals: $headways'),
+            Text(
+              'Peak Operation observations: ${evidence.operational.peakOperationSummary.observationCount}',
+            ),
+            Text(
+              'Route Performance observations: ${evidence.operational.routePerformanceSummary.totalObservations}',
+            ),
+            Text(
+              'Frequency-related feedback: ${evidence.feedback.frequencyRelevantRecordCount}',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showLimitedRoutes(BuildContext context) =>
+      showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        builder: (context) => FractionallySizedBox(
+          heightFactor: .8,
+          child: ListView(
+            key: const Key('limited-routes-details'),
+            padding: const EdgeInsets.all(20),
+            children: [
+              Text(
+                'Limited / Excluded Routes',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 12),
+              for (final item in _session.excludedRoutes)
+                ListTile(
+                  title: Text(item.route.displayName),
+                  subtitle: Text(_exclusionReason(item.reason)),
+                ),
+            ],
+          ),
+        ),
+      );
+
+  Widget _messageCard(BuildContext context, String message) => Card(
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: Text(message, style: Theme.of(context).textTheme.bodyLarge),
+    ),
   );
 }
 
 String _actionLabel(BusFrequencyRecommendationAction action) =>
     switch (action) {
-      BusFrequencyRecommendationAction.increaseService => 'Increase Service',
-      BusFrequencyRecommendationAction.maintainService => 'Maintain Service',
-      BusFrequencyRecommendationAction.decreaseService => 'Decrease Service',
+      BusFrequencyRecommendationAction.increasePeakHourFrequency =>
+        'Increase Peak-Hour Frequency',
+      BusFrequencyRecommendationAction.maintainService =>
+        'Maintain Current Frequency',
+      BusFrequencyRecommendationAction.decreaseService => 'Decrease Frequency',
       BusFrequencyRecommendationAction.insufficientEvidence =>
-        'Insufficient Evidence',
+        'Needs More Evidence',
     };
 
-String _sufficiencyLabel(BusFrequencyEvidenceSufficiency value) =>
-    switch (value) {
-      BusFrequencyEvidenceSufficiency.sufficient => 'Sufficient',
-      BusFrequencyEvidenceSufficiency.limited => 'Limited',
-      BusFrequencyEvidenceSufficiency.insufficient => 'Insufficient',
-    };
-
-String _routeFailureTitle(BusFrequencyRecommendationResult result) =>
-    result.status == BusFrequencyRecommendationStatus.invalidAiResponse
-    ? 'Response Could Not Be Validated'
-    : 'Recommendation Temporarily Unavailable';
-
-String _failureMessage(BusFrequencyRecommendationFailure? failure) =>
-    switch (failure) {
-      BusFrequencyRecommendationFailure.timeout =>
-        'The request timed out. Retry manually when ready.',
-      BusFrequencyRecommendationFailure.network =>
-        'The AI service could not be reached.',
-      BusFrequencyRecommendationFailure.http =>
-        'The AI service returned an unavailable response.',
-      BusFrequencyRecommendationFailure.rateLimited =>
-        'The AI service rate limit was reached.',
-      BusFrequencyRecommendationFailure.authentication =>
-        'The AI service is unavailable with the current configuration.',
-      BusFrequencyRecommendationFailure.geminiNotConfigured =>
-        'AI recommendation is not configured.',
-      BusFrequencyRecommendationFailure.evidenceUnavailable =>
-        'Route evidence could not be prepared.',
-      _ => 'The AI response could not be validated. Please try again.',
-    };
-
-String _evidenceLabel(String reference) {
-  if (reference == 'scheduled.summary') return 'Scheduled service summary';
-  if (reference.startsWith('scheduled.direction.')) {
-    return 'Scheduled direction evidence';
-  }
-  return switch (reference) {
-    'operational.peak_operation' => 'Peak operation evidence',
-    'operational.route_performance' => 'Route performance evidence',
-    'feedback.bus_was_late' => 'Late bus feedback',
-    'feedback.bus_overcrowded' => 'Overcrowding feedback',
-    'feedback.bus_did_not_arrive' => 'Bus non-arrival feedback',
-    _ => 'Evidence reference',
-  };
-}
-
-enum _EvidenceAvailability { available, limited, missing }
-
-String _exclusionReasonLabel(
+String _exclusionReason(
   BusFrequencyDashboardExclusionReason reason,
 ) => switch (reason) {
   BusFrequencyDashboardExclusionReason.noScheduledDepartures =>
-    'No current scheduled departures are available.',
+    'No current scheduled departures.',
   BusFrequencyDashboardExclusionReason.noSupportingEvidence =>
     'No headway, operational observation, or relevant feedback evidence is available.',
   BusFrequencyDashboardExclusionReason.evidenceLoadingFailure =>
-    'Deterministic evidence could not be loaded.',
+    'Evidence could not be loaded.',
 };
+
+String _failureMessage(BusFrequencyRecommendationFailure? failure) =>
+    switch (failure) {
+      BusFrequencyRecommendationFailure.routeLimitExceeded =>
+        'The analysis contains more than 20 eligible routes.',
+      BusFrequencyRecommendationFailure.timeout =>
+        'The recommendation request timed out.',
+      BusFrequencyRecommendationFailure.rateLimited =>
+        'The recommendation service is busy. Try again later.',
+      BusFrequencyRecommendationFailure.authentication ||
+      BusFrequencyRecommendationFailure.geminiNotConfigured =>
+        'The recommendation service is not configured.',
+      BusFrequencyRecommendationFailure.invalidResponse ||
+      BusFrequencyRecommendationFailure.unknownRoute ||
+      BusFrequencyRecommendationFailure.unknownEvidenceReference ||
+      BusFrequencyRecommendationFailure.malformedResponse =>
+        'The response did not pass evidence validation.',
+      BusFrequencyRecommendationFailure.evidenceUnavailable =>
+        'The retained evidence is unavailable.',
+      BusFrequencyRecommendationFailure.network ||
+      BusFrequencyRecommendationFailure.http ||
+      null => 'The recommendation service could not complete the request.',
+    };

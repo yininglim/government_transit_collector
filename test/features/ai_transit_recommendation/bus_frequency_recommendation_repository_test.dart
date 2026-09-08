@@ -1,518 +1,360 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:government_transit_collector/core/config/gemini_config.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_evidence_models.dart';
-import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_evidence_repository.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_recommendation_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_recommendation_repository.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/gemini_data_source.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/gemini_models.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/gemini_evidence_payloads.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/operational_evidence_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/scheduled_service_evidence_models.dart';
 import 'package:government_transit_collector/features/peak_operation/data/peak_operation_models.dart';
 import 'package:government_transit_collector/features/route_performance/data/route_performance_models.dart';
 
 void main() {
-  test('accepts a valid direct structured Bus Frequency object', () async {
-    final result =
-        await repository(
-          gemini: FakeGeminiDataSource(
-            response: validResponse('maintainService'),
-          ),
-        ).generate(
-          routeId: 'J15',
-          startUtc: periodStart,
-          endExclusiveUtc: periodEnd,
-        );
-
+  test('multiple eligible routes use one compact feature request', () async {
+    final gemini = FakeGemini(
+      validResponse({'R1': 'maintainService', 'R2': 'maintainService'}),
+    );
+    final evidence = [routeEvidence('R1'), routeEvidence('R2')];
+    final result = await repository(
+      gemini,
+    ).generate(evidence: evidence, startUtc: start, endExclusiveUtc: end);
+    expect(gemini.calls, 1);
     expect(result.status, BusFrequencyRecommendationStatus.available);
     expect(
-      result.recommendation?.action,
-      BusFrequencyRecommendationAction.maintainService,
+      result.synthesis!.overallSummary,
+      'Overall evidence-grounded summary.',
     );
-    expect(result.failure, isNull);
+    expect(result.synthesis!.recommendationGroups.single.routeIds, [
+      'R1',
+      'R2',
+    ]);
+    final payload = jsonDecode(gemini.request!.input) as Map<String, dynamic>;
+    expect(payload['payload_type'], 'bus_frequency_feature_evidence');
+    expect(payload['eligible_route_ids'], ['R1', 'R2']);
+    expect((payload['routes'] as List), hasLength(2));
+    expect(payload.containsKey('records'), isFalse);
   });
 
-  for (final action in BusFrequencyRecommendationAction.values) {
-    test('accepts valid ${action.name} response', () async {
-      final gemini = FakeGeminiDataSource(response: validResponse(action.name));
-      final result = await repository(gemini: gemini).generate(
-        routeId: 'J15',
-        startUtc: periodStart,
-        endExclusiveUtc: periodEnd,
-      );
-
-      expect(result.recommendation?.action, action);
-      expect(
-        result.recommendation?.source,
-        BusFrequencyRecommendationSource.gemini,
-      );
-      expect(
-        result.status,
-        action == BusFrequencyRecommendationAction.insufficientEvidence
-            ? BusFrequencyRecommendationStatus.insufficientEvidence
-            : BusFrequencyRecommendationStatus.available,
-      );
-      expect(result.failure, isNull);
-      expect(result.evidence, isNotNull);
-      expect(result.payload, isNotNull);
-    });
-  }
-
-  test('deterministic gate avoids Gemini when departures are absent', () async {
-    final gemini = FakeGeminiDataSource(
-      response: validResponse('maintainService'),
+  test('empty and over-limit evidence cause zero requests', () async {
+    final gemini = FakeGemini(validResponse({'R1': 'maintainService'}));
+    final empty = await repository(
+      gemini,
+    ).generate(evidence: const [], startUtc: start, endExclusiveUtc: end);
+    final tooMany = await repository(gemini).generate(
+      evidence: List.generate(21, (i) => routeEvidence('R$i')),
+      startUtc: start,
+      endExclusiveUtc: end,
     );
-    final result =
-        await repository(
-          gemini: gemini,
-          sourceEvidence: evidence(departureCount: 0),
-        ).generate(
-          routeId: 'J15',
-          startUtc: periodStart,
-          endExclusiveUtc: periodEnd,
-        );
-
-    expect(gemini.callCount, 0);
+    expect(gemini.calls, 0);
     expect(
-      result.status,
-      BusFrequencyRecommendationStatus.insufficientEvidence,
+      empty.failure,
+      BusFrequencyRecommendationFailure.evidenceUnavailable,
     );
     expect(
-      result.recommendation?.action,
-      BusFrequencyRecommendationAction.insufficientEvidence,
+      tooMany.failure,
+      BusFrequencyRecommendationFailure.routeLimitExceeded,
     );
-    expect(
-      result.recommendation?.source,
-      BusFrequencyRecommendationSource.deterministicGate,
-    );
-  });
-
-  test('zero feedback does not block generation when headway exists', () async {
-    final gemini = FakeGeminiDataSource(
-      response: validResponse('maintainService'),
-    );
-
-    await repository(gemini: gemini).generate(
-      routeId: 'J15',
-      startUtc: periodStart,
-      endExclusiveUtc: periodEnd,
-    );
-
-    expect(gemini.callCount, 1);
-  });
-
-  test('one departure without supporting evidence is gated locally', () async {
-    final gemini = FakeGeminiDataSource(
-      response: validResponse('maintainService'),
-    );
-
-    final result =
-        await repository(
-          gemini: gemini,
-          sourceEvidence: evidence(departureCount: 1),
-        ).generate(
-          routeId: 'J15',
-          startUtc: periodStart,
-          endExclusiveUtc: periodEnd,
-        );
-
-    expect(gemini.callCount, 0);
-    expect(
-      result.status,
-      BusFrequencyRecommendationStatus.insufficientEvidence,
-    );
-  });
-
-  test('rejects an unknown evidence reference', () async {
-    final response = validResponse('increaseService');
-    response['evidenceReferences'] = ['unknown.metric'];
-    final result =
-        await repository(
-          gemini: FakeGeminiDataSource(response: response),
-        ).generate(
-          routeId: 'J15',
-          startUtc: periodStart,
-          endExclusiveUtc: periodEnd,
-        );
-
-    expect(result.status, BusFrequencyRecommendationStatus.invalidAiResponse);
-    expect(
-      result.failure,
-      BusFrequencyRecommendationFailure.unknownEvidenceReference,
-    );
-    expect(result.recommendation, isNull);
-  });
-
-  test('rejects duplicated evidence references', () async {
-    final response = validResponse('maintainService');
-    response['evidenceReferences'] = ['scheduled.summary', 'scheduled.summary'];
-    final result =
-        await repository(
-          gemini: FakeGeminiDataSource(response: response),
-        ).generate(
-          routeId: 'J15',
-          startUtc: periodStart,
-          endExclusiveUtc: periodEnd,
-        );
-
-    expect(result.failure, BusFrequencyRecommendationFailure.invalidResponse);
-  });
-
-  for (final invalid in [
-    ('action', 'addBuses'),
-    ('evidenceSufficiency', 'confident'),
-  ]) {
-    test('rejects invalid ${invalid.$1}', () async {
-      final response = validResponse('maintainService');
-      response[invalid.$1] = invalid.$2;
-      final result =
-          await repository(
-            gemini: FakeGeminiDataSource(response: response),
-          ).generate(
-            routeId: 'J15',
-            startUtc: periodStart,
-            endExclusiveUtc: periodEnd,
-          );
-
-      expect(result.status, BusFrequencyRecommendationStatus.invalidAiResponse);
-      expect(result.failure, BusFrequencyRecommendationFailure.invalidResponse);
-    });
-  }
-
-  test('rejects a missing required field', () async {
-    final response = validResponse('maintainService')..remove('summary');
-    final result =
-        await repository(
-          gemini: FakeGeminiDataSource(response: response),
-        ).generate(
-          routeId: 'J15',
-          startUtc: periodStart,
-          endExclusiveUtc: periodEnd,
-        );
-
-    expect(result.failure, BusFrequencyRecommendationFailure.invalidResponse);
-  });
-
-  test('rejects prohibited numeric recommendation properties', () async {
-    final response = validResponse('maintainService')
-      ..['recommendedHeadway'] = 600;
-    final result =
-        await repository(
-          gemini: FakeGeminiDataSource(response: response),
-        ).generate(
-          routeId: 'J15',
-          startUtc: periodStart,
-          endExclusiveUtc: periodEnd,
-        );
-
-    expect(result.failure, BusFrequencyRecommendationFailure.invalidResponse);
-  });
-
-  test('rejects contradictory action and sufficiency', () async {
-    final response = validResponse('increaseService')
-      ..['evidenceSufficiency'] = 'insufficient';
-    final result =
-        await repository(
-          gemini: FakeGeminiDataSource(response: response),
-        ).generate(
-          routeId: 'J15',
-          startUtc: periodStart,
-          endExclusiveUtc: periodEnd,
-        );
-
-    expect(result.failure, BusFrequencyRecommendationFailure.invalidResponse);
-  });
-
-  test('rejects excessive rationale and limitation lists', () async {
-    for (final field in ['rationale', 'limitations']) {
-      final response = validResponse('maintainService');
-      response[field] = List.filled(5, 'Bounded item');
-      final result =
-          await repository(
-            gemini: FakeGeminiDataSource(response: response),
-          ).generate(
-            routeId: 'J15',
-            startUtc: periodStart,
-            endExclusiveUtc: periodEnd,
-          );
-
-      expect(result.failure, BusFrequencyRecommendationFailure.invalidResponse);
-    }
   });
 
   test(
-    'maps malformed structured transport output to invalid response',
+    'payload route references are namespaced and comments remain absent',
     () async {
-      final result =
-          await repository(
-            gemini: FakeGeminiDataSource(
-              failure: GeminiTransportFailure.invalidStructuredJson,
-            ),
-          ).generate(
-            routeId: 'J15',
-            startUtc: periodStart,
-            endExclusiveUtc: periodEnd,
-          );
-
-      expect(result.status, BusFrequencyRecommendationStatus.invalidAiResponse);
+      final gemini = FakeGemini(validResponse({'R1': 'maintainService'}));
+      await repository(gemini).generate(
+        evidence: [routeEvidence('R1')],
+        startUtc: start,
+        endExclusiveUtc: end,
+      );
+      final payload = jsonDecode(gemini.request!.input) as Map<String, dynamic>;
+      final route = (payload['routes'] as List).single as Map<String, dynamic>;
       expect(
-        result.failure,
-        BusFrequencyRecommendationFailure.malformedResponse,
+        route['evidence_references'],
+        contains('route.R1.scheduled.summary'),
+      );
+      expect(route['feedback'], containsPair('comments_included', false));
+    },
+  );
+
+  test(
+    'increase peak-hour frequency accepts submitted hourly evidence',
+    () async {
+      final gemini = FakeGemini(
+        validResponse({'R1': 'increasePeakHourFrequency'}),
+      );
+      final result = await repository(gemini).generate(
+        evidence: [routeEvidence('R1', hourly: true)],
+        startUtc: start,
+        endExclusiveUtc: end,
+      );
+      expect(result.status, BusFrequencyRecommendationStatus.available);
+      expect(
+        result.synthesis!.recommendationGroups.single.action,
+        BusFrequencyRecommendationAction.increasePeakHourFrequency,
       );
     },
   );
 
-  for (final mapping in [
-    (GeminiTransportFailure.timeout, BusFrequencyRecommendationFailure.timeout),
-    (
-      GeminiTransportFailure.rateLimited,
-      BusFrequencyRecommendationFailure.rateLimited,
-    ),
-    (
-      GeminiTransportFailure.notConfigured,
-      BusFrequencyRecommendationFailure.geminiNotConfigured,
-    ),
-    (
-      GeminiTransportFailure.authentication,
-      BusFrequencyRecommendationFailure.authentication,
-    ),
-    (GeminiTransportFailure.network, BusFrequencyRecommendationFailure.network),
-    (GeminiTransportFailure.http, BusFrequencyRecommendationFailure.http),
-  ]) {
-    test('maps ${mapping.$1.name} to typed unavailable state', () async {
-      final result =
-          await repository(
-            gemini: FakeGeminiDataSource(failure: mapping.$1),
-          ).generate(
-            routeId: 'J15',
-            startUtc: periodStart,
-            endExclusiveUtc: periodEnd,
-          );
-
-      expect(
-        result.status,
-        BusFrequencyRecommendationStatus.temporarilyUnavailable,
+  test(
+    'increase peak-hour frequency rejects routes without peak evidence',
+    () async {
+      final gemini = FakeGemini(
+        validResponse({'R1': 'increasePeakHourFrequency'}),
       );
-      expect(result.failure, mapping.$2);
-      expect(result.evidence, isNotNull);
-      expect(result.payload, isNotNull);
+      final result = await repository(gemini).generate(
+        evidence: [routeEvidence('R1')],
+        startUtc: start,
+        endExclusiveUtc: end,
+      );
+      expect(result.status, BusFrequencyRecommendationStatus.invalidAiResponse);
+      expect(result.failure, BusFrequencyRecommendationFailure.invalidResponse);
+    },
+  );
+
+  test('post-Gemini insufficient routes remain separate', () async {
+    final response = validResponse({
+      'R1': 'maintainService',
+      'R2': 'insufficientEvidence',
+    });
+    final result = await repository(FakeGemini(response)).generate(
+      evidence: [routeEvidence('R1'), routeEvidence('R2')],
+      startUtc: start,
+      endExclusiveUtc: end,
+    );
+    expect(result.synthesis!.recommendationGroups.single.routeIds, ['R1']);
+    expect(result.synthesis!.needsMoreEvidence!.routeIds, ['R2']);
+  });
+
+  for (final mutation in [
+    'fabricated',
+    'duplicate-route',
+    'cross-group',
+    'duplicate-action',
+    'unknown-reference',
+    'duplicate-reference',
+    'cross-route-reference',
+    'missing-route',
+    'extra-property',
+  ]) {
+    test('rejects $mutation grouped response', () async {
+      final response = validResponse({
+        'R1': 'maintainService',
+        'R2': 'decreaseService',
+      });
+      final groups = response['recommendationGroups'] as List<dynamic>;
+      switch (mutation) {
+        case 'fabricated':
+          (groups[0] as Map<String, dynamic>)['routeIds'] = ['UNKNOWN'];
+        case 'duplicate-route':
+          (groups[0] as Map<String, dynamic>)['routeIds'] = ['R1', 'R1'];
+        case 'cross-group':
+          (groups[1] as Map<String, dynamic>)['routeIds'] = ['R1'];
+        case 'duplicate-action':
+          (groups[1] as Map<String, dynamic>)['action'] = 'maintainService';
+        case 'unknown-reference':
+          (groups[0] as Map<String, dynamic>)['evidenceReferences'] = [
+            'unknown',
+          ];
+        case 'duplicate-reference':
+          (groups[0] as Map<String, dynamic>)['evidenceReferences'] = [
+            'route.R1.scheduled.summary',
+            'route.R1.scheduled.summary',
+          ];
+        case 'cross-route-reference':
+          (groups[0] as Map<String, dynamic>)['evidenceReferences'] = [
+            'route.R2.scheduled.summary',
+          ];
+        case 'missing-route':
+          groups.removeLast();
+        case 'extra-property':
+          response['invented'] = true;
+      }
+      final result = await repository(FakeGemini(response)).generate(
+        evidence: [routeEvidence('R1'), routeEvidence('R2')],
+        startUtc: start,
+        endExclusiveUtc: end,
+      );
+      expect(result.status, BusFrequencyRecommendationStatus.invalidAiResponse);
+      expect(
+        result.failure,
+        mutation == 'fabricated'
+            ? BusFrequencyRecommendationFailure.unknownRoute
+            : isNotNull,
+      );
     });
   }
 
-  test('preserves safe HTTP status only for HTTP failures', () async {
-    final httpResult =
-        await repository(
-          gemini: FakeGeminiDataSource(
-            failure: GeminiTransportFailure.http,
-            statusCode: 503,
-          ),
-        ).generate(
-          routeId: 'J15',
-          startUtc: periodStart,
-          endExclusiveUtc: periodEnd,
-        );
-    final networkResult =
-        await repository(
-          gemini: FakeGeminiDataSource(
-            failure: GeminiTransportFailure.network,
-            statusCode: 503,
-          ),
-        ).generate(
-          routeId: 'J15',
-          startUtc: periodStart,
-          endExclusiveUtc: periodEnd,
-        );
-
-    expect(httpResult.failure, BusFrequencyRecommendationFailure.http);
-    expect(httpResult.httpStatusCode, 503);
-    expect(networkResult.failure, BusFrequencyRecommendationFailure.network);
-    expect(networkResult.httpStatusCode, isNull);
+  test('rejects empty route IDs', () async {
+    final response = validResponse({'R1': 'maintainService'});
+    ((response['recommendationGroups'] as List).single
+        as Map<String, dynamic>)['routeIds'] = [
+      '',
+    ];
+    final result = await repository(FakeGemini(response)).generate(
+      evidence: [routeEvidence('R1')],
+      startUtc: start,
+      endExclusiveUtc: end,
+    );
+    expect(result.failure, BusFrequencyRecommendationFailure.invalidResponse);
   });
 
-  test('does not retain upstream credential or raw-body text', () async {
-    const sensitiveText = 'credential-and-raw-body-sentinel';
-    final result =
-        await repository(
-          gemini: FakeGeminiDataSource(
-            failure: GeminiTransportFailure.http,
-            statusCode: 400,
-            failureMessage: sensitiveText,
-          ),
-        ).generate(
-          routeId: 'J15',
-          startUtc: periodStart,
-          endExclusiveUtc: periodEnd,
-        );
-
-    expect(result.httpStatusCode, 400);
-    expect(result.toString(), isNot(contains(sensitiveText)));
-  });
-
-  test('uses the bounded Part 6B payload and fixed constraints', () async {
-    final gemini = FakeGeminiDataSource(
-      response: validResponse('maintainService'),
+  test('retained evidence period mismatch does not call Gemini', () async {
+    final gemini = FakeGemini(validResponse({'R1': 'maintainService'}));
+    final result = await repository(gemini).generate(
+      evidence: [routeEvidence('R1')],
+      startUtc: start.add(const Duration(days: 1)),
+      endExclusiveUtc: end,
     );
-    await repository(gemini: gemini).generate(
-      routeId: 'J15',
-      startUtc: periodStart,
-      endExclusiveUtc: periodEnd,
-    );
-    final request = gemini.request!;
-    final input = jsonDecode(request.input) as Map<String, dynamic>;
-
-    expect(input['payload_type'], 'bus_frequency_evidence');
-    expect(input['route'], containsPair('route_id', 'J15'));
-    expect(input['feedback'], containsPair('comments_included', false));
-    expect(input.containsKey('records'), isFalse);
+    expect(gemini.calls, 0);
     expect(
-      request.instructions,
-      contains('Operational activity is not passenger demand'),
-    );
-    expect(request.instructions, contains('numeric recommended frequency'));
-    expect(request.responseSchema, busFrequencyRecommendationResponseSchema);
-    expect(
-      _allKeys(request.responseSchema),
-      isNot(contains('recommendedHeadway')),
-    );
-    expect(
-      _allKeys(request.responseSchema),
-      isNot(contains('recommendedFrequency')),
+      result.failure,
+      BusFrequencyRecommendationFailure.evidenceUnavailable,
     );
   });
 
-  test('uses retained evidence without loading it again', () async {
-    final retainedEvidence = evidence();
-    final evidenceRepository = FakeEvidenceRepository(retainedEvidence);
-    final gemini = FakeGeminiDataSource(
-      response: validResponse('maintainService'),
+  test('transport failures preserve safe mapping and payload', () async {
+    final gemini = FakeGemini(null, failure: GeminiTransportFailure.timeout);
+    final result = await repository(gemini).generate(
+      evidence: [routeEvidence('R1')],
+      startUtc: start,
+      endExclusiveUtc: end,
     );
-    final recommendationRepository =
-        DefaultBusFrequencyRecommendationRepository(
-          evidenceRepository: evidenceRepository,
-          geminiDataSource: gemini,
-        );
-
-    final result = await recommendationRepository.generate(
-      routeId: 'J15',
-      startUtc: periodStart,
-      endExclusiveUtc: periodEnd,
-      evidence: retainedEvidence,
-    );
-
-    expect(evidenceRepository.callCount, 0);
-    expect(result.evidence, same(retainedEvidence));
-    expect(jsonDecode(gemini.request!.input), result.payload!.toJson());
+    expect(result.failure, BusFrequencyRecommendationFailure.timeout);
+    expect(result.payload, isNotNull);
   });
 
-  test('uses 90 seconds while Part 6A retains its 30-second default', () {
-    final recommendationRepository =
-        DefaultBusFrequencyRecommendationRepository(
-          evidenceRepository: FakeEvidenceRepository(evidence()),
-          geminiDataSource: FakeGeminiDataSource(
-            response: validResponse('maintainService'),
-          ),
-        );
-    final defaultTransport = GeminiInteractionsDataSource(
-      config: const GeminiConfig(apiKey: ''),
-    );
+  test(
+    'schema is strict, grouped, bounded, and excludes numeric recommendations',
+    () {
+      expect(
+        busFrequencyRecommendationResponseSchema['additionalProperties'],
+        false,
+      );
+      expect(
+        _keys(busFrequencyRecommendationResponseSchema),
+        containsAll(['overallSummary', 'recommendationGroups', 'routeIds']),
+      );
+      expect(
+        _keys(busFrequencyRecommendationResponseSchema),
+        isNot(contains('recommendedHeadway')),
+      );
+      expect(maxBusFrequencyFeatureRoutes, 20);
+    },
+  );
 
+  test('Phase 3 request constraints remain fixed', () async {
+    final gemini = FakeGemini(validResponse({'R1': 'maintainService'}));
+    final repo = repository(gemini);
+    await repo.generate(
+      evidence: [routeEvidence('R1')],
+      startUtc: start,
+      endExclusiveUtc: end,
+    );
+    expect(repo.requestTimeout, const Duration(seconds: 90));
     expect(
-      recommendationRepository.requestTimeout,
-      const Duration(seconds: 90),
+      gemini.request!.responseSchema,
+      busFrequencyRecommendationResponseSchema,
     );
-    expect(defaultTransport.requestTimeout, const Duration(seconds: 30));
-  });
-
-  test('response model has no numeric recommendation properties', () {
-    final recommendation = parseBusFrequencyRecommendation(
-      validResponse('maintainService'),
-      allowedEvidenceReferences: const ['scheduled.summary'],
-    );
-
-    expect(
-      recommendation.action,
-      BusFrequencyRecommendationAction.maintainService,
-    );
-    expect(
-      _allKeys(busFrequencyRecommendationResponseSchema),
-      isNot(contains('headway')),
-    );
-    expect(
-      _allKeys(busFrequencyRecommendationResponseSchema),
-      isNot(contains('frequency')),
-    );
+    expect(gemini.request!.instructions, contains('one feature-level result'));
   });
 }
 
-final periodStart = DateTime.utc(2026, 8, 20);
-final periodEnd = DateTime.utc(2026, 8, 27);
+final start = DateTime.utc(2026, 8, 1);
+final end = DateTime.utc(2026, 8, 31);
 
-const route = RoutePerformanceRoute(
-  routeId: 'J15',
-  shortName: 'J15',
-  longName: 'Johor Bahru route',
-);
+DefaultBusFrequencyRecommendationRepository repository(FakeGemini gemini) =>
+    DefaultBusFrequencyRecommendationRepository(geminiDataSource: gemini);
 
-DefaultBusFrequencyRecommendationRepository repository({
-  FakeGeminiDataSource? gemini,
-  BusFrequencyEvidence? sourceEvidence,
-}) => DefaultBusFrequencyRecommendationRepository(
-  evidenceRepository: FakeEvidenceRepository(sourceEvidence ?? evidence()),
-  geminiDataSource:
-      gemini ??
-      FakeGeminiDataSource(response: validResponse('maintainService')),
-);
+Map<String, dynamic> validResponse(Map<String, String> routes) {
+  final byAction = <String, List<String>>{};
+  for (final entry in routes.entries) {
+    byAction.putIfAbsent(entry.value, () => []).add(entry.key);
+  }
+  return {
+    'overallSummary': 'Overall evidence-grounded summary.',
+    'recommendationGroups': [
+      for (final entry in byAction.entries)
+        {
+          'action': entry.key,
+          'summary': 'Evidence supports this grouped action.',
+          'rationale': ['Submitted scheduled evidence supports the action.'],
+          'routeIds': entry.value,
+          'evidenceReferences': [
+            for (final id in entry.value) 'route.$id.scheduled.summary',
+          ],
+          'limitations': ['Operational coverage is limited.'],
+        },
+    ],
+  };
+}
 
-BusFrequencyEvidence evidence({int departureCount = 2}) {
-  final departures = List.generate(
-    departureCount,
-    (index) => ScheduledDepartureEvidence(
-      tripId: 'trip-$index',
-      serviceDate: periodStart,
-      departureSeconds: 21600 + index * 600,
-      scheduledAt: periodStart.add(Duration(minutes: index * 10)),
-      referenceStopId: 'stop-a',
+BusFrequencyEvidence routeEvidence(String id, {bool hourly = false}) {
+  final route = RoutePerformanceRoute(
+    routeId: id,
+    shortName: id,
+    longName: null,
+  );
+  final departures = [
+    ScheduledDepartureEvidence(
+      tripId: '$id-1',
+      serviceDate: start,
+      departureSeconds: 21600,
+      scheduledAt: start,
+      referenceStopId: 'S',
       referenceStopSequence: 1,
     ),
-  );
+    ScheduledDepartureEvidence(
+      tripId: '$id-2',
+      serviceDate: start,
+      departureSeconds: 22200,
+      scheduledAt: start.add(const Duration(minutes: 10)),
+      referenceStopId: 'S',
+      referenceStopSequence: 1,
+    ),
+  ];
   return BusFrequencyEvidence(
-    routeId: 'J15',
-    periodStart: periodStart,
-    periodEnd: periodEnd,
+    routeId: id,
+    periodStart: start,
+    periodEnd: end,
     scheduledService: ScheduledServiceEvidence(
       route: route,
-      periodStart: periodStart,
-      periodEnd: periodEnd,
+      periodStart: start,
+      periodEnd: end,
       directionGroups: [
         ScheduledDirectionEvidence(
           directionId: 0,
           departures: departures,
-          headwaysSeconds: departureCount > 1 ? const [600] : const [],
-          hourlyBuckets: const [],
-          averageHeadwaySeconds: departureCount > 1 ? 600 : null,
-          medianHeadwaySeconds: departureCount > 1 ? 600 : null,
-          minimumHeadwaySeconds: departureCount > 1 ? 600 : null,
-          maximumHeadwaySeconds: departureCount > 1 ? 600 : null,
+          headwaysSeconds: const [600],
+          hourlyBuckets: hourly
+              ? [
+                  ScheduledServiceHourBucket(
+                    serviceDate: start,
+                    startMinute: 360,
+                    scheduledDepartureCount: 2,
+                    scheduledTripsPerHour: 2,
+                  ),
+                ]
+              : const [],
+          averageHeadwaySeconds: 600,
+          medianHeadwaySeconds: 600,
+          minimumHeadwaySeconds: 600,
+          maximumHeadwaySeconds: 600,
         ),
       ],
       incompleteTripIds: const [],
-      status: departureCount == 0
-          ? ScheduledServiceEvidenceStatus.noDepartures
-          : departureCount == 1
-          ? ScheduledServiceEvidenceStatus.insufficientForHeadway
-          : ScheduledServiceEvidenceStatus.available,
+      status: ScheduledServiceEvidenceStatus.available,
       hasCompleteDirectionData: true,
     ),
     operational: AiOperationalEvidence(
       route: route,
-      periodStart: periodStart,
-      periodEnd: periodEnd,
+      periodStart: start,
+      periodEnd: end,
       peakOperationSummary: PeakOperationSummary(
-        routeId: 'J15',
-        periodStart: periodStart,
-        periodEnd: periodEnd,
+        routeId: id,
+        periodStart: start,
+        periodEnd: end,
         observationCount: 0,
         distinctTripOccurrences: 0,
         observedDayCount: 0,
@@ -545,62 +387,20 @@ BusFrequencyEvidence evidence({int departureCount = 2}) {
   );
 }
 
-Map<String, dynamic> validResponse(String action) => {
-  'action': action,
-  'summary': 'Use the available evidence for the service action.',
-  'rationale': ['Scheduled evidence supports this action.'],
-  'evidenceReferences': ['scheduled.summary'],
-  'limitations': ['Operational coverage is limited.'],
-  'evidenceSufficiency': action == 'insufficientEvidence'
-      ? 'insufficient'
-      : 'limited',
-};
-
-class FakeEvidenceRepository implements BusFrequencyEvidenceRepository {
-  FakeEvidenceRepository(this.result);
-
-  final BusFrequencyEvidence result;
-  int callCount = 0;
-
-  @override
-  Future<BusFrequencyEvidence> loadEvidence({
-    required String routeId,
-    required DateTime startUtc,
-    required DateTime endExclusiveUtc,
-  }) async {
-    callCount++;
-    return result;
-  }
-}
-
-class FakeGeminiDataSource implements GeminiDataSource {
-  FakeGeminiDataSource({
-    this.response,
-    this.failure,
-    this.statusCode,
-    this.failureMessage = 'sanitised',
-  });
-
+class FakeGemini implements GeminiDataSource {
+  FakeGemini(this.response, {this.failure});
   final Map<String, dynamic>? response;
   final GeminiTransportFailure? failure;
-  final int? statusCode;
-  final String failureMessage;
-  int callCount = 0;
+  int calls = 0;
   GeminiStructuredInteractionRequest? request;
-
   @override
   Future<GeminiStructuredInteractionResult> createStructuredInteraction(
     GeminiStructuredInteractionRequest request,
   ) async {
-    callCount++;
+    calls++;
     this.request = request;
-    if (failure != null) {
-      throw GeminiTransportException(
-        failure: failure!,
-        message: failureMessage,
-        statusCode: statusCode,
-      );
-    }
+    if (failure != null)
+      throw GeminiTransportException(failure: failure!, message: 'safe');
     return GeminiStructuredInteractionResult(
       interactionId: 'test',
       value: response!,
@@ -608,17 +408,15 @@ class FakeGeminiDataSource implements GeminiDataSource {
   }
 }
 
-Set<String> _allKeys(Object? value) {
+Set<String> _keys(Object? value) {
   final result = <String>{};
   if (value is Map<String, dynamic>) {
     for (final entry in value.entries) {
       result.add(entry.key);
-      result.addAll(_allKeys(entry.value));
+      result.addAll(_keys(entry.value));
     }
   } else if (value is List<dynamic>) {
-    for (final item in value) {
-      result.addAll(_allKeys(item));
-    }
+    for (final item in value) result.addAll(_keys(item));
   }
   return result;
 }

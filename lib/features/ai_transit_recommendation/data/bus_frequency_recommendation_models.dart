@@ -1,14 +1,11 @@
-import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_evidence_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/gemini_evidence_payloads.dart';
 
 enum BusFrequencyRecommendationAction {
-  increaseService,
+  increasePeakHourFrequency,
   maintainService,
   decreaseService,
   insufficientEvidence,
 }
-
-enum BusFrequencyEvidenceSufficiency { sufficient, limited, insufficient }
 
 enum BusFrequencyRecommendationStatus {
   available,
@@ -19,6 +16,7 @@ enum BusFrequencyRecommendationStatus {
 
 enum BusFrequencyRecommendationFailure {
   evidenceUnavailable,
+  routeLimitExceeded,
   geminiNotConfigured,
   timeout,
   rateLimited,
@@ -27,19 +25,20 @@ enum BusFrequencyRecommendationFailure {
   http,
   malformedResponse,
   invalidResponse,
+  unknownRoute,
   unknownEvidenceReference,
 }
 
-enum BusFrequencyRecommendationSource { deterministicGate, gemini }
+enum BusFrequencyRecommendationSource { gemini }
 
-class BusFrequencyRecommendation {
-  const BusFrequencyRecommendation({
+class BusFrequencyRecommendationGroup {
+  const BusFrequencyRecommendationGroup({
     required this.action,
     required this.summary,
     required this.rationale,
     required this.evidenceReferences,
     required this.limitations,
-    required this.evidenceSufficiency,
+    required this.routeIds,
     required this.source,
   });
 
@@ -48,24 +47,34 @@ class BusFrequencyRecommendation {
   final List<String> rationale;
   final List<String> evidenceReferences;
   final List<String> limitations;
-  final BusFrequencyEvidenceSufficiency evidenceSufficiency;
+  final List<String> routeIds;
   final BusFrequencyRecommendationSource source;
+}
+
+class BusFrequencyRecommendationSynthesis {
+  const BusFrequencyRecommendationSynthesis({
+    required this.overallSummary,
+    required this.recommendationGroups,
+    required this.needsMoreEvidence,
+  });
+
+  final String overallSummary;
+  final List<BusFrequencyRecommendationGroup> recommendationGroups;
+  final BusFrequencyRecommendationGroup? needsMoreEvidence;
 }
 
 class BusFrequencyRecommendationResult {
   const BusFrequencyRecommendationResult({
     required this.status,
-    required this.recommendation,
+    required this.synthesis,
     required this.failure,
-    required this.evidence,
     required this.payload,
     this.httpStatusCode,
   });
 
   final BusFrequencyRecommendationStatus status;
-  final BusFrequencyRecommendation? recommendation;
+  final BusFrequencyRecommendationSynthesis? synthesis;
   final BusFrequencyRecommendationFailure? failure;
-  final BusFrequencyEvidence? evidence;
   final BusFrequencyGeminiEvidencePayload? payload;
   final int? httpStatusCode;
 }
