@@ -26,13 +26,46 @@ class BusFrequencyDashboardEntry {
   final BusFrequencyRecommendationResult result;
 }
 
+enum BusFrequencyDashboardExclusionReason {
+  noScheduledDepartures,
+  noSupportingEvidence,
+  evidenceLoadingFailure,
+}
+
+class BusFrequencyDashboardExcludedRoute {
+  const BusFrequencyDashboardExcludedRoute({
+    required this.route,
+    required this.reason,
+    required this.evidence,
+  });
+
+  final RoutePerformanceRoute route;
+  final BusFrequencyDashboardExclusionReason reason;
+  final BusFrequencyEvidence? evidence;
+}
+
+class BusFrequencyDashboardScreeningResult {
+  const BusFrequencyDashboardScreeningResult({
+    required this.routesAnalysed,
+    required this.candidates,
+    required this.excludedRoutes,
+  });
+
+  final int routesAnalysed;
+  final List<BusFrequencyDashboardCandidate> candidates;
+  final List<BusFrequencyDashboardExcludedRoute> excludedRoutes;
+}
+
 class BusFrequencyDashboardSession {
   final candidates = <BusFrequencyDashboardCandidate>[];
+  final excludedRoutes = <BusFrequencyDashboardExcludedRoute>[];
   final entries = <BusFrequencyDashboardEntry>[];
   DateTime? periodStartUtc;
   DateTime? periodEndUtc;
   bool empty = false;
   bool setupFailure = false;
+  bool screeningComplete = false;
+  int routesAnalysed = 0;
   int completedInBatch = 0;
   int batchTotal = 0;
   int nextCandidateIndex = 0;
@@ -45,9 +78,12 @@ class BusFrequencyDashboardSession {
     periodStartUtc = startUtc;
     periodEndUtc = endExclusiveUtc;
     candidates.clear();
+    excludedRoutes.clear();
     entries.clear();
     empty = false;
     setupFailure = false;
+    screeningComplete = false;
+    routesAnalysed = 0;
     completedInBatch = 0;
     batchTotal = 0;
     nextCandidateIndex = 0;
@@ -57,9 +93,12 @@ class BusFrequencyDashboardSession {
     periodStartUtc = null;
     periodEndUtc = null;
     candidates.clear();
+    excludedRoutes.clear();
     entries.clear();
     empty = false;
     setupFailure = false;
+    screeningComplete = false;
+    routesAnalysed = 0;
     completedInBatch = 0;
     batchTotal = 0;
     nextCandidateIndex = 0;
@@ -87,9 +126,21 @@ class BusFrequencyDashboardCoordinator {
     required DateTime startUtc,
     required DateTime endExclusiveUtc,
   }) async {
+    final result = await screenRoutes(
+      startUtc: startUtc,
+      endExclusiveUtc: endExclusiveUtc,
+    );
+    return result.candidates;
+  }
+
+  Future<BusFrequencyDashboardScreeningResult> screenRoutes({
+    required DateTime startUtc,
+    required DateTime endExclusiveUtc,
+  }) async {
     final routes = await _routeRepository.loadRoutes();
     final ordered = [...routes]..sort(_compareRoutes);
     final candidates = <BusFrequencyDashboardCandidate>[];
+    final excludedRoutes = <BusFrequencyDashboardExcludedRoute>[];
     for (final route in ordered) {
       try {
         final evidence = await _evidenceRepository.loadEvidence(
@@ -101,12 +152,30 @@ class BusFrequencyDashboardCoordinator {
           candidates.add(
             BusFrequencyDashboardCandidate(route: route, evidence: evidence),
           );
+        } else {
+          excludedRoutes.add(
+            BusFrequencyDashboardExcludedRoute(
+              route: route,
+              reason: busFrequencyDashboardExclusionReason(evidence),
+              evidence: evidence,
+            ),
+          );
         }
       } on Object {
-        continue;
+        excludedRoutes.add(
+          BusFrequencyDashboardExcludedRoute(
+            route: route,
+            reason: BusFrequencyDashboardExclusionReason.evidenceLoadingFailure,
+            evidence: null,
+          ),
+        );
       }
     }
-    return candidates;
+    return BusFrequencyDashboardScreeningResult(
+      routesAnalysed: ordered.length,
+      candidates: List.unmodifiable(candidates),
+      excludedRoutes: List.unmodifiable(excludedRoutes),
+    );
   }
 
   Future<List<BusFrequencyDashboardEntry>> analyseBatch({
@@ -209,6 +278,17 @@ bool isBusFrequencyDashboardEligible(BusFrequencyEvidence evidence) {
   final hasRelevantFeedback =
       evidence.feedback.frequencyRelevantRecordCount > 0;
   return hasHeadway || hasOperationalEvidence || hasRelevantFeedback;
+}
+
+BusFrequencyDashboardExclusionReason busFrequencyDashboardExclusionReason(
+  BusFrequencyEvidence evidence,
+) {
+  final scheduled = evidence.scheduledService;
+  if (scheduled.scheduledDepartureCount == 0 ||
+      scheduled.status == ScheduledServiceEvidenceStatus.noDepartures) {
+    return BusFrequencyDashboardExclusionReason.noScheduledDepartures;
+  }
+  return BusFrequencyDashboardExclusionReason.noSupportingEvidence;
 }
 
 int _compareRoutes(RoutePerformanceRoute first, RoutePerformanceRoute second) {

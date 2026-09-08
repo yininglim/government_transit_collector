@@ -44,6 +44,43 @@ void main() {
       },
     );
 
+    test(
+      'retains deterministic exclusions and evidence loading failures',
+      () async {
+        final evidenceRepository = FakeEvidenceRepository(
+          {'A': evidence('A', headway: true), 'B': evidence('B')},
+          failingRouteIds: const {'C'},
+        );
+        final coordinator = BusFrequencyDashboardCoordinator(
+          routeRepository: FakeRouteRepository(const [
+            RoutePerformanceRoute(routeId: 'A', shortName: 'A', longName: null),
+            RoutePerformanceRoute(routeId: 'B', shortName: 'B', longName: null),
+            RoutePerformanceRoute(routeId: 'C', shortName: 'C', longName: null),
+          ]),
+          evidenceRepository: evidenceRepository,
+          recommendationRepository: FakeRecommendationRepository(),
+        );
+
+        final result = await coordinator.screenRoutes(
+          startUtc: periodStart,
+          endExclusiveUtc: periodEnd,
+        );
+
+        expect(result.routesAnalysed, 3);
+        expect(result.candidates.single.route.routeId, 'A');
+        expect(result.excludedRoutes.map((item) => item.route.routeId), [
+          'B',
+          'C',
+        ]);
+        expect(result.excludedRoutes.map((item) => item.reason), [
+          BusFrequencyDashboardExclusionReason.noSupportingEvidence,
+          BusFrequencyDashboardExclusionReason.evidenceLoadingFailure,
+        ]);
+        expect(result.excludedRoutes.first.evidence, isNotNull);
+        expect(result.excludedRoutes.last.evidence, isNull);
+      },
+    );
+
     test('analyses no more than three routes with concurrency two', () async {
       final recommendationRepository = FakeRecommendationRepository();
       final coordinator = BusFrequencyDashboardCoordinator(
@@ -174,14 +211,99 @@ void main() {
   ) async {
     final coordinator = FakeDashboardCoordinator(candidates: const []);
     await pumpDashboard(tester, coordinator);
-
-    await tapAnalyse(tester);
     await tester.pumpAndSettle();
 
     expect(coordinator.analysisRouteIds, isEmpty);
     expect(coordinator.screenStartUtc, periodStart);
     expect(coordinator.screenEndUtc, periodEnd);
-    expect(find.text('No eligible routes'), findsOneWidget);
+    expect(find.text('Eligible Routes'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('generate-ai-recommendation')),
+      250,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.byKey(const Key('generate-ai-recommendation')),
+          )
+          .onPressed,
+      isNull,
+    );
+  });
+
+  testWidgets('prepares evidence before an explicit Gemini action', (
+    tester,
+  ) async {
+    final coordinator = FakeDashboardCoordinator(
+      candidates: candidates(2),
+      excludedRoutes: [
+        BusFrequencyDashboardExcludedRoute(
+          route: const RoutePerformanceRoute(
+            routeId: 'R3',
+            shortName: 'R3',
+            longName: null,
+          ),
+          reason: BusFrequencyDashboardExclusionReason.noSupportingEvidence,
+          evidence: evidence('R3'),
+        ),
+      ],
+    );
+    await pumpDashboard(tester, coordinator);
+    await tester.pumpAndSettle();
+
+    expect(coordinator.analysisRouteIds, isEmpty);
+    expect(
+      find.byKey(const Key('frequency-evidence-overview')),
+      findsOneWidget,
+    );
+    expect(find.text('Routes Analysed'), findsOneWidget);
+    expect(find.text('3'), findsOneWidget);
+    expect(find.text('Eligible Routes'), findsOneWidget);
+    expect(find.text('2'), findsOneWidget);
+    expect(find.text('Limited / Excluded Routes'), findsOneWidget);
+
+    final evidenceDetails = find.byKey(const Key('view-evidence-details'));
+    await tester.ensureVisible(evidenceDetails);
+    await tester.pumpAndSettle();
+    await tester.tap(evidenceDetails);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('frequency-evidence-details')), findsOneWidget);
+    expect(coordinator.analysisRouteIds, isEmpty);
+  });
+
+  testWidgets('limited routes remain separate from recommendation cards', (
+    tester,
+  ) async {
+    final excluded = BusFrequencyDashboardExcludedRoute(
+      route: const RoutePerformanceRoute(
+        routeId: 'LIMITED',
+        shortName: 'A very long limited route name that must wrap safely',
+        longName: null,
+      ),
+      reason: BusFrequencyDashboardExclusionReason.noSupportingEvidence,
+      evidence: evidence('LIMITED'),
+    );
+    await pumpDashboard(
+      tester,
+      FakeDashboardCoordinator(
+        candidates: candidates(1),
+        excludedRoutes: [excluded],
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final limitedRoutes = find.byKey(const Key('view-limited-routes'));
+    await tester.ensureVisible(limitedRoutes);
+    await tester.pumpAndSettle();
+    await tester.tap(limitedRoutes);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('limited-routes-details')), findsOneWidget);
+    expect(
+      find.textContaining('No headway, operational observation'),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('route-result-LIMITED')), findsNothing);
   });
 
   testWidgets('first batch retains three results and leaves fourth queued', (
@@ -224,6 +346,7 @@ void main() {
       find.byType(ListView).first,
       const Offset(0, -300),
     );
+    await tester.pumpAndSettle();
     await tester.tap(next);
     await tester.pumpAndSettle();
 
@@ -293,6 +416,7 @@ void main() {
 
     final details = find.byKey(const Key('view-details-R1'));
     await tester.ensureVisible(details);
+    await tester.pumpAndSettle();
     await tester.tap(details);
     await tester.pumpAndSettle();
 
@@ -324,7 +448,9 @@ void main() {
     expect(find.byKey(const Key('analysis-progress')), findsOneWidget);
     expect(
       tester
-          .widget<FilledButton>(find.byKey(const Key('analyse-routes')))
+          .widget<FilledButton>(
+            find.byKey(const Key('generate-ai-recommendation')),
+          )
           .onPressed,
       isNull,
     );
@@ -387,6 +513,7 @@ void main() {
         find.byType(ListView).first,
         const Offset(0, -300),
       );
+      await tester.pumpAndSettle();
       await tester.tap(next);
       await tester.pumpAndSettle();
 
@@ -416,12 +543,72 @@ void main() {
     expect(session.entries, hasLength(1));
 
     now = now.add(const Duration(days: 1));
-    await tester.tap(find.byKey(const Key('analyse-routes')));
+    final newAnalysis = find.byKey(const Key('analyse-routes'));
+    await tester.ensureVisible(newAnalysis);
+    await tester.pumpAndSettle();
+    await tester.tap(newAnalysis);
     await tester.pumpAndSettle();
 
     expect(session.periodStartUtc, firstStart!.add(const Duration(days: 1)));
+    expect(session.entries, isEmpty);
+    expect(coordinator.analysisRouteIds, ['R1']);
+    await tapAnalyse(tester);
+    await tester.pumpAndSettle();
     expect(session.entries, hasLength(1));
     expect(coordinator.analysisRouteIds, ['R1', 'R1']);
+  });
+
+  testWidgets('repeated generation taps do not start duplicate batches', (
+    tester,
+  ) async {
+    final gate = Completer<void>();
+    final coordinator = FakeDashboardCoordinator(
+      candidates: candidates(1),
+      analysisGate: gate,
+    );
+    await pumpDashboard(tester, coordinator);
+    await tester.pumpAndSettle();
+    final generate = find.byKey(const Key('generate-ai-recommendation'));
+    await tester.ensureVisible(generate);
+    await tester.pumpAndSettle();
+
+    await tester.tap(generate);
+    await tester.pump();
+    await tester.tap(generate);
+    await tester.pump();
+
+    expect(coordinator.analyseBatchCalls, 1);
+    gate.complete();
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('short landscape and long content remain scrollable', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(900, 320);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final longRoute = BusFrequencyDashboardCandidate(
+      route: const RoutePerformanceRoute(
+        routeId: 'LONG',
+        shortName: 'An exceptionally long bus frequency route name',
+        longName: 'with additional descriptive text for responsive layout',
+      ),
+      evidence: evidence('LONG', headway: true),
+    );
+
+    await pumpDashboard(
+      tester,
+      FakeDashboardCoordinator(candidates: [longRoute]),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ListView), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tapAnalyse(tester);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
   });
 }
 
@@ -443,7 +630,11 @@ Future<void> pumpDashboard(
 }
 
 Future<void> tapAnalyse(WidgetTester tester) async {
-  await tester.tap(find.byKey(const Key('analyse-routes')));
+  await tester.pumpAndSettle();
+  final button = find.byKey(const Key('generate-ai-recommendation'));
+  await tester.ensureVisible(button);
+  await tester.pumpAndSettle();
+  await tester.tap(button);
   await tester.pump();
 }
 
@@ -605,8 +796,12 @@ class FakeRouteRepository implements RoutePerformanceRepository {
 }
 
 class FakeEvidenceRepository implements BusFrequencyEvidenceRepository {
-  FakeEvidenceRepository(this.evidenceByRoute);
+  FakeEvidenceRepository(
+    this.evidenceByRoute, {
+    this.failingRouteIds = const {},
+  });
   final Map<String, BusFrequencyEvidence> evidenceByRoute;
+  final Set<String> failingRouteIds;
   final periods = <(DateTime, DateTime)>[];
 
   @override
@@ -616,6 +811,7 @@ class FakeEvidenceRepository implements BusFrequencyEvidenceRepository {
     required DateTime endExclusiveUtc,
   }) async {
     periods.add((startUtc, endExclusiveUtc));
+    if (failingRouteIds.contains(routeId)) throw StateError('load failure');
     return evidenceByRoute[routeId]!;
   }
 }
@@ -685,6 +881,7 @@ class ControlledRecommendationRepository
 class FakeDashboardCoordinator extends BusFrequencyDashboardCoordinator {
   FakeDashboardCoordinator({
     required this.candidates,
+    this.excludedRoutes = const [],
     this.results = const {},
     this.analysisGate,
   }) : super(
@@ -694,11 +891,27 @@ class FakeDashboardCoordinator extends BusFrequencyDashboardCoordinator {
        );
 
   final List<BusFrequencyDashboardCandidate> candidates;
+  final List<BusFrequencyDashboardExcludedRoute> excludedRoutes;
   final Map<String, BusFrequencyRecommendationResult> results;
   final Completer<void>? analysisGate;
   final analysisRouteIds = <String>[];
+  int analyseBatchCalls = 0;
   DateTime? screenStartUtc;
   DateTime? screenEndUtc;
+
+  @override
+  Future<BusFrequencyDashboardScreeningResult> screenRoutes({
+    required DateTime startUtc,
+    required DateTime endExclusiveUtc,
+  }) async {
+    screenStartUtc = startUtc;
+    screenEndUtc = endExclusiveUtc;
+    return BusFrequencyDashboardScreeningResult(
+      routesAnalysed: candidates.length + excludedRoutes.length,
+      candidates: candidates,
+      excludedRoutes: excludedRoutes,
+    );
+  }
 
   @override
   Future<List<BusFrequencyDashboardCandidate>> screenCandidates({
@@ -718,6 +931,7 @@ class FakeDashboardCoordinator extends BusFrequencyDashboardCoordinator {
     void Function(int completed, int total, BusFrequencyDashboardEntry entry)?
     onCompleted,
   }) async {
+    analyseBatchCalls++;
     final batch = candidates.take(busFrequencyDashboardBatchSize).toList();
     if (analysisGate != null) await analysisGate!.future;
     final entries = <BusFrequencyDashboardEntry>[];
