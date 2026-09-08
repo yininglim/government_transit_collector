@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../presentation/auth_validation.dart';
 
 class AppProfile {
   const AppProfile({
@@ -189,6 +190,8 @@ class AuthRepository extends ChangeNotifier {
   }
 
   Future<void> sendPasswordReset(String email) async {
+    final validation = AuthValidation.email(email);
+    if (validation != null) throw AuthFlowException(validation);
     final redirect = redirectUrl;
     try {
       _expectRecovery = true;
@@ -196,6 +199,17 @@ class AuthRepository extends ChangeNotifier {
       await _client.auth.resetPasswordForEmail(
         email.trim(),
         redirectTo: redirect,
+      );
+    } on AuthException catch (error) {
+      // Recovery must not reveal account existence.
+      if (error.code == 'user_not_found') return;
+      if (_isRateLimit(error)) {
+        throw const AuthFlowException(
+          'Too many requests. Please wait a few minutes before trying again.',
+        );
+      }
+      throw const AuthFlowException(
+        'Unable to send a reset link. Please try again.',
       );
     } on Object {
       throw const AuthFlowException(
@@ -214,14 +228,19 @@ class AuthRepository extends ChangeNotifier {
     if (!hasValidRecoverySession) {
       throw const AuthFlowException(invalidRecoveryMessage);
     }
-    if (password.length < 8) {
-      throw const AuthFlowException(
-        'Password must contain at least 8 characters.',
-      );
-    }
+    final validation = AuthValidation.newPassword(
+      password,
+      email: currentEmail,
+    );
+    if (validation != null) throw AuthFlowException(validation);
     try {
       await _client.auth.updateUser(UserAttributes(password: password));
     } on AuthException catch (error) {
+      if (error.code == 'same_password') {
+        throw const AuthFlowException(
+          'Your new password cannot be the same as your previous password.',
+        );
+      }
       if (error.statusCode == '401' || error.statusCode == '403') {
         _validRecovery = false;
         throw const AuthFlowException(invalidRecoveryMessage);
@@ -264,11 +283,125 @@ class AuthRepository extends ChangeNotifier {
 
   Stream<AuthState> get authStateChanges => _client.auth.onAuthStateChange;
 
+  String? get currentEmail => _client.auth.currentUser?.email;
+  bool get supportsEmailPassword =>
+      _client.auth.currentUser?.identities?.any(
+        (identity) => identity.provider == 'email',
+      ) ==
+      true;
+  bool get hasGoogleIdentity =>
+      _client.auth.currentUser?.identities?.any(
+        (identity) => identity.provider == 'google',
+      ) ==
+      true;
+
+  bool _changingPassword = false;
+
+  Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    if (_changingPassword) return;
+    final user = _client.auth.currentUser;
+    if (user == null || recoveryRequired || handlingCallback) {
+      throw const AuthFlowException('Please sign in again.');
+    }
+    if (!supportsEmailPassword || user.email?.isNotEmpty != true) {
+      throw const AuthFlowException(
+        'This account does not support app password changes.',
+      );
+    }
+    final validation =
+        AuthValidation.requiredField(currentPassword, 'Current password') ??
+        AuthValidation.newPassword(
+          newPassword,
+          email: user.email,
+          currentPassword: currentPassword,
+        );
+    if (validation != null) throw AuthFlowException(validation);
+    _changingPassword = true;
+    try {
+      try {
+        // Reauthenticate only the current Supabase user's email using the
+        // existing SDK. Profile identity, role and linked providers are untouched.
+        final verified = await _client.auth.signInWithPassword(
+          email: user.email!,
+          password: currentPassword,
+        );
+        if (verified.user?.id != user.id ||
+            _client.auth.currentUser?.id != user.id) {
+          await _client.auth.signOut(scope: SignOutScope.local);
+          throw const AuthFlowException(
+            'Your account changed. Please sign in again.',
+          );
+        }
+      } on AuthException catch (error) {
+        if (error.code == 'invalid_credentials' ||
+            error.message.toLowerCase().contains('invalid login credentials')) {
+          throw const AuthFlowException('Current password is incorrect.');
+        }
+        throw AuthFlowException(
+          _isRateLimit(error)
+              ? 'Too many requests. Please wait a few minutes before trying again.'
+              : 'Unable to verify your current password. Please try again.',
+        );
+      } on AuthFlowException {
+        rethrow;
+      } on Object {
+        throw const AuthFlowException(
+          'Unable to verify your current password. Please try again.',
+        );
+      }
+      if (recoveryRequired ||
+          handlingCallback ||
+          _client.auth.currentUser?.id != user.id) {
+        throw const AuthFlowException(
+          'Your account changed. Please sign in again.',
+        );
+      }
+      try {
+        await _client.auth.updateUser(
+          _PasswordChangeAttributes(
+            password: newPassword,
+            currentPassword: currentPassword,
+          ),
+        );
+      } on AuthException catch (error) {
+        if (error.code == 'same_password') {
+          throw const AuthFlowException(
+            'Your new password cannot be the same as your previous password.',
+          );
+        }
+        throw const AuthFlowException(
+          'Unable to update your password. Please try again.',
+        );
+      } on Object {
+        throw const AuthFlowException(
+          'Unable to update your password. Please try again.',
+        );
+      }
+    } finally {
+      _changingPassword = false;
+    }
+  }
+
+  static bool _isRateLimit(AuthException error) =>
+      error.statusCode == '429' ||
+      error.code == 'over_email_send_rate_limit' ||
+      error.code == 'over_request_rate_limit';
+
+  static const existingAccountMessage =
+      'An account with this email already exists. Please sign in instead.';
+
   Future<RegistrationResult> register({
     required String fullName,
     required String email,
     required String password,
   }) async {
+    final validation =
+        AuthValidation.email(email) ??
+        AuthValidation.newPassword(password, email: email);
+    if (validation != null) throw AuthFlowException(validation);
     try {
       final response = await _client.auth.signUp(
         email: email.trim(),
@@ -280,11 +413,26 @@ class AuthRepository extends ChangeNotifier {
           'Registration did not complete. Please try again.',
         );
       }
+      // Supabase may obfuscate an existing confirmed user instead of returning
+      // an error. No profile queries or writes are needed to handle this.
+      if (response.session == null &&
+          response.user!.identities?.isEmpty == true) {
+        throw const AuthFlowException(existingAccountMessage);
+      }
       return RegistrationResult(
         requiresEmailConfirmation: response.session == null,
       );
     } on AuthException catch (error) {
-      throw AuthFlowException(_friendlyAuthMessage(error));
+      if (error.code == 'user_already_exists' ||
+          error.code == 'email_exists' ||
+          error.message.toLowerCase().contains('user already registered')) {
+        throw const AuthFlowException(existingAccountMessage);
+      }
+      throw AuthFlowException(
+        _isRateLimit(error)
+            ? 'Too many requests. Please wait a few minutes before trying again.'
+            : 'Unable to create the account. Please try again.',
+      );
     }
   }
 
@@ -394,6 +542,22 @@ class AuthRepository extends ChangeNotifier {
         ? 'Authentication failed. Please try again.'
         : error.message;
   }
+}
+
+// Supabase Auth supports current_password for projects that require it on
+// updates. The installed Dart SDK's UserAttributes does not expose that field
+// yet; serialize it only into the supported authenticated Auth request.
+class _PasswordChangeAttributes extends UserAttributes {
+  _PasswordChangeAttributes({
+    required super.password,
+    required this.currentPassword,
+  });
+  final String currentPassword;
+  @override
+  Map<String, dynamic> toJson() => {
+    ...super.toJson(),
+    'current_password': currentPassword,
+  };
 }
 
 class AuthFlowException implements Exception {

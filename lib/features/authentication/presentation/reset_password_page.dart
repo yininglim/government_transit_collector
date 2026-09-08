@@ -36,7 +36,11 @@ class _ResetPasswordPageState extends State<ResetPasswordPage> {
       } else {
         await widget.repository.resetPassword(_password.text);
         messenger.showSnackBar(
-          const SnackBar(content: Text('Password updated successfully.')),
+          const SnackBar(
+            content: Text(
+              'Password updated successfully. Please sign in with your new password.',
+            ),
+          ),
         );
       }
     } on Object catch (error) {
@@ -90,7 +94,10 @@ class _ResetPasswordPageState extends State<ResetPasswordPage> {
                           labelText: 'New Password',
                           border: OutlineInputBorder(),
                         ),
-                        validator: AuthValidation.password,
+                        validator: (value) => AuthValidation.newPassword(
+                          value,
+                          email: widget.repository.currentEmail,
+                        ),
                       ),
                       const SizedBox(height: 16),
                       TextFormField(

@@ -2,6 +2,7 @@ import 'package:government_transit_collector/features/bus_feedback/data/bus_feed
 import 'my_reports_section.dart';
 import 'package:flutter/material.dart';
 import 'package:government_transit_collector/features/authentication/data/auth_repository.dart';
+import 'package:government_transit_collector/features/authentication/presentation/change_password_page.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/recent_journey_search.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/recent_search_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/saved_journey_repository.dart';
@@ -279,6 +280,35 @@ class _PassengerProfilePageState extends State<PassengerProfilePage> {
                   title: const Text('Email (read-only)'),
                   subtitle: Text(widget.profile.email ?? 'No email'),
                 ),
+              ]),
+              _section('Account Security', Icons.security_outlined, [
+                if (widget.authRepository.supportsEmailPassword)
+                  OutlinedButton(
+                    onPressed: () async {
+                      final message = await Navigator.of(context).push<String>(
+                        MaterialPageRoute(
+                          builder: (_) => ChangePasswordPage(
+                            repository: widget.authRepository,
+                          ),
+                        ),
+                      );
+                      if (message != null) _message(message);
+                    },
+                    child: const Text('Change Password'),
+                  ),
+                if (widget.authRepository.hasGoogleIdentity) ...[
+                  Text(
+                    widget.authRepository.supportsEmailPassword
+                        ? 'Google sign-in is also linked'
+                        : 'Signed in with Google',
+                  ),
+                  const Text(
+                    'Your Google password is managed through your Google Account.',
+                  ),
+                ] else if (!widget.authRepository.supportsEmailPassword)
+                  const Text(
+                    'Password changes are not available for this sign-in method.',
+                  ),
               ]),
               _section('Travel Preferences', Icons.tune, [
                 const Text('Default Nearby Stop Radius'),

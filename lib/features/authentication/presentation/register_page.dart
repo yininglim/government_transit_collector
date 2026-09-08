@@ -38,7 +38,7 @@ class _RegisterPageState extends State<RegisterPage> {
     try {
       final result = await widget.repository.register(
         fullName: _fullNameController.text,
-        email: _emailController.text,
+        email: _emailController.text.trim(),
         password: _passwordController.text,
       );
       if (!mounted) return;
@@ -150,7 +150,10 @@ class _RegisterPageState extends State<RegisterPage> {
                               ),
                             ),
                           ),
-                          validator: AuthValidation.password,
+                          validator: (value) => AuthValidation.newPassword(
+                            value,
+                            email: _emailController.text,
+                          ),
                         ),
                         const SizedBox(height: 16),
                         TextFormField(

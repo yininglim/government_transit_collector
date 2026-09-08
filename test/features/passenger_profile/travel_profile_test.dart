@@ -227,7 +227,11 @@ void main() {
       await tester.tap(find.text('Update Name'));
       await tester.pumpAndSettle();
       expect(updated?.fullName, 'New Rider');
-      await tester.ensureVisible(find.text('500 m'));
+      await tester.scrollUntilVisible(
+        find.text('500 m'),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
       await tester.pumpAndSettle();
       await tester.tap(find.text('500 m'));
       await tester.pumpAndSettle();

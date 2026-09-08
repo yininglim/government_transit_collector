@@ -24,6 +24,27 @@ class PageAuth extends AuthRepository {
   String? sentEmail;
   String? updatedPassword;
   String? googleError;
+  int resetEmailCalls = 0;
+  Future<void>? pendingEmail;
+  String? changeError;
+  int changeCalls = 0;
+  bool emailPassword = true;
+  bool googleIdentity = false;
+  @override
+  String? get currentEmail => 'rider@example.test';
+  @override
+  bool get supportsEmailPassword => emailPassword;
+  @override
+  bool get hasGoogleIdentity => googleIdentity;
+  @override
+  Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    changeCalls++;
+    if (changeError != null) throw AuthFlowException(changeError!);
+  }
+
   bool recovering = true;
   bool valid = true;
   @override
@@ -51,7 +72,9 @@ class PageAuth extends AuthRepository {
 
   @override
   Future<void> sendPasswordReset(String email) async {
+    resetEmailCalls++;
     sentEmail = email;
+    await pendingEmail;
   }
 
   @override
@@ -194,7 +217,7 @@ void main() {
       expect(repository.sentEmail, isNull);
       await tester.enterText(find.byType(TextFormField), 'invalid');
       await tap(tester, find.text('Send Reset Link'));
-      expect(find.text('Enter a valid email address.'), findsOneWidget);
+      expect(find.text('Please enter a valid email address.'), findsOneWidget);
       expect(repository.sentEmail, isNull);
       await tester.enterText(find.byType(TextFormField), 'rider@example.test');
       await tap(tester, find.text('Send Reset Link'));
@@ -222,38 +245,42 @@ void main() {
     },
   );
 
-  testWidgets(
-    'reset validates required, length, matching and handles keyboard',
-    (tester) async {
-      final repository = PageAuth();
-      await show(
-        tester,
-        ResetPasswordPage(repository: repository),
-        keyboard: true,
-      );
-      final button = find.widgetWithText(FilledButton, 'Reset Password');
-      await tap(tester, button);
-      expect(find.text('Password is required.'), findsOneWidget);
-      expect(find.text('Confirm password is required.'), findsOneWidget);
-      final fields = find.byType(TextFormField);
-      await tester.enterText(fields.at(0), 'short');
-      await tap(tester, button);
-      expect(
-        find.text('Password must contain at least 8 characters.'),
-        findsOneWidget,
-      );
-      await tester.enterText(fields.at(0), 'password123');
-      await tester.enterText(fields.at(1), 'different');
-      await tap(tester, button);
-      expect(find.text('Passwords do not match.'), findsOneWidget);
-      expect(repository.updatedPassword, isNull);
-      await tester.enterText(fields.at(1), 'password123');
-      await tap(tester, button);
-      expect(repository.updatedPassword, 'password123');
-      expect(find.text('Password updated successfully.'), findsOneWidget);
-      expect(tester.takeException(), isNull);
-    },
-  );
+  testWidgets('reset validates required, length, matching and handles keyboard', (
+    tester,
+  ) async {
+    final repository = PageAuth();
+    await show(
+      tester,
+      ResetPasswordPage(repository: repository),
+      keyboard: true,
+    );
+    final button = find.widgetWithText(FilledButton, 'Reset Password');
+    await tap(tester, button);
+    expect(find.text('Password is required.'), findsOneWidget);
+    expect(find.text('Confirm password is required.'), findsOneWidget);
+    final fields = find.byType(TextFormField);
+    await tester.enterText(fields.at(0), 'short');
+    await tap(tester, button);
+    expect(
+      find.text('Password must be at least 8 characters.'),
+      findsOneWidget,
+    );
+    await tester.enterText(fields.at(0), 'password123');
+    await tester.enterText(fields.at(1), 'different');
+    await tap(tester, button);
+    expect(find.text('Passwords do not match.'), findsOneWidget);
+    expect(repository.updatedPassword, isNull);
+    await tester.enterText(fields.at(1), 'password123');
+    await tap(tester, button);
+    expect(repository.updatedPassword, 'password123');
+    expect(
+      find.text(
+        'Password updated successfully. Please sign in with your new password.',
+      ),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'recovery gate returns to login after reset, without loading home',
@@ -265,7 +292,12 @@ void main() {
       await tester.enterText(find.byType(TextFormField).at(1), 'password123');
       await tap(tester, find.widgetWithText(FilledButton, 'Reset Password'));
       expect(find.byType(LoginPage), findsOneWidget);
-      expect(find.text('Password updated successfully.'), findsOneWidget);
+      expect(
+        find.text(
+          'Password updated successfully. Please sign in with your new password.',
+        ),
+        findsOneWidget,
+      );
     },
   );
 

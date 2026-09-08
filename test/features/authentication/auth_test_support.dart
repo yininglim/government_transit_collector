@@ -24,6 +24,12 @@ class AuthBackend {
   final storage = MemoryAuthStorage();
   String role = 'passenger';
   bool google = true;
+  bool emailIdentity = false;
+  bool obfuscatedSignup = false;
+  String? signupErrorCode;
+  String? loginErrorCode;
+  String? updateErrorCode;
+  String? recoveryErrorCode;
   bool missingProfile = false;
   bool failProfile = false;
   bool failExchange = false;
@@ -49,6 +55,14 @@ class AuthBackend {
     'app_metadata': {'provider': google ? 'google' : 'email'},
     'user_metadata': {'full_name': 'Google Name', 'role': 'admin'},
     'identities': [
+      if (!google || emailIdentity)
+        {
+          'id': 'authenticated-owner',
+          'identity_id': 'email-identity',
+          'user_id': 'authenticated-owner',
+          'provider': 'email',
+          'created_at': '2026-01-01T00:00:00Z',
+        },
       if (google)
         {
           'id': 'google-subject',
@@ -80,21 +94,49 @@ class AuthBackend {
       jsonEncode(data),
       status,
       request: request,
-      headers: {'content-type': 'application/json'},
+      headers: {
+        'content-type': 'application/json',
+        'x-supabase-api-version': '2024-01-01',
+      },
     );
     switch (request.url.path) {
       case '/auth/v1/token':
+        if (loginErrorCode != null) {
+          return reply({
+            'code': loginErrorCode,
+            'message': 'private server details',
+          }, 400);
+        }
         if (failExchange) {
           return reply({'message': 'sensitive backend error'}, 400);
         }
         return reply(session);
       case '/auth/v1/signup':
+        if (signupErrorCode != null) {
+          return reply({
+            'code': signupErrorCode,
+            'message': 'private server details',
+          }, 422);
+        }
+        if (obfuscatedSignup) return reply({...user, 'identities': []});
         return reply(session);
       case '/auth/v1/recover':
+        if (recoveryErrorCode != null) {
+          return reply({
+            'code': recoveryErrorCode,
+            'message': 'private server details',
+          }, 422);
+        }
         return failRecovery
             ? reply({'message': 'email does not exist'}, 400)
             : reply({});
       case '/auth/v1/user':
+        if (updateErrorCode != null) {
+          return reply({
+            'code': updateErrorCode,
+            'message': 'private server details',
+          }, 422);
+        }
         return updateStatus == 200
             ? reply(user)
             : reply({'message': 'expired secret'}, updateStatus);
