@@ -50,8 +50,9 @@ class _BusFrequencyRecommendationPageState
         );
     final period = _newPeriod();
     if (_session.periodStartUtc != null &&
-        !_session.matchesPeriod(period.startUtc, period.endUtc))
+        !_session.matchesPeriod(period.startUtc, period.endUtc)) {
       _session.clear();
+    }
     if (!_session.screeningComplete) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _prepareEvidence();
@@ -112,8 +113,9 @@ class _BusFrequencyRecommendationPageState
         _session.candidates.isEmpty ||
         _session.recommendationResult != null ||
         start == null ||
-        end == null)
+        end == null) {
       return;
+    }
     setState(() => _analysing = true);
     final result = await _coordinator.analyse(
       candidates: _session.candidates,
@@ -362,9 +364,25 @@ class _BusFrequencyRecommendationPageState
           'Recommendation Results',
           style: Theme.of(context).textTheme.titleLarge,
         ),
-        const SizedBox(height: 8),
-        Text(synthesis.overallSummary),
         const SizedBox(height: 12),
+        Card(
+          key: const Key('overall-ai-summary'),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'Overall AI Summary',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 8),
+                Text(synthesis.overallSummary),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
         for (final group in synthesis.recommendationGroups) ...[
           _groupCard(context, group),
           const SizedBox(height: 12),
@@ -385,21 +403,27 @@ class _BusFrequencyRecommendationPageState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            _actionLabel(group.action),
-            style: Theme.of(context).textTheme.titleMedium,
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(
+                  _actionLabel(group.action),
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                _routeCountLabel(group.routeIds.length),
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+            ],
           ),
           const SizedBox(height: 8),
           Text(group.summary),
-          const SizedBox(height: 12),
+          const SizedBox(height: 16),
           for (final routeId in group.routeIds)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 6),
-              child: Text(
-                '• ${_routeDisplay(routeId)}',
-                key: Key('group-route-$routeId'),
-              ),
-            ),
+            _routeRecommendationCard(context, routeId),
         ],
       ),
     ),
@@ -410,31 +434,103 @@ class _BusFrequencyRecommendationPageState
     BusFrequencyRecommendationGroup group,
   ) => Card(
     key: const Key('post-gemini-needs-evidence'),
-    child: Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            'Needs More Evidence',
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
-          const SizedBox(height: 8),
-          Text(group.summary),
-          const SizedBox(height: 8),
-          for (final routeId in group.routeIds)
-            Text('• ${_routeDisplay(routeId)}'),
-        ],
-      ),
+    child: ExpansionTile(
+      title: const Text('Needs More Evidence'),
+      subtitle: Text(_routeCountLabel(group.routeIds.length)),
+      childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      expandedCrossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(group.summary),
+        const SizedBox(height: 12),
+        for (final routeId in group.routeIds)
+          _routeRecommendationCard(context, routeId, needsMoreEvidence: true),
+      ],
     ),
   );
 
-  String _routeDisplay(String routeId) =>
-      _session.candidates
-          .where((candidate) => candidate.route.routeId == routeId)
-          .map((candidate) => candidate.route.displayName)
-          .firstOrNull ??
-      routeId;
+  Widget _routeRecommendationCard(
+    BuildContext context,
+    String routeId, {
+    bool needsMoreEvidence = false,
+  }) {
+    final candidate = _candidate(routeId);
+    if (candidate == null) return const SizedBox.shrink();
+    final evidence = candidate.evidence;
+    final scheduled = evidence.scheduledService;
+    final headways = scheduled.directionGroups
+        .expand((direction) => direction.headwaysSeconds)
+        .toList(growable: false);
+    final hasOperationalEvidence =
+        evidence.operational.peakOperationSummary.observationCount > 0 ||
+        evidence.operational.routePerformanceSummary.totalObservations > 0;
+    return Card(
+      key: Key(
+        needsMoreEvidence
+            ? 'needs-evidence-route-$routeId'
+            : 'group-route-$routeId',
+      ),
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              candidate.route.displayName,
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 16,
+              runSpacing: 8,
+              children: [
+                _conciseEvidence(
+                  'Scheduled departures',
+                  '${scheduled.scheduledDepartureCount}',
+                ),
+                _conciseEvidence('Headway', _headwaySummary(headways)),
+                _conciseEvidence(
+                  'Operational evidence',
+                  hasOperationalEvidence ? 'Available' : 'Unavailable',
+                ),
+                _conciseEvidence(
+                  'Relevant feedback',
+                  '${evidence.feedback.frequencyRelevantRecordCount}',
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                key: Key('view-route-evidence-$routeId'),
+                onPressed: () => _showRouteEvidence(context, candidate),
+                icon: const Icon(Icons.fact_check_outlined),
+                label: const Text('View Evidence'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _conciseEvidence(String label, String value) => ConstrainedBox(
+    constraints: const BoxConstraints(minWidth: 150),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(label),
+        Text(value, style: const TextStyle(fontWeight: FontWeight.w600)),
+      ],
+    ),
+  );
+
+  BusFrequencyDashboardCandidate? _candidate(String routeId) => _session
+      .candidates
+      .where((candidate) => candidate.route.routeId == routeId)
+      .firstOrNull;
 
   Widget _metric(String label, String value) => ConstrainedBox(
     constraints: const BoxConstraints(minWidth: 135),
@@ -533,6 +629,103 @@ class _BusFrequencyRecommendationPageState
     );
   }
 
+  Future<void> _showRouteEvidence(
+    BuildContext context,
+    BusFrequencyDashboardCandidate candidate,
+  ) => showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    builder: (context) {
+      final evidence = candidate.evidence;
+      final scheduled = evidence.scheduledService;
+      final peak = evidence.operational.peakOperationSummary;
+      final performance = evidence.operational.routePerformanceSummary;
+      return FractionallySizedBox(
+        heightFactor: .85,
+        child: ListView(
+          key: Key('route-evidence-details-${candidate.route.routeId}'),
+          padding: const EdgeInsets.all(20),
+          children: [
+            Text(
+              candidate.route.displayName,
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 16),
+            _evidenceSection(context, 'Scheduled Service', [
+              'Status: ${_scheduledStatusLabel(scheduled.status)}',
+              'Scheduled departures: ${scheduled.scheduledDepartureCount}',
+              'Directions represented: ${scheduled.directionGroups.length}',
+              for (final direction in scheduled.directionGroups)
+                '${_directionLabel(direction.directionId)} headway: '
+                    '${_headwaySummary(direction.headwaysSeconds)}',
+            ]),
+            _evidenceSection(context, 'Operational Evidence', [
+              'Peak Operation observations: ${peak.observationCount}',
+              'Peak Operation coverage: '
+                  '${peak.hasReliablePeak ? 'Available' : 'Limited'}',
+              'Route Performance observations: '
+                  '${performance.totalObservations}',
+              'Complete Route Performance trips: '
+                  '${performance.completeTrips.length}',
+            ]),
+            _evidenceSection(context, 'Feedback', [
+              'Frequency-related feedback: '
+                  '${evidence.feedback.frequencyRelevantRecordCount}',
+              'Total feedback records: ${evidence.feedback.totalRecordCount}',
+            ]),
+            _evidenceSection(
+              context,
+              'Limitations',
+              _deterministicLimitations(evidence),
+            ),
+          ],
+        ),
+      );
+    },
+  );
+
+  Widget _evidenceSection(
+    BuildContext context,
+    String title,
+    List<String> values,
+  ) => Padding(
+    padding: const EdgeInsets.only(bottom: 16),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(title, style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 6),
+        for (final value in values)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Text(value),
+          ),
+      ],
+    ),
+  );
+
+  List<String> _deterministicLimitations(BusFrequencyEvidence evidence) {
+    final scheduled = evidence.scheduledService;
+    final values = <String>[
+      if (scheduled.status != ScheduledServiceEvidenceStatus.available)
+        'Scheduled service evidence is '
+            '${_scheduledStatusLabel(scheduled.status).toLowerCase()}.',
+      if (!scheduled.hasCompleteDirectionData)
+        'Direction-level scheduled service evidence is incomplete.',
+      if (scheduled.incompleteTripIds.isNotEmpty)
+        'Some scheduled trips have incomplete evidence.',
+      if (!evidence.operational.peakOperationSummary.hasReliablePeak)
+        'Peak Operation coverage cannot identify a reliable peak.',
+      if (evidence.operational.routePerformanceSummary.completeTrips.isEmpty)
+        'No complete Route Performance trips are available.',
+      if (evidence.feedback.totalRecordCount == 0)
+        'No feedback records are available; this does not confirm that service has no problems.',
+    ];
+    return values.isEmpty
+        ? const ['No deterministic evidence limitations were recorded.']
+        : values;
+  }
+
   Future<void> _showLimitedRoutes(BuildContext context) =>
       showModalBottomSheet<void>(
         context: context,
@@ -575,6 +768,36 @@ String _actionLabel(BusFrequencyRecommendationAction action) =>
       BusFrequencyRecommendationAction.decreaseService => 'Decrease Frequency',
       BusFrequencyRecommendationAction.insufficientEvidence =>
         'Needs More Evidence',
+    };
+
+String _routeCountLabel(int count) =>
+    '$count ${count == 1 ? 'Route' : 'Routes'}';
+
+String _headwaySummary(Iterable<int> seconds) {
+  final values = seconds.toList(growable: false)..sort();
+  if (values.isEmpty) return 'Unavailable';
+  final minimum = _durationLabel(values.first);
+  final maximum = _durationLabel(values.last);
+  return minimum == maximum ? minimum : '$minimum–$maximum range';
+}
+
+String _durationLabel(int seconds) {
+  final minutes = seconds / 60;
+  return minutes == minutes.roundToDouble()
+      ? '${minutes.toInt()} min'
+      : '${minutes.toStringAsFixed(1)} min';
+}
+
+String _directionLabel(int? directionId) =>
+    directionId == null ? 'Unspecified direction' : 'Direction $directionId';
+
+String _scheduledStatusLabel(ScheduledServiceEvidenceStatus status) =>
+    switch (status) {
+      ScheduledServiceEvidenceStatus.available => 'Available',
+      ScheduledServiceEvidenceStatus.insufficientForHeadway =>
+        'Insufficient for headway',
+      ScheduledServiceEvidenceStatus.noDepartures => 'No departures',
+      ScheduledServiceEvidenceStatus.incomplete => 'Incomplete',
     };
 
 String _exclusionReason(

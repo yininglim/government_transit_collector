@@ -118,11 +118,76 @@ void main() {
     await tapGenerate(tester);
     await tester.pumpAndSettle();
     expect(coordinator.analysisCalls, 1);
+    expect(find.byKey(const Key('overall-ai-summary')), findsOneWidget);
     expect(find.text('Overall evidence-grounded summary.'), findsOneWidget);
     expect(find.text('Maintain Current Frequency'), findsOneWidget);
+    expect(find.text('3 Routes'), findsOneWidget);
     expect(find.byKey(const Key('group-route-R1')), findsOneWidget);
     expect(find.byKey(const Key('group-route-R2')), findsOneWidget);
     expect(find.byKey(const Key('group-route-R3')), findsOneWidget);
+    expect(
+      find.ancestor(
+        of: find.byKey(const Key('group-route-R1')),
+        matching: find.byKey(const Key('action-group-maintainService')),
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Scheduled departures'), findsNWidgets(3));
+    expect(find.text('Headway'), findsNWidgets(3));
+  });
+
+  testWidgets('all action labels are user-facing and grouped', (tester) async {
+    final items = candidates(3);
+    final coordinator = FakeCoordinator(
+      items,
+      resultOverride: groupedResult([
+        (BusFrequencyRecommendationAction.increasePeakHourFrequency, ['R1']),
+        (BusFrequencyRecommendationAction.maintainService, ['R2']),
+        (BusFrequencyRecommendationAction.decreaseService, ['R3']),
+      ]),
+    );
+    await pumpPage(tester, coordinator);
+    await tapGenerate(tester);
+    await tester.pumpAndSettle();
+    expect(find.text('Increase Peak-Hour Frequency'), findsOneWidget);
+    expect(find.text('Maintain Current Frequency'), findsOneWidget);
+    expect(find.text('Decrease Frequency'), findsOneWidget);
+    expect(find.text('increasePeakHourFrequency'), findsNothing);
+  });
+
+  testWidgets('route View Evidence uses retained deterministic evidence only', (
+    tester,
+  ) async {
+    final coordinator = FakeCoordinator(candidates(1));
+    await pumpPage(tester, coordinator);
+    await tapGenerate(tester);
+    await tester.pumpAndSettle();
+    final calls = coordinator.analysisCalls;
+    final view = find.byKey(const Key('view-route-evidence-R1'));
+    await tester.ensureVisible(view);
+    await tester.pumpAndSettle();
+    await tester.tap(view);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('route-evidence-details-R1')), findsOneWidget);
+    final details = find.byKey(const Key('route-evidence-details-R1'));
+    expect(
+      find.descendant(of: details, matching: find.text('Scheduled Service')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: details, matching: find.text('Operational Evidence')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: details, matching: find.text('Feedback')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: details, matching: find.text('Limitations')),
+      findsOneWidget,
+    );
+    expect(find.text('Scheduled departures: 2'), findsOneWidget);
+    expect(coordinator.analysisCalls, calls);
   });
 
   testWidgets('limited routes remain separate and absent from grouped result', (
@@ -226,6 +291,44 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('post-gemini-needs-evidence')), findsOneWidget);
     expect(find.byKey(const Key('group-route-R2')), findsNothing);
+    expect(find.text('Needs More Evidence'), findsOneWidget);
+  });
+
+  testWidgets('narrow portrait with long summary and route wraps safely', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final item = candidates(1).single;
+    final coordinator = FakeCoordinator(
+      [
+        BusFrequencyDashboardCandidate(
+          route: const RoutePerformanceRoute(
+            routeId: 'R1',
+            shortName:
+                'A very long route identity that must wrap without overflow',
+            longName: 'Long descriptive route text',
+          ),
+          evidence: item.evidence,
+        ),
+      ],
+      resultOverride: groupedResult(
+        [
+          (BusFrequencyRecommendationAction.maintainService, ['R1']),
+        ],
+        overallSummary: List.filled(
+          8,
+          'A long evidence-grounded overall summary must remain readable.',
+        ).join(' '),
+      ),
+    );
+    await pumpPage(tester, coordinator);
+    await tapGenerate(tester);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(find.byType(ListView), findsOneWidget);
   });
 
   testWidgets(
@@ -424,6 +527,38 @@ BusFrequencyRecommendationResult success(
   );
 }
 
+BusFrequencyRecommendationResult groupedResult(
+  List<(BusFrequencyRecommendationAction, List<String>)> groups, {
+  String overallSummary = 'Overall evidence-grounded summary.',
+}) {
+  BusFrequencyRecommendationGroup group(
+    BusFrequencyRecommendationAction action,
+    List<String> routeIds,
+  ) => BusFrequencyRecommendationGroup(
+    action: action,
+    summary: 'Evidence supports this grouped action.',
+    rationale: const ['Scheduled evidence supports this action.'],
+    routeIds: routeIds,
+    evidenceReferences: [
+      for (final id in routeIds) 'route.$id.scheduled.summary',
+    ],
+    limitations: const ['Operational coverage is limited.'],
+    source: BusFrequencyRecommendationSource.gemini,
+  );
+  return BusFrequencyRecommendationResult(
+    status: BusFrequencyRecommendationStatus.available,
+    synthesis: BusFrequencyRecommendationSynthesis(
+      overallSummary: overallSummary,
+      recommendationGroups: [
+        for (final item in groups) group(item.$1, item.$2),
+      ],
+      needsMoreEvidence: null,
+    ),
+    failure: null,
+    payload: null,
+  );
+}
+
 class FakeRoutes implements RoutePerformanceRepository {
   FakeRoutes(List<String> ids) : routes = ids.map(route).toList();
   final List<RoutePerformanceRoute> routes;
@@ -474,6 +609,7 @@ class FakeCoordinator extends BusFrequencyDashboardCoordinator {
     this.gate,
     this.firstFailure = false,
     this.includeInsufficient = false,
+    this.resultOverride,
   }) : super(
          routeRepository: FakeRoutes(const []),
          evidenceRepository: FakeEvidence(const {}),
@@ -484,6 +620,7 @@ class FakeCoordinator extends BusFrequencyDashboardCoordinator {
   final Completer<void>? gate;
   final bool firstFailure;
   final bool includeInsufficient;
+  final BusFrequencyRecommendationResult? resultOverride;
   int screenCalls = 0;
   int analysisCalls = 0;
   List<String> lastCandidateIds = const [];
@@ -518,7 +655,8 @@ class FakeCoordinator extends BusFrequencyDashboardCoordinator {
         payload: null,
       );
     }
-    return success(lastCandidateIds, includeInsufficient: includeInsufficient);
+    return resultOverride ??
+        success(lastCandidateIds, includeInsufficient: includeInsufficient);
   }
 
   @override
