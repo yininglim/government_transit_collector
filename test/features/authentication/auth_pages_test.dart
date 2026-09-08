@@ -1,0 +1,319 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:government_transit_collector/features/authentication/data/auth_repository.dart';
+import 'package:government_transit_collector/features/authentication/presentation/auth_gate.dart';
+import 'package:government_transit_collector/features/authentication/presentation/login_page.dart';
+import 'package:government_transit_collector/features/authentication/presentation/forgot_password_page.dart';
+import 'package:government_transit_collector/features/authentication/presentation/reset_password_page.dart';
+import 'package:government_transit_collector/features/authentication/presentation/register_page.dart';
+import 'auth_test_support.dart';
+
+class PageAuth extends AuthRepository {
+  PageAuth()
+    : super(
+        client: SupabaseClient(
+          'https://example.test',
+          'test-key',
+          authOptions: const AuthClientOptions(autoRefreshToken: false),
+        ),
+      );
+  int googleCalls = 0;
+  int loginCalls = 0;
+  int registrationCalls = 0;
+  String? sentEmail;
+  String? updatedPassword;
+  String? googleError;
+  bool recovering = true;
+  bool valid = true;
+  @override
+  Future<void> signInWithGoogle() async {
+    googleCalls++;
+    if (googleError != null) throw AuthFlowException(googleError!);
+  }
+
+  @override
+  Future<void> cancelGoogleSignIn() async {}
+  @override
+  Future<void> login({required String email, required String password}) async {
+    loginCalls++;
+  }
+
+  @override
+  Future<RegistrationResult> register({
+    required String fullName,
+    required String email,
+    required String password,
+  }) async {
+    registrationCalls++;
+    return const RegistrationResult(requiresEmailConfirmation: true);
+  }
+
+  @override
+  Future<void> sendPasswordReset(String email) async {
+    sentEmail = email;
+  }
+
+  @override
+  bool get recoveryRequired => recovering;
+  @override
+  bool get hasValidRecoverySession => valid;
+  @override
+  Future<void> resetPassword(String password) async {
+    updatedPassword = password;
+    recovering = false;
+    notifyListeners();
+  }
+
+  @override
+  Future<void> cancelRecovery() async {
+    recovering = false;
+    notifyListeners();
+  }
+}
+
+void main() {
+  Future<void> show(
+    WidgetTester tester,
+    Widget page, {
+    bool keyboard = false,
+  }) async {
+    tester.view.physicalSize = const Size(360, 640);
+    tester.view.devicePixelRatio = 1;
+    tester.view.viewInsets = FakeViewPadding(bottom: keyboard ? 280 : 0);
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(MaterialApp(home: page));
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> tap(WidgetTester tester, Finder target) async {
+    await tester.ensureVisible(target);
+    await tester.tap(target);
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets(
+    'login order, Google abstraction, signup and phone keyboard layout',
+    (tester) async {
+      final repository = PageAuth();
+      await show(tester, LoginPage(repository: repository), keyboard: true);
+      expect(find.text('Welcome Back'), findsOneWidget);
+      final ordered = [
+        'Sign In',
+        'OR',
+        'Continue with Google',
+        'Forgot Password?',
+        "Don't have an account? Sign Up",
+      ];
+      for (var i = 1; i < ordered.length; i++) {
+        expect(
+          tester.getTopLeft(find.text(ordered[i])).dy,
+          greaterThan(tester.getTopLeft(find.text(ordered[i - 1])).dy),
+        );
+      }
+      await tap(tester, find.text('Continue with Google'));
+      expect(repository.googleCalls, 1);
+      expect(repository.loginCalls, 0);
+      await tap(tester, find.text('Cancel Google sign-in'));
+      expect(find.text('Google sign-in was cancelled.'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pumpAndSettle();
+      await tap(tester, find.text("Don't have an account? Sign Up"));
+      expect(find.byType(RegisterPage), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  for (final message in [
+    'Google sign-in was cancelled.',
+    'Unable to sign in with Google. Please try again.',
+  ]) {
+    testWidgets('Google displays $message', (tester) async {
+      final repository = PageAuth()..googleError = message;
+      await show(tester, LoginPage(repository: repository));
+      await tap(tester, find.text('Continue with Google'));
+      expect(find.text(message), findsOneWidget);
+      expect(find.byType(LoginPage), findsOneWidget);
+    });
+  }
+
+  testWidgets('email password login still calls existing abstraction', (
+    tester,
+  ) async {
+    final repository = PageAuth();
+    await show(tester, LoginPage(repository: repository));
+    await tester.enterText(
+      find.byType(TextFormField).at(0),
+      'rider@example.test',
+    );
+    await tester.enterText(find.byType(TextFormField).at(1), 'password123');
+    await tester.ensureVisible(find.text('Sign In'));
+    await tester.tap(find.text('Sign In'));
+    await tester.pump();
+    expect(repository.loginCalls, 1);
+    expect(repository.googleCalls, 0);
+  });
+
+  testWidgets('signup remains usable and returns email confirmation message', (
+    tester,
+  ) async {
+    final repository = PageAuth();
+    await show(tester, LoginPage(repository: repository));
+    await tap(tester, find.text("Don't have an account? Sign Up"));
+    final fields = find.byType(TextFormField);
+    for (final entry in [
+      'Rider',
+      'rider@example.test',
+      'password123',
+      'password123',
+    ].asMap().entries) {
+      await tester.enterText(fields.at(entry.key), entry.value);
+    }
+    await tap(tester, find.text('Register'));
+    expect(repository.registrationCalls, 1);
+    expect(find.byType(LoginPage), findsOneWidget);
+    expect(
+      find.text(
+        'Account created. Check your email to confirm it before signing in.',
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets(
+    'forgot validates email and displays neutral success without updating password',
+    (tester) async {
+      final repository = PageAuth();
+      await show(
+        tester,
+        ForgotPasswordPage(repository: repository),
+        keyboard: true,
+      );
+      await tap(tester, find.text('Send Reset Link'));
+      expect(find.text('Email is required.'), findsOneWidget);
+      expect(repository.sentEmail, isNull);
+      await tester.enterText(find.byType(TextFormField), 'invalid');
+      await tap(tester, find.text('Send Reset Link'));
+      expect(find.text('Enter a valid email address.'), findsOneWidget);
+      expect(repository.sentEmail, isNull);
+      await tester.enterText(find.byType(TextFormField), 'rider@example.test');
+      await tap(tester, find.text('Send Reset Link'));
+      expect(repository.sentEmail, 'rider@example.test');
+      expect(
+        find.text(
+          'If an account exists for this email, a password reset link has been sent.',
+        ),
+        findsOneWidget,
+      );
+      expect(repository.updatedPassword, isNull);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'Forgot Password opens dedicated page and Back returns to login',
+    (tester) async {
+      final repository = PageAuth();
+      await show(tester, LoginPage(repository: repository));
+      await tap(tester, find.text('Forgot Password?'));
+      expect(find.byType(ForgotPasswordPage), findsOneWidget);
+      await tap(tester, find.text('Back to Sign In'));
+      expect(find.byType(LoginPage), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'reset validates required, length, matching and handles keyboard',
+    (tester) async {
+      final repository = PageAuth();
+      await show(
+        tester,
+        ResetPasswordPage(repository: repository),
+        keyboard: true,
+      );
+      final button = find.widgetWithText(FilledButton, 'Reset Password');
+      await tap(tester, button);
+      expect(find.text('Password is required.'), findsOneWidget);
+      expect(find.text('Confirm password is required.'), findsOneWidget);
+      final fields = find.byType(TextFormField);
+      await tester.enterText(fields.at(0), 'short');
+      await tap(tester, button);
+      expect(
+        find.text('Password must contain at least 8 characters.'),
+        findsOneWidget,
+      );
+      await tester.enterText(fields.at(0), 'password123');
+      await tester.enterText(fields.at(1), 'different');
+      await tap(tester, button);
+      expect(find.text('Passwords do not match.'), findsOneWidget);
+      expect(repository.updatedPassword, isNull);
+      await tester.enterText(fields.at(1), 'password123');
+      await tap(tester, button);
+      expect(repository.updatedPassword, 'password123');
+      expect(find.text('Password updated successfully.'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'recovery gate returns to login after reset, without loading home',
+    (tester) async {
+      final repository = PageAuth();
+      await show(tester, AuthGate(repository: repository));
+      expect(find.byType(ResetPasswordPage), findsOneWidget);
+      await tester.enterText(find.byType(TextFormField).at(0), 'password123');
+      await tester.enterText(find.byType(TextFormField).at(1), 'password123');
+      await tap(tester, find.widgetWithText(FilledButton, 'Reset Password'));
+      expect(find.byType(LoginPage), findsOneWidget);
+      expect(find.text('Password updated successfully.'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'invalid recovery cannot update password and allows safe cancellation',
+    (tester) async {
+      final repository = PageAuth()..valid = false;
+      await show(tester, AuthGate(repository: repository));
+      expect(find.text(AuthRepository.invalidRecoveryMessage), findsOneWidget);
+      expect(find.byType(TextFormField), findsNothing);
+      await tap(tester, find.text('Back to Sign In'));
+      expect(find.byType(LoginPage), findsOneWidget);
+      expect(repository.updatedPassword, isNull);
+    },
+  );
+
+  testWidgets(
+    'real Supabase recovery callback replaces pushed page and blocks profile routing',
+    (tester) async {
+      final backend = (await tester.runAsync(() async {
+        final value = AuthBackend()..role = 'admin';
+        value.client;
+        return value;
+      }))!;
+      final repository = AuthRepository(
+        client: backend.client,
+        redirectUrl: 'test-auth://callback',
+      );
+      addTearDown(() async {
+        repository.dispose();
+        await backend.client.dispose();
+      });
+      await show(tester, AuthGate(repository: repository));
+      await tap(tester, find.text('Forgot Password?'));
+      await tester.runAsync(() async {
+        await repository.sendPasswordReset('owner@example.test');
+        await repository.handleAuthCallback(
+          Uri.parse('test-auth://callback?code=recovery'),
+        );
+      });
+      await tester.pumpAndSettle();
+      expect(find.byType(ResetPasswordPage), findsOneWidget);
+      expect(find.byType(ForgotPasswordPage), findsNothing);
+      expect(
+        backend.requests.where((r) => r.url.path.contains('/rest/')),
+        isEmpty,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+}

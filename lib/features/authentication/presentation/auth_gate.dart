@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:government_transit_collector/features/admin_home/presentation/admin_home_page.dart';
 import 'package:government_transit_collector/features/authentication/data/auth_repository.dart';
 import 'package:government_transit_collector/features/authentication/presentation/login_page.dart';
+import 'package:government_transit_collector/features/authentication/presentation/reset_password_page.dart';
 import 'package:government_transit_collector/features/passenger_home/presentation/passenger_home_page.dart';
 
 enum AuthDestination { passenger, admin, unsupported }
@@ -36,14 +37,44 @@ class _AuthGateState extends State<AuthGate> {
   @override
   void initState() {
     super.initState();
-    _authSubscription = widget.repository.authStateChanges.listen((_) {
-      _refresh();
-    });
+    widget.repository.addListener(_repositoryChanged);
+    _authSubscription = widget.repository.authStateChanges.listen(
+      (_) {
+        _refresh();
+      },
+      onError: (Object _) {
+        if (!mounted) return;
+        setState(() {
+          _loading = false;
+          _error = 'Unable to verify your account. Please try again.';
+        });
+      },
+    );
+    _refresh();
+  }
+
+  void _repositoryChanged() {
+    if (!mounted) return;
+    // Recovery must replace any pushed signup/forgot-password/home subpage.
+    if (widget.repository.handlingCallback ||
+        widget.repository.recoveryRequired) {
+      Navigator.of(context).popUntil((route) => route.isFirst);
+    }
     _refresh();
   }
 
   Future<void> _refresh() async {
     final requestId = ++_requestId;
+    if (widget.repository.handlingCallback ||
+        widget.repository.recoveryRequired) {
+      if (mounted) {
+        setState(() {
+          _profile = null;
+          _loading = false;
+        });
+      }
+      return;
+    }
     if (mounted) {
       setState(() {
         _loading = true;
@@ -92,18 +123,28 @@ class _AuthGateState extends State<AuthGate> {
 
   @override
   void dispose() {
+    widget.repository.removeListener(_repositoryChanged);
     _authSubscription?.cancel();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    if (widget.repository.handlingCallback) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    if (widget.repository.recoveryRequired) {
+      return ResetPasswordPage(repository: widget.repository);
+    }
     if (_loading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
     if (widget.repository.currentSession == null) {
-      return LoginPage(repository: widget.repository);
+      return LoginPage(
+        repository: widget.repository,
+        message: widget.repository.callbackMessage,
+      );
     }
 
     if (_error != null || _profile == null) {

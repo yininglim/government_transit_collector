@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:government_transit_collector/features/authentication/data/auth_repository.dart';
 import 'package:government_transit_collector/core/theme/app_theme.dart';
 import 'package:government_transit_collector/features/authentication/presentation/auth_gate.dart';
 
 class App extends StatelessWidget {
-  const App({super.key});
+  const App({super.key, this.authRepository});
+
+  final AuthRepository? authRepository;
 
   @override
   Widget build(BuildContext context) {
@@ -11,7 +14,7 @@ class App extends StatelessWidget {
       title: 'Government Transit Collector',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
-      home: AuthGate(),
+      home: AuthGate(repository: authRepository),
     );
   }
 }
