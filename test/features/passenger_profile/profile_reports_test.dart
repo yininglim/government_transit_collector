@@ -48,7 +48,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('My Travel Profile'), findsNothing);
       expect(find.text('Plan a Journey'), findsOneWidget);
-      expect(find.text("Today's Transit"), findsOneWidget);
+      expect(find.text("Today's Transit"), findsNothing);
       final actions = tester.widget<AppBar>(find.byType(AppBar)).actions!;
       expect((actions[0] as IconButton).tooltip, 'My Travel Profile');
       expect((actions[1] as IconButton).tooltip, 'Sign out');

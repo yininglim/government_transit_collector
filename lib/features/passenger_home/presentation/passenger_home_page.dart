@@ -1,7 +1,4 @@
 import 'dart:async';
-import 'home_transit_insights.dart';
-import '../../bus_feedback/data/bus_feedback.dart';
-import '../../realtime_vehicle/data/gtfs_realtime_decoder.dart';
 import 'package:government_transit_collector/features/bus_feedback/presentation/passenger_reports_page.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/recent_journey_search.dart';
 import 'package:flutter/material.dart';
@@ -25,7 +22,7 @@ import 'package:government_transit_collector/features/realtime_vehicle/presentat
 
 // Malaysia uses UTC+8; convert the instant independently of device timezone.
 String malaysiaGreeting(DateTime instant) {
-  final hour = malaysiaHomeTime(instant).hour;
+  final hour = instant.toUtc().add(const Duration(hours: 8)).hour;
   if (hour >= 5 && hour < 12) return 'Good Morning';
   if (hour >= 12 && hour < 18) return 'Good Afternoon';
   return 'Good Evening';
@@ -43,12 +40,10 @@ class PassengerHomePage extends StatefulWidget {
     this.departurePageBuilder,
     this.livePageBuilder,
     this.dataCheckPageBuilder,
-    this.homeRealtimeRepository,
     this.now,
     super.key,
   });
 
-  final RealtimeVehicleRepository? homeRealtimeRepository;
   final DateTime Function()? now;
   final AppProfile profile;
   final WidgetBuilder? departurePageBuilder;
@@ -67,12 +62,7 @@ class PassengerHomePage extends StatefulWidget {
 
 class _PassengerHomePageState extends State<PassengerHomePage>
     with WidgetsBindingObserver {
-  late final RealtimeVehicleRepository _homeRealtime =
-      widget.homeRealtimeRepository ?? DataGovMyRealtimeVehicleRepository();
-  RealtimeFeedSnapshot? _homeSnapshot;
-  List<BusFeedback>? _homeReports;
   Timer? _homeTimer;
-  bool _refreshingHome = false;
   final _mainNavigator = GlobalKey<NavigatorState>();
   int _activeTab = 0;
   final _homeRevision = ValueNotifier(0);
@@ -108,39 +98,8 @@ class _PassengerHomePageState extends State<PassengerHomePage>
     if (state == AppLifecycleState.resumed) _refreshHome();
   }
 
-  Future<void> _refreshHome() async {
-    if (_refreshingHome) return;
-    _refreshingHome = true;
-    await Future.wait([
-      () async {
-        RealtimeFeedSnapshot? snapshot;
-        try {
-          snapshot = await _homeRealtime.fetchVehiclePositions();
-        } on Object {
-          // This optional dashboard read must not block Home.
-        }
-        if (mounted) {
-          _homeSnapshot = snapshot;
-          _homeRevision.value++;
-        }
-      }(),
-      () async {
-        List<BusFeedback>? reports;
-        try {
-          reports =
-              await (widget.feedbackRepository ??
-                      SupabaseBusFeedbackRepository())
-                  .getMyFeedback();
-        } on Object {
-          // Preserve repository ownership rules and show unavailable on failure.
-        }
-        if (mounted) {
-          _homeReports = reports;
-          _homeRevision.value++;
-        }
-      }(),
-    ]);
-    _refreshingHome = false;
+  void _refreshHome() {
+    if (mounted) _homeRevision.value++;
   }
 
   @override
@@ -148,9 +107,6 @@ class _PassengerHomePageState extends State<PassengerHomePage>
     _homeTimer?.cancel();
     _homeRevision.dispose();
     WidgetsBinding.instance.removeObserver(this);
-    if (widget.homeRealtimeRepository == null) {
-      (_homeRealtime as DataGovMyRealtimeVehicleRepository).close();
-    }
     super.dispose();
   }
 
@@ -441,12 +397,6 @@ class _PassengerHomePageState extends State<PassengerHomePage>
               label: const Text('Plan a Journey'),
             ),
             const SizedBox(height: 32),
-            HomeTransitInsights(
-              now: (widget.now ?? DateTime.now)(),
-              userId: widget.profile.userId,
-              reports: _homeReports,
-              snapshot: _homeSnapshot,
-            ),
             if (_reminders != null)
               UpcomingJourneys(
                 controller: _reminders,
