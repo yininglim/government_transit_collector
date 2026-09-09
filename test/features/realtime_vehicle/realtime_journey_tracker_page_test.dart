@@ -869,6 +869,19 @@ void main() {
       );
 
       await tester.binding.setSurfaceSize(const Size(800, 400));
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+      expect(controller.camera.nonRotatedSize, const Size(800, 400));
+      expect(
+        controller.camera.visibleBounds.contains(const LatLng(1, 103)),
+        isTrue,
+      );
+      expect(
+        controller.camera.visibleBounds.contains(const LatLng(2, 104)),
+        isTrue,
+      );
+
       redraw(() {
         scope = 'route-c';
         markers = buildRealtimeVehicleMarkers([
