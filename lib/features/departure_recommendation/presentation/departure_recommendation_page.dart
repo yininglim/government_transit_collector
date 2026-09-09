@@ -85,6 +85,7 @@ class _SaveJourneyDialogState extends State<_SaveJourneyDialog> {
 
 class DepartureRecommendationPage extends StatefulWidget {
   const DepartureRecommendationPage({
+    this.showPageHeader = true,
     required this.stopRepository,
     required this.tripRepository,
     required this.transferRepository,
@@ -131,6 +132,8 @@ class DepartureRecommendationPage extends StatefulWidget {
   final BusFeedbackRepository? feedbackRepository;
 
   final FeedbackReferenceRepository? feedbackReferenceRepository;
+
+  final bool showPageHeader;
 
   @override
   State<DepartureRecommendationPage> createState() =>
@@ -785,7 +788,9 @@ class _DepartureRecommendationPageState
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Departure Recommendation')),
+      appBar: widget.showPageHeader
+          ? AppBar(title: const Text('Departure Recommendation'))
+          : null,
       body: SafeArea(
         child: LayoutBuilder(
           builder: (context, constraints) {

@@ -128,6 +128,7 @@ class _PassengerHomePageState extends State<PassengerHomePage>
       (context) =>
           widget.departurePageBuilder?.call(context) ??
           DepartureRecommendationPage(
+            showPageHeader: false,
             reminderController: _reminders,
             stopRepository: SupabaseDepartureStopRepository(),
             tripRepository: SupabaseDirectTripRepository(),
@@ -192,6 +193,7 @@ class _PassengerHomePageState extends State<PassengerHomePage>
     (context) =>
         widget.livePageBuilder?.call(context) ??
         RealtimeJourneyTrackerPage(
+          showPageHeader: false,
           repository: DataGovMyRealtimeVehicleRepository(),
           tripMatcher: SupabaseStaticTripMatcher(),
         ),
@@ -202,6 +204,7 @@ class _PassengerHomePageState extends State<PassengerHomePage>
     (context) =>
         widget.dataCheckPageBuilder?.call(context) ??
         RealtimeDataCheckPage(
+          showPageHeader: false,
           repository: DataGovMyRealtimeVehicleRepository(),
           tripMatcher: SupabaseStaticTripMatcher(),
         ),
@@ -210,6 +213,7 @@ class _PassengerHomePageState extends State<PassengerHomePage>
   void _openReports() => _pushTab(
     4,
     (_) => PassengerReportsPage(
+      showPageHeader: false,
       userId: widget.profile.userId,
       repository: widget.feedbackRepository,
     ),

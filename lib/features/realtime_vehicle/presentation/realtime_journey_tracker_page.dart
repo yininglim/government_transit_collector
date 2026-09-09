@@ -28,6 +28,7 @@ enum RealtimeTrackerView { allBuses, selectedBus }
 
 class RealtimeJourneyTrackerPage extends StatefulWidget {
   const RealtimeJourneyTrackerPage({
+    this.showPageHeader = true,
     required this.repository,
     required this.tripMatcher,
     this.pollingInterval = realtimePollingInterval,
@@ -45,6 +46,8 @@ class RealtimeJourneyTrackerPage extends StatefulWidget {
   final RealtimeRouteMetadataRepository? routeMetadataRepository;
   final TripProgressRepository? tripProgressRepository;
   final DateTime Function()? now;
+
+  final bool showPageHeader;
 
   @override
   State<RealtimeJourneyTrackerPage> createState() =>
@@ -201,7 +204,9 @@ class _RealtimeJourneyTrackerPageState extends State<RealtimeJourneyTrackerPage>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Realtime Journey Tracker')),
+      appBar: widget.showPageHeader
+          ? AppBar(title: const Text('Realtime Journey Tracker'))
+          : null,
       body: SafeArea(child: _buildBody()),
     );
   }

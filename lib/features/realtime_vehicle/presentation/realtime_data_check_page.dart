@@ -7,6 +7,7 @@ import 'package:government_transit_collector/features/realtime_vehicle/data/stat
 
 class RealtimeDataCheckPage extends StatefulWidget {
   const RealtimeDataCheckPage({
+    this.showPageHeader = true,
     required this.repository,
     required this.tripMatcher,
     super.key,
@@ -14,6 +15,8 @@ class RealtimeDataCheckPage extends StatefulWidget {
 
   final RealtimeVehicleRepository repository;
   final StaticTripMatcher tripMatcher;
+
+  final bool showPageHeader;
 
   @override
   State<RealtimeDataCheckPage> createState() => _RealtimeDataCheckPageState();
@@ -92,17 +95,19 @@ class _RealtimeDataCheckPageState extends State<RealtimeDataCheckPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Realtime Data Check'),
-        actions: [
-          IconButton(
-            key: const Key('refresh-realtime'),
-            tooltip: 'Refresh realtime data',
-            onPressed: _loading ? null : _load,
-            icon: const Icon(Icons.refresh),
-          ),
-        ],
-      ),
+      appBar: widget.showPageHeader
+          ? AppBar(
+              title: const Text('Realtime Data Check'),
+              actions: [
+                IconButton(
+                  key: const Key('refresh-realtime'),
+                  tooltip: 'Refresh realtime data',
+                  onPressed: _loading ? null : _load,
+                  icon: const Icon(Icons.refresh),
+                ),
+              ],
+            )
+          : null,
       body: SafeArea(child: _buildBody()),
     );
   }
@@ -153,9 +158,22 @@ class _RealtimeDataCheckPageState extends State<RealtimeDataCheckPage> {
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
                 sliver: SliverList.list(
                   children: [
-                    Text(
-                      'Realtime Vehicle Positions',
-                      style: Theme.of(context).textTheme.headlineSmall,
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Realtime Vehicle Positions',
+                            style: Theme.of(context).textTheme.headlineSmall,
+                          ),
+                        ),
+                        if (!widget.showPageHeader)
+                          IconButton(
+                            key: const Key('refresh-realtime'),
+                            tooltip: 'Refresh realtime data',
+                            onPressed: _loading ? null : _load,
+                            icon: const Icon(Icons.refresh),
+                          ),
+                      ],
                     ),
                     const SizedBox(height: 8),
                     Text(

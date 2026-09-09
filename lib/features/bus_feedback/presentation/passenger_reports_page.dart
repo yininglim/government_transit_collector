@@ -6,6 +6,7 @@ import 'bus_feedback_page.dart';
 
 class PassengerReportsPage extends StatefulWidget {
   const PassengerReportsPage({
+    this.showPageHeader = true,
     required this.userId,
     this.repository,
     this.referenceRepository,
@@ -14,6 +15,8 @@ class PassengerReportsPage extends StatefulWidget {
   final String userId;
   final BusFeedbackRepository? repository;
   final FeedbackReferenceRepository? referenceRepository;
+
+  final bool showPageHeader;
 
   @override
   State<PassengerReportsPage> createState() => _PassengerReportsPageState();
@@ -37,7 +40,7 @@ class _PassengerReportsPageState extends State<PassengerReportsPage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Reports')),
+    appBar: widget.showPageHeader ? AppBar(title: const Text('Reports')) : null,
     body: SafeArea(
       child: Center(
         child: ConstrainedBox(

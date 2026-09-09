@@ -71,6 +71,37 @@ Widget app(
 );
 
 void main() {
+  testWidgets(
+    'main tab hides header and preserves inline refresh in both orientations',
+    (tester) async {
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.view.resetPhysicalSize);
+      final repository = FakeRealtimeRepository([() async => snapshot]);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: RealtimeDataCheckPage(
+            showPageHeader: false,
+            repository: repository,
+            tripMatcher: FakeTripMatcher(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      for (final size in [const Size(390, 844), const Size(844, 390)]) {
+        tester.view.physicalSize = size;
+        await tester.pumpAndSettle();
+        expect(find.byType(AppBar), findsNothing);
+        expect(find.byType(BackButton), findsNothing);
+        final before = repository.calls;
+        await tester.tap(find.byKey(const Key('refresh-realtime')));
+        await tester.pumpAndSettle();
+        expect(repository.calls, before + 1);
+        expect(tester.takeException(), isNull);
+      }
+    },
+  );
+
   testWidgets('shows initial loading state', (tester) async {
     final completer = Completer<RealtimeFeedSnapshot>();
     await tester.pumpWidget(
