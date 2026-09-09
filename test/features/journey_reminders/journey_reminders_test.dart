@@ -474,7 +474,13 @@ void main() {
         final route = tester.getTopLeft(
           find.byKey(Key('view-route-${recommendation.departureSeconds}')),
         );
-        expect(report.dy, route.dy);
+        // Narrow cards may stack actions; both must remain reachable.
+        expect(route.dy, greaterThanOrEqualTo(report.dy));
+        await tester.ensureVisible(find.text('View Route'));
+        await tester.pumpAndSettle();
+        expect(find.text('View Route').hitTestable(), findsOneWidget);
+        await tester.ensureVisible(find.text('Remind Me'));
+        await tester.pumpAndSettle();
         await tester.tap(find.text('Remind Me'));
         await tester.pumpAndSettle();
         await tester.ensureVisible(find.text('Set Reminder'));

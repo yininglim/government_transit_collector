@@ -30,6 +30,9 @@ class PageAuth extends AuthRepository {
   int changeCalls = 0;
   bool emailPassword = true;
   bool googleIdentity = false;
+  String sessionMethod = 'password';
+  @override
+  String? get currentAuthenticationMethod => sessionMethod;
   @override
   String? get currentEmail => 'rider@example.test';
   @override

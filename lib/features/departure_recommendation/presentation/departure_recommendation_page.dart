@@ -140,6 +140,11 @@ class _DepartureRecommendationPageState
     extends State<DepartureRecommendationPage> {
   DepartureStop? _origin;
   DepartureStop? _destination;
+  List<DepartureStop> _reachable = const [];
+  bool _loadingDestinations = false;
+  String? _destinationError;
+  int _destinationRequest = 0;
+  TravelTimeMode _timeMode = TravelTimeMode.departAt;
 
   String? _validationMessage;
   String? _directError;
@@ -151,7 +156,8 @@ class _DepartureRecommendationPageState
   bool? _routeStructureFound;
   bool _searching = false;
   bool _restoringRecent = false;
-  bool get _inputsBusy => _searching || _restoringRecent;
+  bool get _inputsBusy =>
+      _searching || _restoringRecent || _loadingDestinations;
   final _scrollController = ScrollController();
 
   List<RecentJourneySearch>? _recentSearches;
@@ -186,6 +192,7 @@ class _DepartureRecommendationPageState
     _reminders?.addListener(_remindersChanged);
     _origin = widget.initialJourney?.origin;
     _destination = widget.initialJourney?.destination;
+    if (_origin != null) unawaited(_refreshDestinations());
 
     final initial =
         widget.initialDateTime ??
@@ -251,7 +258,7 @@ class _DepartureRecommendationPageState
           nearbyRepository: widget.nearbyStopRepository,
           locationService: widget.passengerLocationService,
           repository: widget.stopRepository,
-          excludedStopId: _destination?.id,
+          excludedStopId: null,
         ),
       ),
     );
@@ -262,15 +269,51 @@ class _DepartureRecommendationPageState
       _origin = stop;
       _resetSearchState();
     });
+    await _refreshDestinations();
+  }
+
+  Future<void> _refreshDestinations() async {
+    final request = ++_destinationRequest;
+    final origin = _origin;
+    setState(() {
+      _reachable = const [];
+      _destinationError = null;
+      _loadingDestinations = origin != null;
+      if (origin == null) _destination = null;
+    });
+    if (origin == null) return;
+    try {
+      final stops = await widget.transferRepository.reachableDestinations(
+        origin.id,
+      );
+      if (!mounted || request != _destinationRequest) return;
+      setState(() {
+        _reachable = stops;
+        if (!stops.any((s) => s.id == _destination?.id)) _destination = null;
+      });
+    } on Object {
+      if (!mounted || request != _destinationRequest) return;
+      setState(() {
+        _destination = null;
+        _destinationError =
+            'Unable to load reachable destinations. Please retry.';
+      });
+    } finally {
+      if (mounted && request == _destinationRequest) {
+        setState(() => _loadingDestinations = false);
+      }
+    }
   }
 
   Future<void> _selectDestination() async {
+    if (_origin == null || _inputsBusy || _destinationError != null) return;
     final stop = await Navigator.of(context).push<DepartureStop>(
       MaterialPageRoute(
         builder: (_) => StopSelectionPage(
           title: 'Select destination stop',
           repository: widget.stopRepository,
           excludedStopId: _origin?.id,
+          availableStops: _reachable,
         ),
       ),
     );
@@ -455,6 +498,7 @@ class _DepartureRecommendationPageState
           destinationStopId: destination.id,
           travelDate: _travelDate,
           travelTimeSeconds: timeOfDayToServiceSeconds(_travelTime),
+          mode: _timeMode,
           directRoutes: directResults ?? const [],
           transferJourneys: transferResults ?? const [],
         );
@@ -560,7 +604,7 @@ class _DepartureRecommendationPageState
     }
   }
 
-  void _reverseJourney() {
+  Future<void> _reverseJourney() async {
     if (_inputsBusy || (_origin == null && _destination == null)) return;
     setState(() {
       final origin = _origin;
@@ -568,6 +612,7 @@ class _DepartureRecommendationPageState
       _destination = origin;
       _resetSearchState();
     });
+    await _refreshDestinations();
   }
 
   Future<void> _restoreRecentSearch(RecentJourneySearch search) async {
@@ -592,8 +637,10 @@ class _DepartureRecommendationPageState
         _destination = stops[1];
         _travelDate = DateTime(fresh.year, fresh.month, fresh.day);
         _travelTime = TimeOfDay.fromDateTime(fresh);
+        _timeMode = TravelTimeMode.departAt;
         _resetSearchState();
       });
+      await _refreshDestinations();
     } on Object {
       if (mounted) {
         setState(
@@ -734,18 +781,6 @@ class _DepartureRecommendationPageState
     );
   }
 
-  void _openGeneralFeedback() {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => BusFeedbackPage(
-          repository: _feedbackRepository(),
-          referenceRepository: _feedbackReferenceRepository(),
-          now: widget.now,
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -756,6 +791,7 @@ class _DepartureRecommendationPageState
             final padding = constraints.maxWidth >= 700 ? 32.0 : 16.0;
 
             return SingleChildScrollView(
+              physics: const ClampingScrollPhysics(),
               key: const Key('departure-page-scroll'),
               controller: _scrollController,
               padding: EdgeInsets.fromLTRB(padding, 16, padding, 32),
@@ -776,7 +812,19 @@ class _DepartureRecommendationPageState
 
                       const SizedBox(height: 24),
 
+                      Text(
+                        'Your route',
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 8),
                       _buildStopFields(constraints.maxWidth),
+                      if (_loadingDestinations) const LinearProgressIndicator(),
+                      if (_destinationError != null)
+                        TextButton(
+                          onPressed: _refreshDestinations,
+                          child: Text(_destinationError!),
+                        ),
                       TextButton.icon(
                         onPressed: _inputsBusy
                             ? null
@@ -797,6 +845,30 @@ class _DepartureRecommendationPageState
 
                       const SizedBox(height: 12),
 
+                      Text(
+                        'Travel Time',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      Wrap(
+                        spacing: 12,
+                        children: [
+                          for (final mode in TravelTimeMode.values)
+                            ChoiceChip(
+                              label: Text(
+                                mode == TravelTimeMode.departAt
+                                    ? 'Depart At'
+                                    : 'Arrive By',
+                              ),
+                              selected: _timeMode == mode,
+                              onSelected: _inputsBusy
+                                  ? null
+                                  : (_) => setState(() {
+                                      _timeMode = mode;
+                                      _resetSearchState();
+                                    }),
+                            ),
+                        ],
+                      ),
                       _buildTravelFields(constraints.maxWidth),
                       if (_restoringRecent) const LinearProgressIndicator(),
 
@@ -816,6 +888,9 @@ class _DepartureRecommendationPageState
 
                       FilledButton.icon(
                         key: const Key('journey-search-button'),
+                        style: FilledButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 18),
+                        ),
                         onPressed: _inputsBusy ? null : _search,
                         icon: _searching
                             ? const SizedBox.square(
@@ -825,7 +900,9 @@ class _DepartureRecommendationPageState
                                 ),
                               )
                             : const Icon(Icons.search),
-                        label: Text(_searching ? 'Searching...' : 'Search'),
+                        label: Text(
+                          _searching ? 'Searching...' : 'Find Journey',
+                        ),
                       ),
 
                       const SizedBox(height: 28),
@@ -835,10 +912,6 @@ class _DepartureRecommendationPageState
                       const SizedBox(height: 28),
 
                       _buildRecentSearches(),
-
-                      const SizedBox(height: 28),
-
-                      _buildFeedbackSection(),
                     ],
                   ),
                 ),
@@ -864,7 +937,16 @@ class _DepartureRecommendationPageState
       label: 'Destination / To stop',
       icon: Icons.location_on_outlined,
       stop: _destination,
-      onTap: _inputsBusy ? null : _selectDestination,
+      hint: _origin == null
+          ? 'Select an origin first'
+          : _loadingDestinations
+          ? 'Loading reachable destinations...'
+          : _reachable.isEmpty
+          ? 'No reachable destinations'
+          : 'Select a reachable destination',
+      onTap: _inputsBusy || _origin == null || _destinationError != null
+          ? null
+          : _selectDestination,
     );
 
     final reverse = IconButton(
@@ -972,11 +1054,12 @@ class _DepartureRecommendationPageState
     final recommendations = _recommendations ?? const [];
 
     if (recommendations.isEmpty) {
-      return const _SectionMessage(
-        key: Key('no-upcoming-departures'),
+      return _SectionMessage(
+        key: const Key('no-upcoming-departures'),
         icon: Icons.event_busy_outlined,
-        message:
-            'No upcoming departure was found for the selected date and time.',
+        message: _timeMode == TravelTimeMode.arriveBy
+            ? 'No journey arrives at or before the selected date and time.'
+            : 'No upcoming departure was found for the selected date and time.',
       );
     }
 
@@ -993,6 +1076,12 @@ class _DepartureRecommendationPageState
 
         ...recommendations.map(
           (recommendation) => _RecommendationCard(
+            bestChoice: identical(recommendation, recommendations.first),
+            reasons: journeyRecommendationReasons(
+              recommendation,
+              _timeMode,
+              timeOfDayToServiceSeconds(_travelTime),
+            ),
             reminders: _reminders,
             now: widget.now,
             recommendation: recommendation,
@@ -1084,60 +1173,13 @@ class _DepartureRecommendationPageState
       ],
     );
   }
-
-  Widget _buildFeedbackSection() {
-    return Card(
-      key: const Key('general-feedback-section'),
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(
-                  Icons.report_problem_outlined,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-
-                const SizedBox(width: 12),
-
-                Expanded(
-                  child: Text(
-                    'Report a Transit Issue',
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                ),
-              ],
-            ),
-
-            const SizedBox(height: 12),
-
-            const Text(
-              'Report a problem with a previous bus journey, route, bus stop, or walking distance.',
-            ),
-
-            const SizedBox(height: 16),
-
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.tonalIcon(
-                key: const Key('general-feedback-button'),
-                onPressed: _openGeneralFeedback,
-                icon: const Icon(Icons.feedback_outlined),
-                label: const Text('Report Bus / Stop Issue'),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 }
 
 class _RecommendationCard extends StatelessWidget {
   const _RecommendationCard({
     required this.recommendation,
+    required this.bestChoice,
+    required this.reasons,
     required this.originStopName,
     required this.destinationStopName,
     required this.travelDate,
@@ -1152,6 +1194,8 @@ class _RecommendationCard extends StatelessWidget {
   });
 
   final JourneyRecommendation recommendation;
+  final bool bestChoice;
+  final List<String> reasons;
   final ReminderController? reminders;
   final DateTime Function()? now;
 
@@ -1178,6 +1222,55 @@ class _RecommendationCard extends StatelessWidget {
 
     return trimmed?.isNotEmpty == true ? trimmed! : routeId;
   }
+
+  Widget _leg(
+    BuildContext context,
+    String label,
+    String route,
+    String from,
+    String to,
+    int departure,
+    int arrival,
+    bool? live,
+    int number,
+  ) => Container(
+    width: double.infinity,
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(
+      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      borderRadius: BorderRadius.circular(12),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: Theme.of(context).textTheme.labelLarge?.copyWith(
+            color: Theme.of(context).colorScheme.primary,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text('Route $route', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 6),
+        Text('$from \u2192 $to'),
+        Text(
+          '${formatServiceDaySeconds(departure)} \u2192 ${formatServiceDaySeconds(arrival)}',
+        ),
+        const SizedBox(height: 8),
+        Text(
+          liveStatusLoading
+              ? 'Checking live status...'
+              : liveStatusUnavailable || live == null
+              ? 'Live status unavailable'
+              : 'Leg $number: ${live
+                    ? 'Live'
+                    : number == 1
+                    ? 'Not live'
+                    : 'Not live yet'}',
+        ),
+      ],
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -1210,11 +1303,26 @@ class _RecommendationCard extends StatelessWidget {
         : '${_routeLabel(transfer!.firstRouteId, transfer.firstRouteShortName)} → ${_routeLabel(transfer.secondRouteId, transfer.secondRouteShortName)}';
 
     return Card(
+      margin: const EdgeInsets.only(bottom: 16),
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(20),
+        side: BorderSide(
+          color: bestChoice
+              ? Theme.of(context).colorScheme.primary
+              : Theme.of(context).colorScheme.outlineVariant,
+          width: bestChoice ? 1.5 : 1,
+        ),
+      ),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (bestChoice) ...[
+              const Chip(label: Text('BEST CHOICE')),
+              const SizedBox(height: 8),
+            ],
             Text(title, style: Theme.of(context).textTheme.titleMedium),
 
             const SizedBox(height: 8),
@@ -1228,18 +1336,28 @@ class _RecommendationCard extends StatelessWidget {
               style: Theme.of(context).textTheme.titleSmall,
             ),
 
-            if (transfer != null) ...[
-              const SizedBox(height: 10),
-
-              Text('Transfer at ${transfer.transferStopName}'),
-
-              Text(
-                '${formatDurationMinutes(transfer.transferWaitSeconds)} transfer',
-              ),
-            ],
-
             const SizedBox(height: 12),
 
+            if (bestChoice && reasons.isNotEmpty) ...[
+              const Text('Why this journey:'),
+              for (final reason in reasons)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(
+                        Icons.check_circle_outline,
+                        size: 18,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text(reason)),
+                    ],
+                  ),
+                ),
+              const SizedBox(height: 12),
+            ],
             _JourneySummary(
               label: transfer == null
                   ? '$duration • Direct'
@@ -1248,12 +1366,68 @@ class _RecommendationCard extends StatelessWidget {
 
             const SizedBox(height: 8),
 
-            _RecommendationLiveStatus(
-              transfer: transfer != null,
-              availability: liveAvailability,
-              loading: liveStatusLoading,
-              unavailable: liveStatusUnavailable,
-            ),
+            if (transfer != null)
+              Column(
+                key: const Key('transfer-live-status'),
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _leg(
+                    context,
+                    'LEG 1',
+                    _routeLabel(
+                      transfer.firstRouteId,
+                      transfer.firstRouteShortName,
+                    ),
+                    originStopName,
+                    transfer.transferStopName,
+                    transfer.departureSeconds,
+                    transfer.transferArrivalSeconds,
+                    liveAvailability?.firstLegLive,
+                    1,
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 16,
+                      horizontal: 12,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'TRANSFER',
+                          style: Theme.of(context).textTheme.labelLarge,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(transfer.transferStopName),
+                        Text(
+                          'Waiting time: ${formatDurationMinutes(transfer.transferWaitSeconds)}',
+                        ),
+                      ],
+                    ),
+                  ),
+                  _leg(
+                    context,
+                    'LEG 2',
+                    _routeLabel(
+                      transfer.secondRouteId,
+                      transfer.secondRouteShortName,
+                    ),
+                    transfer.transferStopName,
+                    destinationStopName,
+                    transfer.secondDepartureSeconds,
+                    transfer.arrivalSeconds,
+                    liveAvailability?.secondLegLive,
+                    2,
+                  ),
+                ],
+              )
+            else
+              _RecommendationLiveStatus(
+                transfer: false,
+                availability: liveAvailability,
+                loading: liveStatusLoading,
+                unavailable: liveStatusUnavailable,
+              ),
 
             const SizedBox(height: 12),
 
@@ -1375,7 +1549,9 @@ class _RecommendationCard extends StatelessWidget {
                         ]
                         .map(
                           (action) => SizedBox(
-                            width: (constraints.maxWidth - 8) / 2,
+                            width: constraints.maxWidth < 280
+                                ? constraints.maxWidth
+                                : (constraints.maxWidth - 8) / 2,
                             child: action,
                           ),
                         )
@@ -1521,6 +1697,7 @@ class _StopField extends StatelessWidget {
     required this.icon,
     required this.stop,
     required this.onTap,
+    this.hint = 'Tap to select a stop',
     super.key,
   });
 
@@ -1529,6 +1706,7 @@ class _StopField extends StatelessWidget {
   final IconData icon;
 
   final DepartureStop? stop;
+  final String hint;
 
   final VoidCallback? onTap;
 
@@ -1554,7 +1732,7 @@ class _StopField extends StatelessWidget {
 
                     const SizedBox(height: 4),
 
-                    Text(stop?.name ?? 'Tap to select a stop'),
+                    Text(stop?.name ?? hint),
                   ],
                 ),
               ),

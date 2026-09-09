@@ -47,7 +47,8 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('My Travel Profile'), findsNothing);
-      expect(find.byType(Card), findsNWidgets(3));
+      expect(find.text('Plan a Journey'), findsOneWidget);
+      expect(find.byType(Card), findsOneWidget);
       final actions = tester.widget<AppBar>(find.byType(AppBar)).actions!;
       expect((actions[0] as IconButton).tooltip, 'My Travel Profile');
       expect((actions[1] as IconButton).tooltip, 'Sign out');
@@ -60,7 +61,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.pageBack();
       await tester.pumpAndSettle();
-      expect(find.text('Welcome, Updated Rider'), findsOneWidget);
+      expect(find.textContaining(', Updated Rider'), findsOneWidget);
       await tester.tap(find.byTooltip('Sign out'));
       await tester.pump();
       expect(auth.logouts, 1);

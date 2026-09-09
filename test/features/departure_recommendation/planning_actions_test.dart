@@ -148,7 +148,7 @@ void main() {
         tester
             .widget<StopSelectionPage>(find.byType(StopSelectionPage))
             .excludedStopId,
-        'larkin',
+        isNull,
       );
       await tester.pageBack();
       await tester.pumpAndSettle();
@@ -177,12 +177,9 @@ void main() {
       await press(tester, find.byTooltip('Reverse journey'));
       expect(
         fieldText('origin-field', 'Larkin Sentral'),
-        side == 'destination' || side == 'same' ? findsOneWidget : findsNothing,
+        side == 'destination' ? findsOneWidget : findsNothing,
       );
-      expect(
-        fieldText('destination-field', 'Larkin Sentral'),
-        side == 'origin' || side == 'same' ? findsOneWidget : findsNothing,
-      );
+      expect(fieldText('destination-field', 'Larkin Sentral'), findsNothing);
       expect(f.direct.origin, isNull);
       expect(f.recent.writes, 0);
       await press(tester, find.byKey(const Key('journey-search-button')));

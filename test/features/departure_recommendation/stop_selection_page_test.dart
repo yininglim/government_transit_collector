@@ -185,8 +185,19 @@ void main() {
       );
       await tester.pumpWidget(app(repository));
       await search(tester, 'stop');
-      expect(find.byType(ListView), findsOneWidget);
+      expect(find.byType(SingleChildScrollView), findsOneWidget);
+      if (size.width > size.height) {
+        tester.view.viewInsets = const FakeViewPadding(bottom: 160);
+        await tester.pumpAndSettle();
+      }
+      await tester.ensureVisible(find.byKey(const Key('stop-stop-49')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('stop-stop-49')).hitTestable(),
+        findsOneWidget,
+      );
       expect(tester.takeException(), isNull);
+      tester.view.resetViewInsets();
     }
     await tester.binding.setSurfaceSize(null);
   });

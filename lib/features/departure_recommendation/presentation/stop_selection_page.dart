@@ -17,6 +17,7 @@ class StopSelectionPage extends StatefulWidget {
     this.initialRadius = 1000,
     this.locationService,
     this.nearbyRepository,
+    this.availableStops,
     super.key,
   });
 
@@ -28,6 +29,7 @@ class StopSelectionPage extends StatefulWidget {
   final int initialRadius;
   final PassengerLocationService? locationService;
   final NearbyStopRepository? nearbyRepository;
+  final List<DepartureStop>? availableStops;
 
   @override
   State<StopSelectionPage> createState() => _StopSelectionPageState();
@@ -49,6 +51,7 @@ class _StopSelectionPageState extends State<StopSelectionPage> {
   @override
   void initState() {
     super.initState();
+    _stops = widget.availableStops ?? const [];
     _radius = [500, 1000, 2000].contains(widget.initialRadius)
         ? widget.initialRadius
         : 1000;
@@ -156,7 +159,8 @@ class _StopSelectionPageState extends State<StopSelectionPage> {
     }
   }
 
-  Widget _nearbyResults() => ListView(
+  Widget _nearbyResults() => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
       Text('Nearby Bus Stops', style: Theme.of(context).textTheme.titleLarge),
       const Text(
@@ -247,7 +251,7 @@ class _StopSelectionPageState extends State<StopSelectionPage> {
     final query = value.trim();
     if (query.isEmpty) {
       setState(() {
-        _stops = const [];
+        _stops = widget.availableStops ?? const [];
         _error = null;
       });
       return;
@@ -271,7 +275,15 @@ class _StopSelectionPageState extends State<StopSelectionPage> {
       _error = null;
     });
     try {
-      final stops = await widget.repository.searchStops(effectiveQuery);
+      final stops = widget.availableStops == null
+          ? await widget.repository.searchStops(effectiveQuery)
+          : widget.availableStops!
+                .where(
+                  (s) => s.name.toLowerCase().contains(
+                    effectiveQuery.toLowerCase(),
+                  ),
+                )
+                .toList();
       if (!mounted || effectiveRequestId != _requestId) return;
       setState(() => _stops = stops);
     } on DepartureStopReadException catch (error) {
@@ -285,7 +297,9 @@ class _StopSelectionPageState extends State<StopSelectionPage> {
     return Scaffold(
       appBar: AppBar(title: Text(widget.title)),
       body: SafeArea(
-        child: Padding(
+        child: SingleChildScrollView(
+          physics: const ClampingScrollPhysics(),
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
           padding: const EdgeInsets.all(16),
           child: Column(
             children: [
@@ -293,11 +307,13 @@ class _StopSelectionPageState extends State<StopSelectionPage> {
                 key: const Key('stop-search-field'),
                 controller: _searchController,
                 autofocus: !widget.startNearby,
-                decoration: const InputDecoration(
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  border: const OutlineInputBorder(),
                   labelText: 'Search stops',
-                  helperText: 'Type a stop name to search all available stops',
-                  prefixIcon: Icon(Icons.search),
+                  helperText: widget.availableStops == null
+                      ? 'Type a stop name to search all available stops'
+                      : 'Stops reachable from your selected origin',
+                  prefixIcon: const Icon(Icons.search),
                 ),
                 textInputAction: TextInputAction.search,
                 onChanged: _onSearchChanged,
@@ -316,7 +332,7 @@ class _StopSelectionPageState extends State<StopSelectionPage> {
                   icon: const Icon(Icons.my_location),
                   label: const Text('Use My Current Location'),
                 ),
-              Expanded(child: _nearby ? _nearbyResults() : _buildResults()),
+              _nearby ? _nearbyResults() : _buildResults(),
             ],
           ),
         ),
@@ -338,6 +354,12 @@ class _StopSelectionPageState extends State<StopSelectionPage> {
       return const Center(child: CircularProgressIndicator());
     }
     if (stops.isEmpty) {
+      if (widget.availableStops?.isEmpty == true) {
+        return const _StopMessage(
+          icon: Icons.route_outlined,
+          message: 'No reachable destinations from this origin.',
+        );
+      }
       if (_searchController.text.trim().isEmpty) {
         return const _StopMessage(
           icon: Icons.search,
@@ -349,11 +371,8 @@ class _StopSelectionPageState extends State<StopSelectionPage> {
         message: 'No stops found',
       );
     }
-    return ListView.separated(
-      itemCount: stops.length,
-      separatorBuilder: (_, _) => const Divider(height: 1),
-      itemBuilder: (context, index) {
-        final stop = stops[index];
+    return Column(
+      children: stops.map((stop) {
         final excluded = stop.id == widget.excludedStopId;
         return ListTile(
           key: Key('stop-${stop.id}'),
@@ -363,7 +382,7 @@ class _StopSelectionPageState extends State<StopSelectionPage> {
           enabled: !excluded,
           onTap: excluded ? null : () => Navigator.of(context).pop(stop),
         );
-      },
+      }).toList(),
     );
   }
 }

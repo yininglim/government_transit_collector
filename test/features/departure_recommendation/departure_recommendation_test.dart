@@ -117,6 +117,10 @@ class FakeDirectTripRepository implements DirectTripRepository {
 }
 
 class FakeTransferJourneyRepository implements TransferJourneyRepository {
+  @override
+  Future<List<DepartureStop>> reachableDestinations(
+    String originStopId,
+  ) async => [larkin, jbSentral].where((s) => s.id != originStopId).toList();
   FakeTransferJourneyRepository({this.results = const []});
 
   final List<OneTransferJourneyResult> results;
@@ -142,6 +146,7 @@ class FakeTimetableRecommendationRepository
     required String destinationStopId,
     required DateTime travelDate,
     required int travelTimeSeconds,
+    TravelTimeMode mode = TravelTimeMode.departAt,
     required List<DirectRouteResult> directRoutes,
     required List<OneTransferJourneyResult> transferJourneys,
   }) async {
@@ -321,6 +326,9 @@ void main() {
         fieldKey: const Key('destination-field'),
         stop: jbSentral,
       );
+      await tester.ensureVisible(
+        find.byKey(const Key('journey-search-button')),
+      );
       await tester.tap(find.byKey(const Key('journey-search-button')));
       await tester.pumpAndSettle();
 
@@ -340,8 +348,13 @@ void main() {
       expect(find.text('Larkin Sentral'), findsOneWidget);
     });
 
-    testWidgets('selects a destination stop', (tester) async {
+    testWidgets('selects a destination stop after origin', (tester) async {
       await pumpPage(tester);
+      await selectStop(
+        tester,
+        fieldKey: const Key('origin-field'),
+        stop: larkin,
+      );
 
       await selectStop(
         tester,
@@ -354,6 +367,9 @@ void main() {
 
     testWidgets('shows validation when origin is missing', (tester) async {
       await pumpPage(tester);
+      await tester.ensureVisible(
+        find.byKey(const Key('journey-search-button')),
+      );
       await tester.tap(find.byKey(const Key('journey-search-button')));
       await tester.pump();
 
@@ -384,6 +400,9 @@ void main() {
         stop: larkin,
       );
 
+      await tester.ensureVisible(
+        find.byKey(const Key('journey-search-button')),
+      );
       await tester.tap(find.byKey(const Key('journey-search-button')));
       await tester.pump();
 
@@ -403,6 +422,9 @@ void main() {
         stop: jbSentral,
       );
 
+      await tester.ensureVisible(
+        find.byKey(const Key('journey-search-button')),
+      );
       await tester.tap(find.byKey(const Key('journey-search-button')));
       await tester.pumpAndSettle();
 
@@ -431,12 +453,16 @@ void main() {
         fieldKey: const Key('destination-field'),
         stop: jbSentral,
       );
+      await tester.ensureVisible(
+        find.byKey(const Key('journey-search-button')),
+      );
       await tester.tap(find.byKey(const Key('journey-search-button')));
       await tester.pumpAndSettle();
 
       expect(find.text('Recommended Departures'), findsOneWidget);
       expect(find.text('J15 → J10'), findsOneWidget);
-      expect(find.text('Transfer at City Square'), findsOneWidget);
+      expect(find.text('TRANSFER'), findsOneWidget);
+      expect(find.text('City Square'), findsOneWidget);
       expect(
         find.descendant(
           of: find.byKey(const Key('journey-results')),
@@ -446,7 +472,7 @@ void main() {
       );
       expect(find.text('30 min • Direct'), findsOneWidget);
       expect(find.text('57 min • 1 transfer'), findsOneWidget);
-      expect(find.text('8 min transfer'), findsOneWidget);
+      expect(find.text('Waiting time: 8 min'), findsOneWidget);
       expect(find.text('View Route'), findsNWidgets(2));
       expect(find.text('Track Journey'), findsNWidgets(2));
       expect(find.textContaining('matching trip'), findsNothing);
@@ -480,6 +506,9 @@ void main() {
         fieldKey: const Key('destination-field'),
         stop: jbSentral,
       );
+      await tester.ensureVisible(
+        find.byKey(const Key('journey-search-button')),
+      );
       await tester.tap(find.byKey(const Key('journey-search-button')));
       await tester.pumpAndSettle();
 
@@ -512,6 +541,9 @@ void main() {
         fieldKey: const Key('destination-field'),
         stop: jbSentral,
       );
+      await tester.ensureVisible(
+        find.byKey(const Key('journey-search-button')),
+      );
       await tester.tap(find.byKey(const Key('journey-search-button')));
       await tester.pumpAndSettle();
 
@@ -537,6 +569,9 @@ void main() {
         tester,
         fieldKey: const Key('destination-field'),
         stop: jbSentral,
+      );
+      await tester.ensureVisible(
+        find.byKey(const Key('journey-search-button')),
       );
       await tester.tap(find.byKey(const Key('journey-search-button')));
       await tester.pumpAndSettle();
@@ -569,6 +604,9 @@ void main() {
         tester,
         fieldKey: const Key('destination-field'),
         stop: jbSentral,
+      );
+      await tester.ensureVisible(
+        find.byKey(const Key('journey-search-button')),
       );
       await tester.tap(find.byKey(const Key('journey-search-button')));
       await tester.pumpAndSettle();
@@ -614,6 +652,9 @@ void main() {
         tester,
         fieldKey: const Key('destination-field'),
         stop: jbSentral,
+      );
+      await tester.ensureVisible(
+        find.byKey(const Key('journey-search-button')),
       );
       await tester.tap(find.byKey(const Key('journey-search-button')));
       await tester.pumpAndSettle();
@@ -695,6 +736,9 @@ void main() {
           tester,
           fieldKey: const Key('destination-field'),
           stop: jbSentral,
+        );
+        await tester.ensureVisible(
+          find.byKey(const Key('journey-search-button')),
         );
         await tester.ensureVisible(
           find.byKey(const Key('journey-search-button')),

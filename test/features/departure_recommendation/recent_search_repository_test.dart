@@ -39,6 +39,14 @@ void main() {
         await legacy.saveRecentSearch(item);
         expect(await first.getRecentSearches(), isEmpty);
         await first.saveRecentSearch(item);
+        final linkedLogin = SqliteRecentSearchRepository(
+          databaseFactory: databaseFactoryFfi,
+          userId: 'first',
+        );
+        expect(
+          (await linkedLogin.getRecentSearches()).single.originStopId,
+          'a',
+        );
         expect(await second.getRecentSearches(), isEmpty);
         await second.clearRecentSearches();
         expect(await first.getRecentSearches(), hasLength(1));

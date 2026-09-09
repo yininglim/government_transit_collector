@@ -178,8 +178,13 @@ Future<void> showExistingReminder(
 );
 
 class UpcomingJourneys extends StatefulWidget {
-  const UpcomingJourneys({required this.controller, super.key});
+  const UpcomingJourneys({
+    required this.controller,
+    this.emptyState,
+    super.key,
+  });
   final ReminderController controller;
+  final Widget? emptyState;
   @override
   State<UpcomingJourneys> createState() => _UpcomingJourneysState();
 }
@@ -210,15 +215,16 @@ class _UpcomingJourneysState extends State<UpcomingJourneys>
     builder: (context, _) {
       final reminders = widget.controller.upcoming;
       if (reminders.isEmpty && widget.controller.error == null) {
-        return const SizedBox.shrink();
+        return widget.emptyState ?? const SizedBox.shrink();
       }
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            'Upcoming Journey',
-            style: Theme.of(context).textTheme.titleLarge,
-          ),
+          if (reminders.isNotEmpty)
+            Text(
+              'Upcoming Journey',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
           if (widget.controller.error != null)
             TextButton(
               onPressed: widget.controller.refresh,

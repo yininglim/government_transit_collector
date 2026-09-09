@@ -6,6 +6,54 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 const int defaultMinimumTransferSeconds = 5 * 60;
 const int defaultRecommendationLimit = 5;
 
+enum TravelTimeMode { departAt, arriveBy }
+
+String _journeyIdentity(JourneyRecommendation journey) => switch (journey) {
+  DirectJourneyRecommendation j =>
+    'direct|${j.tripId}|${j.originStopSequence}|${j.destinationStopSequence}',
+  TransferJourneyRecommendation j =>
+    'transfer|${j.firstTripId}|${j.secondTripId}|${j.transferStopId}|${j.originStopSequence}|${j.destinationStopSequence}',
+};
+
+int compareJourneyRecommendations(
+  JourneyRecommendation a,
+  JourneyRecommendation b,
+  TravelTimeMode mode,
+) {
+  final arrival = mode == TravelTimeMode.arriveBy
+      ? b.arrivalSeconds.compareTo(a.arrivalSeconds)
+      : a.arrivalSeconds.compareTo(b.arrivalSeconds);
+  if (arrival != 0) return arrival;
+  final transfers = a.transferCount.compareTo(b.transferCount);
+  if (transfers != 0) return transfers;
+  final waitA = a is TransferJourneyRecommendation ? a.transferWaitSeconds : 0;
+  final waitB = b is TransferJourneyRecommendation ? b.transferWaitSeconds : 0;
+  final wait = waitA.compareTo(waitB);
+  if (wait != 0) return wait;
+  final departure = mode == TravelTimeMode.arriveBy
+      ? b.departureSeconds.compareTo(a.departureSeconds)
+      : a.departureSeconds.compareTo(b.departureSeconds);
+  return departure != 0
+      ? departure
+      : _journeyIdentity(a).compareTo(_journeyIdentity(b));
+}
+
+List<String> journeyRecommendationReasons(
+  JourneyRecommendation journey,
+  TravelTimeMode mode,
+  int targetSeconds,
+) => [
+  if (mode == TravelTimeMode.arriveBy &&
+      journey.arrivalSeconds <= targetSeconds)
+    'Arrives at or before your ${formatServiceDaySeconds(targetSeconds)} target',
+  if (mode == TravelTimeMode.departAt &&
+      journey.departureSeconds >= targetSeconds)
+    'Departs ${formatDurationMinutes(journey.departureSeconds - targetSeconds)} after your selected time',
+  if (journey.transferCount == 0) 'Direct journey',
+  if (journey is TransferJourneyRecommendation)
+    '1 transfer with ${formatDurationMinutes(journey.transferWaitSeconds)} waiting time',
+];
+
 int timeOfDayToServiceSeconds(TimeOfDay time) =>
     time.hour * 3600 + time.minute * 60;
 
@@ -167,6 +215,7 @@ abstract interface class TimetableRecommendationRepository {
     required String destinationStopId,
     required DateTime travelDate,
     required int travelTimeSeconds,
+    TravelTimeMode mode = TravelTimeMode.departAt,
     required List<DirectRouteResult> directRoutes,
     required List<OneTransferJourneyResult> transferJourneys,
   });
@@ -177,6 +226,7 @@ List<JourneyRecommendation> buildTimetableRecommendations({
   required String destinationStopId,
   required DateTime travelDate,
   required int travelTimeSeconds,
+  TravelTimeMode mode = TravelTimeMode.departAt,
   required List<DirectRouteResult> directRoutes,
   required List<OneTransferJourneyResult> transferJourneys,
   required List<GtfsTripService> tripServices,
@@ -205,11 +255,16 @@ List<JourneyRecommendation> buildTimetableRecommendations({
       final times = timesByTrip[tripId] ?? const [];
       DirectJourneyRecommendation? best;
       for (final origin in times.where((time) => time.stopId == originStopId)) {
-        if (origin.departureSeconds < travelTimeSeconds) continue;
+        if (mode == TravelTimeMode.departAt &&
+            origin.departureSeconds < travelTimeSeconds) {
+          continue;
+        }
         for (final destination in times.where(
           (time) => time.stopId == destinationStopId,
         )) {
           if (origin.stopSequence >= destination.stopSequence ||
+              (mode == TravelTimeMode.arriveBy &&
+                  destination.arrivalSeconds > travelTimeSeconds) ||
               destination.arrivalSeconds < origin.departureSeconds) {
             continue;
           }
@@ -225,7 +280,8 @@ List<JourneyRecommendation> buildTimetableRecommendations({
             departureSeconds: origin.departureSeconds,
             arrivalSeconds: destination.arrivalSeconds,
           );
-          if (best == null || candidate.arrivalSeconds < best.arrivalSeconds) {
+          if (best == null ||
+              compareJourneyRecommendations(candidate, best, mode) < 0) {
             best = candidate;
           }
         }
@@ -250,7 +306,10 @@ List<JourneyRecommendation> buildTimetableRecommendations({
       for (final origin in firstTimes.where(
         (time) => time.stopId == originStopId,
       )) {
-        if (origin.departureSeconds < travelTimeSeconds) continue;
+        if (mode == TravelTimeMode.departAt &&
+            origin.departureSeconds < travelTimeSeconds) {
+          continue;
+        }
         for (final firstTransfer in firstTimes.where(
           (time) => time.stopId == journey.transferStopId,
         )) {
@@ -269,6 +328,8 @@ List<JourneyRecommendation> buildTimetableRecommendations({
               (time) => time.stopId == destinationStopId,
             )) {
               if (secondTransfer.stopSequence >= destination.stopSequence ||
+                  (mode == TravelTimeMode.arriveBy &&
+                      destination.arrivalSeconds > travelTimeSeconds) ||
                   destination.arrivalSeconds <
                       secondTransfer.departureSeconds) {
                 continue;
@@ -296,7 +357,7 @@ List<JourneyRecommendation> buildTimetableRecommendations({
                 arrivalSeconds: destination.arrivalSeconds,
               );
               if (best == null ||
-                  candidate.arrivalSeconds < best.arrivalSeconds) {
+                  compareJourneyRecommendations(candidate, best, mode) < 0) {
                 best = candidate;
               }
             }
@@ -307,20 +368,15 @@ List<JourneyRecommendation> buildTimetableRecommendations({
     }
   }
 
-  final pruned = pruneEquivalentRecommendations(recommendations);
-  pruned.sort((left, right) {
-    final byArrival = left.arrivalSeconds.compareTo(right.arrivalSeconds);
-    if (byArrival != 0) return byArrival;
-    final byTransfers = left.transferCount.compareTo(right.transferCount);
-    if (byTransfers != 0) return byTransfers;
-    return left.departureSeconds.compareTo(right.departureSeconds);
-  });
+  final pruned = pruneEquivalentRecommendations(recommendations, mode: mode);
+  pruned.sort((a, b) => compareJourneyRecommendations(a, b, mode));
   return pruned.take(limit).toList(growable: false);
 }
 
 List<JourneyRecommendation> pruneEquivalentRecommendations(
-  List<JourneyRecommendation> recommendations,
-) {
+  List<JourneyRecommendation> recommendations, {
+  TravelTimeMode mode = TravelTimeMode.departAt,
+}) {
   final retained = <Object, JourneyRecommendation>{};
   for (final recommendation in recommendations) {
     final key = switch (recommendation) {
@@ -342,7 +398,11 @@ List<JourneyRecommendation> pruneEquivalentRecommendations(
       ),
     };
     final current = retained[key];
-    if (current == null || _compareEquivalent(recommendation, current) < 0) {
+    if (current == null ||
+        (mode == TravelTimeMode.arriveBy
+                ? compareJourneyRecommendations(recommendation, current, mode)
+                : _compareEquivalent(recommendation, current)) <
+            0) {
       retained[key] = recommendation;
     }
   }
@@ -388,6 +448,7 @@ class SupabaseTimetableRecommendationRepository
     required String destinationStopId,
     required DateTime travelDate,
     required int travelTimeSeconds,
+    TravelTimeMode mode = TravelTimeMode.departAt,
     required List<DirectRouteResult> directRoutes,
     required List<OneTransferJourneyResult> transferJourneys,
   }) async {
@@ -424,6 +485,7 @@ class SupabaseTimetableRecommendationRepository
         destinationStopId: destinationStopId,
         travelDate: travelDate,
         travelTimeSeconds: travelTimeSeconds,
+        mode: mode,
         directRoutes: directRoutes,
         transferJourneys: transferJourneys,
         tripServices: tripServices,

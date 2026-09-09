@@ -24,6 +24,7 @@ class AuthBackend {
   final storage = MemoryAuthStorage();
   String role = 'passenger';
   bool google = true;
+  String sessionMethod = 'password';
   bool emailIdentity = false;
   bool obfuscatedSignup = false;
   String? signupErrorCode;
@@ -78,7 +79,14 @@ class AuthBackend {
     String encode(Object data) =>
         base64Url.encode(utf8.encode(jsonEncode(data))).replaceAll('=', '');
     final token =
-        '${encode({'alg': 'HS256'})}.${encode({'sub': 'authenticated-owner', 'role': 'authenticated', 'exp': DateTime.now().millisecondsSinceEpoch ~/ 1000 + 3600})}.test-signature';
+        '${encode({'alg': 'HS256'})}.${encode({
+          'sub': 'authenticated-owner',
+          'role': 'authenticated',
+          'amr': [
+            {'method': sessionMethod, 'timestamp': 1},
+          ],
+          'exp': DateTime.now().millisecondsSinceEpoch ~/ 1000 + 3600,
+        })}.test-signature';
     return {
       'access_token': token,
       'refresh_token': 'test-refresh',

@@ -282,6 +282,11 @@ class _PassengerProfilePageState extends State<PassengerProfilePage> {
                 ),
               ]),
               _section('Account Security', Icons.security_outlined, [
+                const Text('Sign-in methods'),
+                if (widget.authRepository.supportsEmailPassword)
+                  const Text('✓ Email & Password'),
+                if (widget.authRepository.hasGoogleIdentity)
+                  const Text('✓ Google'),
                 if (widget.authRepository.supportsEmailPassword)
                   OutlinedButton(
                     onPressed: () async {
@@ -294,7 +299,7 @@ class _PassengerProfilePageState extends State<PassengerProfilePage> {
                       );
                       if (message != null) _message(message);
                     },
-                    child: const Text('Change Password'),
+                    child: const Text('Change Email Password'),
                   ),
                 if (widget.authRepository.hasGoogleIdentity) ...[
                   Text(

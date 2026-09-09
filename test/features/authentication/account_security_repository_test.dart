@@ -4,6 +4,33 @@ import 'package:government_transit_collector/features/authentication/data/auth_r
 import 'auth_test_support.dart';
 
 void main() {
+  test(
+    'dual identities use session AMR, never original provider metadata',
+    () async {
+      final backend = AuthBackend()
+        ..emailIdentity = true
+        ..sessionMethod = 'oauth';
+      final auth = AuthRepository(client: backend.client);
+      addTearDown(auth.dispose);
+      addTearDown(backend.client.dispose);
+      await backend.signIn();
+      expect(auth.hasGoogleIdentity, isTrue);
+      expect(auth.supportsEmailPassword, isTrue);
+      expect(auth.passwordAuthenticatedSession, isFalse);
+      await expectLater(
+        auth.changePassword(
+          currentPassword: 'not-a-google-password',
+          newPassword: 'new-password123',
+        ),
+        throwsA(isA<AuthFlowException>()),
+      );
+      expect(backend.requests, isEmpty);
+      backend.sessionMethod = 'password';
+      await backend.signIn();
+      expect(auth.passwordAuthenticatedSession, isTrue);
+      expect(auth.currentSession!.user.id, 'authenticated-owner');
+    },
+  );
   late AuthBackend backend;
   late AuthRepository repository;
   setUp(() {

@@ -79,6 +79,40 @@ Future<SupabaseClient> signedClient(List<http.Request> requests) async {
 
 void main() {
   test(
+    'same authenticated user ID reads identical saved journeys after provider change',
+    () async {
+      final requests = <http.Request>[];
+      final client = await signedClient(requests);
+      addTearDown(client.dispose);
+      final first = await SupabaseSavedJourneyRepository(client: client).load();
+      final session = client.auth.currentSession!.toJson();
+      final user = Map<String, dynamic>.from(session['user'] as Map);
+      user['app_metadata'] = {
+        'provider': 'google',
+        'providers': ['email', 'google'],
+      };
+      session['user'] = user;
+      await client.auth.recoverSession(jsonEncode(session));
+      final linked = await SupabaseSavedJourneyRepository(
+        client: client,
+      ).load();
+      expect(client.auth.currentUser!.id, 'owner');
+      expect(linked.map((j) => j.id), first.map((j) => j.id));
+      final reads = requests.where(
+        (r) => r.url.path.endsWith('/journey_searches'),
+      );
+      expect(reads.length, 2);
+      expect(
+        reads.every((r) => r.url.queryParameters['user_id'] == 'eq.owner'),
+        isTrue,
+      );
+      expect(
+        reads.every((r) => !r.url.queryParameters.containsKey('email')),
+        isTrue,
+      );
+    },
+  );
+  test(
     'name update changes only full_name for the authenticated profile',
     () async {
       final requests = <http.Request>[];

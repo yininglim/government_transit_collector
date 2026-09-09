@@ -5,8 +5,15 @@ import 'package:government_transit_collector/features/authentication/data/auth_r
 import 'package:government_transit_collector/features/authentication/presentation/auth_validation.dart';
 
 class ForgotPasswordPage extends StatefulWidget {
-  const ForgotPasswordPage({required this.repository, super.key});
+  const ForgotPasswordPage({
+    required this.repository,
+    this.accountEmail,
+    this.googleSession = false,
+    super.key,
+  });
   final AuthRepository repository;
+  final String? accountEmail;
+  final bool googleSession;
 
   @override
   State<ForgotPasswordPage> createState() => _ForgotPasswordPageState();
@@ -14,7 +21,7 @@ class ForgotPasswordPage extends StatefulWidget {
 
 class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
   final _form = GlobalKey<FormState>();
-  final _email = TextEditingController();
+  late final _email = TextEditingController(text: widget.accountEmail);
   bool _loading = false;
   String? _message;
   Timer? _cooldownTimer;
@@ -75,7 +82,13 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Forgot Password')),
+    appBar: AppBar(
+      title: Text(
+        widget.accountEmail == null
+            ? 'Forgot Password'
+            : 'Change Email Password',
+      ),
+    ),
     body: SafeArea(
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
@@ -88,11 +101,26 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Text('Enter the email associated with your account.'),
+                  if (widget.accountEmail == null)
+                    const Text('Enter the email associated with your account.')
+                  else ...[
+                    Text(
+                      widget.googleSession
+                          ? 'You signed in with Google.'
+                          : 'Use a secure reset link for this sign-in session.',
+                    ),
+                    const Text(
+                      'This password is only used when signing in with Email & Password. Changing it does not change your Google password.',
+                    ),
+                    Text(
+                      'Send a secure password reset link to: ${widget.accountEmail}',
+                    ),
+                  ],
                   const SizedBox(height: 24),
                   TextFormField(
                     controller: _email,
                     enabled: !_loading && _requestedEmail == null,
+                    readOnly: widget.accountEmail != null,
                     keyboardType: TextInputType.emailAddress,
                     autofillHints: const [AutofillHints.email],
                     autocorrect: false,
@@ -128,7 +156,11 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
                     ),
                   TextButton(
                     onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('Back to Sign In'),
+                    child: Text(
+                      widget.accountEmail == null
+                          ? 'Back to Sign In'
+                          : 'Back to Account Security',
+                    ),
                   ),
                 ],
               ),

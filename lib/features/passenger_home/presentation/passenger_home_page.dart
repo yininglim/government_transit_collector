@@ -1,3 +1,4 @@
+import 'package:government_transit_collector/features/bus_feedback/presentation/passenger_reports_page.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/recent_journey_search.dart';
 import 'package:flutter/material.dart';
 import 'package:government_transit_collector/features/journey_reminders/reminder_controller.dart';
@@ -27,10 +28,16 @@ class PassengerHomePage extends StatefulWidget {
     this.savedJourneyRepository,
     this.feedbackRepository,
     this.reminderController,
+    this.departurePageBuilder,
+    this.livePageBuilder,
+    this.dataCheckPageBuilder,
     super.key,
   });
 
   final AppProfile profile;
+  final WidgetBuilder? departurePageBuilder;
+  final WidgetBuilder? livePageBuilder;
+  final WidgetBuilder? dataCheckPageBuilder;
   final ReminderController? reminderController;
   final AuthRepository repository;
   final RecentSearchRepository? recentSearchRepository;
@@ -58,18 +65,20 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
   void _openDeparture([SavedJourney? journey, RecentJourneySearch? recent]) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => DepartureRecommendationPage(
-          reminderController: _reminders,
-          stopRepository: SupabaseDepartureStopRepository(),
-          tripRepository: SupabaseDirectTripRepository(),
-          transferRepository: SupabaseTransferJourneyRepository(),
-          timetableRepository: SupabaseTimetableRecommendationRepository(),
-          recentSearchRepository: _recentRepository,
-          preferencesRepository: _preferencesRepository,
-          savedJourneyRepository: _savedRepository,
-          initialJourney: journey,
-          initialRecentSearch: recent,
-        ),
+        builder: (context) =>
+            widget.departurePageBuilder?.call(context) ??
+            DepartureRecommendationPage(
+              reminderController: _reminders,
+              stopRepository: SupabaseDepartureStopRepository(),
+              tripRepository: SupabaseDirectTripRepository(),
+              transferRepository: SupabaseTransferJourneyRepository(),
+              timetableRepository: SupabaseTimetableRecommendationRepository(),
+              recentSearchRepository: _recentRepository,
+              preferencesRepository: _preferencesRepository,
+              savedJourneyRepository: _savedRepository,
+              initialJourney: journey,
+              initialRecentSearch: recent,
+            ),
       ),
     );
   }
@@ -115,11 +124,125 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
     }
   }
 
+  String _greeting() {
+    final hour = DateTime.now().hour;
+    return hour < 12
+        ? 'Good Morning'
+        : hour < 18
+        ? 'Good Afternoon'
+        : 'Good Evening';
+  }
+
+  void _openLive() => Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (context) =>
+          widget.livePageBuilder?.call(context) ??
+          RealtimeJourneyTrackerPage(
+            repository: DataGovMyRealtimeVehicleRepository(),
+            tripMatcher: SupabaseStaticTripMatcher(),
+          ),
+    ),
+  );
+
+  void _openDataCheck() => Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (context) =>
+          widget.dataCheckPageBuilder?.call(context) ??
+          RealtimeDataCheckPage(
+            repository: DataGovMyRealtimeVehicleRepository(),
+            tripMatcher: SupabaseStaticTripMatcher(),
+          ),
+    ),
+  );
+
+  Widget _navItem(
+    String label,
+    IconData icon,
+    VoidCallback onTap, {
+    bool selected = false,
+  }) => Expanded(
+    child: TextButton(
+      onPressed: onTap,
+      style: TextButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
+        backgroundColor: selected
+            ? Theme.of(context).colorScheme.primaryContainer
+            : null,
+        foregroundColor: selected
+            ? Theme.of(context).colorScheme.primary
+            : Theme.of(context).colorScheme.onSurfaceVariant,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 22),
+          const SizedBox(height: 4),
+          Text(
+            label,
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.labelMedium,
+          ),
+        ],
+      ),
+    ),
+  );
+
+  Widget _emptyJourney() => Card(
+    elevation: 0,
+    color: Theme.of(context).colorScheme.surfaceContainerLow,
+    child: const Padding(
+      padding: EdgeInsets.all(24),
+      child: Column(
+        children: [
+          Icon(Icons.event_available_outlined, size: 32),
+          SizedBox(height: 12),
+          Text(
+            'No upcoming journey. Plan your next trip when you are ready.',
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    ),
+  );
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Government Transit Collector'),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(80),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainerLow,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Row(
+                children: [
+                  _navItem('Home', Icons.home_outlined, () {}, selected: true),
+                  _navItem('Plan', Icons.route_outlined, _openDeparture),
+                  _navItem('Live', Icons.location_searching, _openLive),
+                  _navItem('Data Check', Icons.data_object, _openDataCheck),
+                  _navItem(
+                    'Reports',
+                    Icons.feedback_outlined,
+                    () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => PassengerReportsPage(
+                          userId: widget.profile.userId,
+                          repository: widget.feedbackRepository,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
         actions: [
           IconButton(
             tooltip: 'My Travel Profile',
@@ -139,105 +262,40 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
         ],
       ),
       body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.all(24),
-          children: [
-            Text(
-              'Passenger',
-              style: Theme.of(
-                context,
-              ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            Text('Welcome, ${(_updatedProfile ?? widget.profile).displayName}'),
-            const SizedBox(height: 32),
-            if (_reminders != null) UpcomingJourneys(controller: _reminders),
-            _PlaceholderCard(
-              icon: Icons.departure_board,
-              title: 'Departure Recommendation',
-              description: 'Select your origin and destination stops.',
-              onTap: _openDeparture,
-            ),
-            const SizedBox(height: 16),
-            _PlaceholderCard(
-              icon: Icons.location_searching,
-              title: 'Realtime Journey Tracker',
-              description: 'View current myBAS vehicles on OpenStreetMap.',
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => RealtimeJourneyTrackerPage(
-                      repository: DataGovMyRealtimeVehicleRepository(),
-                      tripMatcher: SupabaseStaticTripMatcher(),
-                    ),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 760),
+            child: ListView(
+              physics: const ClampingScrollPhysics(),
+              padding: const EdgeInsets.all(24),
+              children: [
+                Text(
+                  '${_greeting()}, ${(_updatedProfile ?? widget.profile).displayName}',
+                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
                   ),
-                );
-              },
-            ),
-            const SizedBox(height: 16),
-            _PlaceholderCard(
-              icon: Icons.data_object,
-              title: 'Realtime Data Check',
-              description: 'Verify the current myBAS vehicle-position feed.',
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => RealtimeDataCheckPage(
-                      repository: DataGovMyRealtimeVehicleRepository(),
-                      tripMatcher: SupabaseStaticTripMatcher(),
-                    ),
-                  ),
-                );
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _PlaceholderCard extends StatelessWidget {
-  const _PlaceholderCard({
-    required this.icon,
-    required this.title,
-    required this.description,
-    this.onTap,
-  });
-
-  final IconData icon;
-  final String title;
-  final String description;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(
-                icon,
-                size: 32,
-                color: Theme.of(context).colorScheme.primary,
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(title, style: Theme.of(context).textTheme.titleMedium),
-                    const SizedBox(height: 6),
-                    Text(description),
-                  ],
                 ),
-              ),
-            ],
+                const SizedBox(height: 8),
+                const Text('Your journey, made easier.'),
+                const SizedBox(height: 24),
+                FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 18),
+                  ),
+                  onPressed: _openDeparture,
+                  icon: const Icon(Icons.route),
+                  label: const Text('Plan a Journey'),
+                ),
+                const SizedBox(height: 32),
+                if (_reminders != null)
+                  UpcomingJourneys(
+                    controller: _reminders,
+                    emptyState: _emptyJourney(),
+                  )
+                else
+                  _emptyJourney(),
+              ],
+            ),
           ),
         ),
       ),

@@ -7,6 +7,28 @@ import '../bus_feedback/report_form_test.dart' show ReportsFake;
 import 'travel_profile_test.dart' as existing;
 
 void main() {
+  testWidgets(
+    'Google-authenticated dual identity reuses recovery without password fields',
+    (tester) async {
+      final auth = PageAuth()
+        ..googleIdentity = true
+        ..sessionMethod = 'oauth';
+      await tester.pumpWidget(
+        MaterialApp(home: ChangePasswordPage(repository: auth)),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('You signed in with Google.'), findsOneWidget);
+      expect(find.text('Current Password'), findsNothing);
+      expect(find.text('New Password'), findsNothing);
+      await tester.ensureVisible(find.text('Send Reset Link'));
+      await tester.tap(find.text('Send Reset Link'));
+      await tester.pumpAndSettle();
+      expect(auth.sentEmail, 'rider@example.test');
+      expect(auth.resetEmailCalls, 1);
+      expect(auth.changeCalls, 0);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
   Future<void> show(WidgetTester tester, PageAuth auth) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -31,7 +53,7 @@ void main() {
   }
 
   testWidgets(
-    'Google-only profile shows Google management and hides Change Password',
+    'Google-only profile shows Google management and hides Change Email Password',
     (tester) async {
       final auth = PageAuth()
         ..emailPassword = false
@@ -44,7 +66,7 @@ void main() {
         ),
         findsOneWidget,
       );
-      expect(find.text('Change Password'), findsNothing);
+      expect(find.text('Change Email Password'), findsNothing);
     },
   );
 
@@ -54,8 +76,8 @@ void main() {
       (tester) async {
         final auth = PageAuth()..googleIdentity = google;
         await show(tester, auth);
-        await tester.ensureVisible(find.text('Change Password'));
-        await tester.tap(find.text('Change Password'));
+        await tester.ensureVisible(find.text('Change Email Password'));
+        await tester.tap(find.text('Change Email Password'));
         await tester.pumpAndSettle();
         expect(find.byType(ChangePasswordPage), findsOneWidget);
         if (google) {
@@ -75,9 +97,11 @@ void main() {
           );
         }
         await tester.ensureVisible(
-          find.widgetWithText(FilledButton, 'Change Password'),
+          find.widgetWithText(FilledButton, 'Change Email Password'),
         );
-        await tester.tap(find.widgetWithText(FilledButton, 'Change Password'));
+        await tester.tap(
+          find.widgetWithText(FilledButton, 'Change Email Password'),
+        );
         await tester.pumpAndSettle();
         expect(auth.changeCalls, 1);
         expect(find.byType(ChangePasswordPage), findsNothing);

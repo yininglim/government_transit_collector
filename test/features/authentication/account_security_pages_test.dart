@@ -116,7 +116,7 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(home: ChangePasswordPage(repository: repository)),
       );
-      final button = find.widgetWithText(FilledButton, 'Change Password');
+      final button = find.widgetWithText(FilledButton, 'Change Email Password');
       final fields = find.byType(TextFormField);
       await tap(tester, button);
       expect(find.text('Current password is required.'), findsOneWidget);
@@ -167,7 +167,10 @@ void main() {
         entry.value,
       );
     }
-    await tap(tester, find.widgetWithText(FilledButton, 'Change Password'));
+    await tap(
+      tester,
+      find.widgetWithText(FilledButton, 'Change Email Password'),
+    );
     expect(find.text('Current password is incorrect.'), findsOneWidget);
     expect(repository.changeCalls, 1);
     for (final field in tester.widgetList<TextFormField>(

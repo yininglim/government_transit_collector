@@ -1,4 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'departure_stop_repository.dart';
 
 class TransferTripEndpoint {
   const TransferTripEndpoint({
@@ -83,9 +84,62 @@ class OneTransferJourneyResult {
 }
 
 abstract interface class TransferJourneyRepository {
+  Future<List<DepartureStop>> reachableDestinations(String originStopId);
   Future<List<OneTransferJourneyResult>> findOneTransferJourneys({
     required String originStopId,
     required String destinationStopId,
+  });
+}
+
+bool _canTransfer(TransferTripEndpoint first, TransferTripEndpoint second) =>
+    first.tripId != second.tripId && first.routeId != second.routeId;
+
+// Structural reachability uses the same ordered legs and same-stop, different-
+// route transfer rule as the planner. Timetable feasibility is checked on search.
+List<DepartureStop> buildReachableDestinations({
+  required String originStopId,
+  required List<TransferTripEndpoint> originTrips,
+  required List<TripStopPosition> firstTripStops,
+  required Map<String, List<TransferTripEndpoint>> transferTripsByStop,
+  required List<TripStopPosition> secondTripStops,
+}) {
+  final origins = {for (final trip in originTrips) trip.tripId: trip};
+  final secondByTrip = <String, List<TripStopPosition>>{};
+  for (final stop in secondTripStops) {
+    secondByTrip.putIfAbsent(stop.tripId, () => []).add(stop);
+  }
+  final destinations = <String, DepartureStop>{};
+  for (final stop in firstTripStops) {
+    final first = origins[stop.tripId];
+    if (first == null ||
+        stop.stopId == originStopId ||
+        stop.stopSequence <= first.endpointSequence) {
+      continue;
+    }
+    destinations[stop.stopId] = DepartureStop(
+      id: stop.stopId,
+      name: stop.stopName,
+    );
+    for (final second
+        in transferTripsByStop[stop.stopId] ?? <TransferTripEndpoint>[]) {
+      if (!_canTransfer(first, second)) continue;
+      for (final destination
+          in secondByTrip[second.tripId] ?? <TripStopPosition>[]) {
+        if (destination.stopId == originStopId ||
+            destination.stopId == stop.stopId ||
+            destination.stopSequence <= second.endpointSequence) {
+          continue;
+        }
+        destinations[destination.stopId] = DepartureStop(
+          id: destination.stopId,
+          name: destination.stopName,
+        );
+      }
+    }
+  }
+  return destinations.values.toList()..sort((a, b) {
+    final name = a.name.toLowerCase().compareTo(b.name.toLowerCase());
+    return name != 0 ? name : a.id.compareTo(b.id);
   });
 }
 
@@ -135,8 +189,7 @@ List<OneTransferJourneyResult> buildOneTransferJourneys({
       final firstTrip = originByTrip[firstStop.tripId]!;
       for (final secondStop in secondStops) {
         final secondTrip = destinationByTrip[secondStop.tripId]!;
-        if (firstTrip.tripId == secondTrip.tripId ||
-            firstTrip.routeId == secondTrip.routeId) {
+        if (!_canTransfer(firstTrip, secondTrip)) {
           continue;
         }
         final key = '${firstTrip.routeId}|${entry.key}|${secondTrip.routeId}';
@@ -209,6 +262,68 @@ class SupabaseTransferJourneyRepository implements TransferJourneyRepository {
   static const int _tripBatchSize = 50;
 
   final SupabaseClient _client;
+
+  @override
+  Future<List<DepartureStop>> reachableDestinations(String originStopId) async {
+    try {
+      final origins = await _loadTripEndpoints(
+        originStopId,
+        useEarliestSequence: true,
+      );
+      final firstStops = await _loadStopsForTrips(
+        origins.map((t) => t.tripId).toList(),
+      );
+      final direct = buildReachableDestinations(
+        originStopId: originStopId,
+        originTrips: origins,
+        firstTripStops: firstStops,
+        transferTripsByStop: const {},
+        secondTripStops: const [],
+      );
+      final transferTrips = <String, List<TransferTripEndpoint>>{};
+      final ids = direct.map((s) => s.id).toList();
+      for (var start = 0; start < ids.length; start += _tripBatchSize) {
+        final batch = ids.sublist(
+          start,
+          (start + _tripBatchSize).clamp(0, ids.length),
+        );
+        for (var offset = 0; ; offset += _pageSize) {
+          final rows = await _client
+              .from('gtfs_stop_times')
+              .select(
+                'stop_id, trip_id, stop_sequence, gtfs_trips!inner(route_id, trip_headsign, gtfs_routes!inner(route_id, route_short_name, route_long_name))',
+              )
+              .inFilter('stop_id', batch)
+              .order('trip_id')
+              .order('stop_sequence')
+              .range(offset, offset + _pageSize - 1);
+          for (final row in rows) {
+            transferTrips
+                .putIfAbsent(row['stop_id'] as String, () => [])
+                .add(_endpointFromSupabase(row));
+          }
+          if (rows.length < _pageSize) break;
+        }
+      }
+      final secondIds = transferTrips.values
+          .expand((trips) => trips)
+          .map((t) => t.tripId)
+          .toSet()
+          .toList();
+      final secondStops = await _loadStopsForTrips(secondIds);
+      return buildReachableDestinations(
+        originStopId: originStopId,
+        originTrips: origins,
+        firstTripStops: firstStops,
+        transferTripsByStop: transferTrips,
+        secondTripStops: secondStops,
+      );
+    } on Object {
+      throw const TransferJourneyReadException(
+        'Unable to load reachable destinations. Please retry.',
+      );
+    }
+  }
 
   @override
   Future<List<OneTransferJourneyResult>> findOneTransferJourneys({

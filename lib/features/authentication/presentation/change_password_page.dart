@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../data/auth_repository.dart';
 import 'auth_validation.dart';
+import 'forgot_password_page.dart';
 
 class ChangePasswordPage extends StatefulWidget {
   const ChangePasswordPage({required this.repository, super.key});
@@ -81,75 +82,87 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
   );
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Change Password')),
-    body: SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 440),
-            child: !widget.repository.supportsEmailPassword
-                ? const Text(
-                    'Your Google password is managed through your Google Account.',
-                  )
-                : Form(
-                    key: _form,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        const Text(
-                          'Change the password for this app’s email sign-in.',
+  Widget build(BuildContext context) =>
+      widget.repository.supportsEmailPassword &&
+          !widget.repository.passwordAuthenticatedSession
+      ? ForgotPasswordPage(
+          repository: widget.repository,
+          accountEmail: widget.repository.currentEmail,
+          googleSession:
+              widget.repository.currentAuthenticationMethod == 'oauth' &&
+              widget.repository.hasGoogleIdentity,
+        )
+      : Scaffold(
+          appBar: AppBar(title: const Text('Change Email Password')),
+          body: SafeArea(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(24),
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 440),
+                  child: !widget.repository.supportsEmailPassword
+                      ? const Text(
+                          'Your Google password is managed through your Google Account.',
+                        )
+                      : Form(
+                          key: _form,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              const Text(
+                                'Change the password for this app’s email sign-in.',
+                              ),
+                              if (widget.repository.hasGoogleIdentity)
+                                const Text(
+                                  'This does not change your Google Account password.',
+                                ),
+                              const SizedBox(height: 24),
+                              _field(
+                                _current,
+                                'Current Password',
+                                (value) => AuthValidation.requiredField(
+                                  value,
+                                  'Current password',
+                                ),
+                              ),
+                              _field(
+                                _password,
+                                'New Password',
+                                (value) => AuthValidation.newPassword(
+                                  value,
+                                  email: widget.repository.currentEmail,
+                                  currentPassword: _current.text,
+                                ),
+                              ),
+                              _field(
+                                _confirm,
+                                'Confirm New Password',
+                                (value) => AuthValidation.confirmPassword(
+                                  value,
+                                  _password.text,
+                                ),
+                                last: true,
+                              ),
+                              FilledButton(
+                                onPressed: _loading ? null : _change,
+                                child: Text(
+                                  _loading
+                                      ? 'Updating…'
+                                      : 'Change Email Password',
+                                ),
+                              ),
+                              if (_error != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 16),
+                                  child: Text(_error!),
+                                ),
+                            ],
+                          ),
                         ),
-                        if (widget.repository.hasGoogleIdentity)
-                          const Text(
-                            'This does not change your Google Account password.',
-                          ),
-                        const SizedBox(height: 24),
-                        _field(
-                          _current,
-                          'Current Password',
-                          (value) => AuthValidation.requiredField(
-                            value,
-                            'Current password',
-                          ),
-                        ),
-                        _field(
-                          _password,
-                          'New Password',
-                          (value) => AuthValidation.newPassword(
-                            value,
-                            email: widget.repository.currentEmail,
-                            currentPassword: _current.text,
-                          ),
-                        ),
-                        _field(
-                          _confirm,
-                          'Confirm New Password',
-                          (value) => AuthValidation.confirmPassword(
-                            value,
-                            _password.text,
-                          ),
-                          last: true,
-                        ),
-                        FilledButton(
-                          onPressed: _loading ? null : _change,
-                          child: Text(
-                            _loading ? 'Updating…' : 'Change Password',
-                          ),
-                        ),
-                        if (_error != null)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 16),
-                            child: Text(_error!),
-                          ),
-                      ],
-                    ),
-                  ),
+                ),
+              ),
+            ),
           ),
-        ),
-      ),
-    ),
-  );
+        );
 }

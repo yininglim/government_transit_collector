@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:app_links/app_links.dart';
 import 'package:flutter/foundation.dart';
@@ -295,6 +296,47 @@ class AuthRepository extends ChangeNotifier {
       ) ==
       true;
 
+  // Presentation/flow selection only: Supabase still verifies credentials and
+  // authorizes updates. Provider metadata describes identities, not this login.
+  String? get currentAuthenticationMethod {
+    try {
+      final token = currentSession?.accessToken;
+      if (token == null) return null;
+      final claims =
+          jsonDecode(
+                utf8.decode(
+                  base64Url.decode(base64Url.normalize(token.split('.')[1])),
+                ),
+              )
+              as Map<String, dynamic>;
+      final entries = (claims['amr'] as List?)
+          ?.whereType<Map>()
+          .where(
+            (entry) =>
+                entry['method'] != 'token_refresh' && entry['method'] != 'totp',
+          )
+          .toList();
+      if (entries == null || entries.isEmpty) return null;
+      entries.sort((a, b) {
+        final time = ((b['timestamp'] as num?) ?? 0).compareTo(
+          (a['timestamp'] as num?) ?? 0,
+        );
+        if (time != 0) return time;
+        // Ambiguous simultaneous methods use recovery rather than requesting
+        // a password in a potentially OAuth-authenticated session.
+        return (a['method'] == 'password' ? 1 : 0).compareTo(
+          b['method'] == 'password' ? 1 : 0,
+        );
+      });
+      return entries.first['method'] as String?;
+    } on Object {
+      return null;
+    }
+  }
+
+  bool get passwordAuthenticatedSession =>
+      currentAuthenticationMethod == 'password';
+
   bool _changingPassword = false;
 
   Future<void> changePassword({
@@ -309,6 +351,11 @@ class AuthRepository extends ChangeNotifier {
     if (!supportsEmailPassword || user.email?.isNotEmpty != true) {
       throw const AuthFlowException(
         'This account does not support app password changes.',
+      );
+    }
+    if (!passwordAuthenticatedSession) {
+      throw const AuthFlowException(
+        'Use a secure password reset link to change your email password.',
       );
     }
     final validation =
