@@ -6,17 +6,21 @@ import 'package:government_transit_collector/features/realtime_vehicle/data/real
 import 'package:government_transit_collector/features/realtime_vehicle/data/static_trip_matcher.dart';
 
 const realtimePollingInterval = Duration(seconds: 15);
+const realtimeRefreshWarning =
+    'Live update temporarily unavailable. Retrying automatically…';
 
 class RealtimeTrackerController extends ChangeNotifier {
   RealtimeTrackerController({
     required this.repository,
     this.tripMatcher,
     this.pollingInterval = realtimePollingInterval,
-  });
+    DateTime Function()? now,
+  }) : _now = now ?? DateTime.now;
 
   final RealtimeVehicleRepository repository;
   final StaticTripMatcher? tripMatcher;
   final Duration pollingInterval;
+  final DateTime Function() _now;
 
   RealtimeFeedSnapshot? snapshot;
   Set<String>? knownTripIds;
@@ -24,6 +28,7 @@ class RealtimeTrackerController extends ChangeNotifier {
   String? refreshWarning;
   String? matchingWarning;
   bool isRefreshing = false;
+  DateTime? lastSuccessfulRefreshAt;
 
   Timer? _timer;
   bool _disposed = false;
@@ -66,6 +71,7 @@ class RealtimeTrackerController extends ChangeNotifier {
       }
       if (_disposed) return;
       snapshot = latest;
+      lastSuccessfulRefreshAt = _now();
       knownTripIds = latestKnownTripIds;
       matchingWarning = latestMatchingWarning;
     } on RealtimeVehicleReadException catch (error) {
@@ -73,16 +79,14 @@ class RealtimeTrackerController extends ChangeNotifier {
       if (snapshot == null) {
         initialError = error.message;
       } else {
-        refreshWarning =
-            'Unable to refresh. Showing last known vehicle positions.';
+        refreshWarning = realtimeRefreshWarning;
       }
     } on Object {
       if (_disposed) return;
       if (snapshot == null) {
         initialError = 'Unable to load realtime vehicle positions.';
       } else {
-        refreshWarning =
-            'Unable to refresh. Showing last known vehicle positions.';
+        refreshWarning = realtimeRefreshWarning;
       }
     } finally {
       if (!_disposed) {

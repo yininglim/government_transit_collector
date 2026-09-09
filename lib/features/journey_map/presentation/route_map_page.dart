@@ -177,6 +177,8 @@ class _JourneyMapSummary extends StatelessWidget {
   }
 }
 
+enum JourneyMapDisplayMode { wholeJourney, activeLeg, liveBus }
+
 class JourneyRouteMap extends StatefulWidget {
   const JourneyRouteMap({
     required this.data,
@@ -185,6 +187,9 @@ class JourneyRouteMap extends StatefulWidget {
     this.activeLegIndex,
     this.showCameraControls = false,
     this.busLabel,
+    this.displayMode = JourneyMapDisplayMode.wholeJourney,
+    this.onDisplayModeChanged,
+    this.mapController,
     super.key,
   });
 
@@ -194,16 +199,42 @@ class JourneyRouteMap extends StatefulWidget {
   final int? activeLegIndex;
   final bool showCameraControls;
   final String? busLabel;
+  final JourneyMapDisplayMode displayMode;
+  final ValueChanged<JourneyMapDisplayMode>? onDisplayModeChanged;
+  final MapController? mapController;
 
   @override
   State<JourneyRouteMap> createState() => _JourneyRouteMapState();
 }
 
 class _JourneyRouteMapState extends State<JourneyRouteMap> {
-  final _mapController = MapController();
+  late final MapController _mapController;
   Object? _tileError;
   var _tileLoadAttempt = 0;
   var _hasFittedPassengerLocation = false;
+  var _mapReady = false;
+  Size? _lastPhysicalSize;
+
+  @override
+  void initState() {
+    super.initState();
+    _mapController = widget.mapController ?? MapController();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final physicalSize = MediaQuery.sizeOf(context);
+    if (_lastPhysicalSize == physicalSize) return;
+    _lastPhysicalSize = physicalSize;
+    _reapplyCurrentDisplayModeAfterLayout();
+  }
+
+  void _reapplyCurrentDisplayModeAfterLayout() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _mapReady) _applyDisplayMode(widget.displayMode);
+    });
+  }
 
   @override
   void didUpdateWidget(JourneyRouteMap oldWidget) {
@@ -212,27 +243,14 @@ class _JourneyRouteMapState extends State<JourneyRouteMap> {
         oldWidget.passengerLocation == null &&
         widget.passengerLocation != null) {
       _hasFittedPassengerLocation = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        final points = _allCoordinates()
-            .map((point) => LatLng(point.latitude, point.longitude))
-            .toList();
-        if (points.length > 1) {
-          _mapController.fitCamera(
-            CameraFit.bounds(
-              bounds: LatLngBounds.fromPoints(points),
-              padding: const EdgeInsets.all(48),
-              maxZoom: 17,
-            ),
-          );
-        }
-      });
+      _reapplyCurrentDisplayModeAfterLayout();
     }
     if (widget.showCameraControls &&
         oldWidget.activeLegIndex != widget.activeLegIndex) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _fitActiveLeg();
-      });
+      _reapplyCurrentDisplayModeAfterLayout();
+    }
+    if (oldWidget.displayMode != widget.displayMode) {
+      _reapplyCurrentDisplayModeAfterLayout();
     }
   }
 
@@ -290,6 +308,25 @@ class _JourneyRouteMapState extends State<JourneyRouteMap> {
     );
   }
 
+  void _applyDisplayMode(JourneyMapDisplayMode mode) {
+    switch (mode) {
+      case JourneyMapDisplayMode.wholeJourney:
+        _fitJourney();
+        return;
+      case JourneyMapDisplayMode.activeLeg:
+        _fitActiveLeg();
+        return;
+      case JourneyMapDisplayMode.liveBus:
+        _followBus();
+        return;
+    }
+  }
+
+  void _selectDisplayMode(JourneyMapDisplayMode mode) {
+    _applyDisplayMode(mode);
+    widget.onDisplayModeChanged?.call(mode);
+  }
+
   void _handleTileError(TileImage tile, Object error, StackTrace? stackTrace) {
     debugPrint('OpenStreetMap tile failed to load: $error');
     if (_tileError != null || !mounted) return;
@@ -326,6 +363,10 @@ class _JourneyRouteMapState extends State<JourneyRouteMap> {
           key: const Key('journey-map'),
           mapController: _mapController,
           options: MapOptions(
+            onMapReady: () {
+              _mapReady = true;
+              _reapplyCurrentDisplayModeAfterLayout();
+            },
             initialCenter: points.first,
             initialZoom: 14,
             initialCameraFit: points.length > 1
@@ -520,7 +561,10 @@ class _JourneyRouteMapState extends State<JourneyRouteMap> {
                   key: const Key('fit-journey-map'),
                   tooltip: 'Fit journey',
                   icon: Icons.fit_screen,
-                  onPressed: _fitJourney,
+                  selected:
+                      widget.displayMode == JourneyMapDisplayMode.wholeJourney,
+                  onPressed: () =>
+                      _selectDisplayMode(JourneyMapDisplayMode.wholeJourney),
                 ),
                 if (widget.activeLegIndex != null) ...[
                   const SizedBox(height: 8),
@@ -528,7 +572,10 @@ class _JourneyRouteMapState extends State<JourneyRouteMap> {
                     key: const Key('fit-active-leg-map'),
                     tooltip: 'Fit active leg',
                     icon: Icons.route,
-                    onPressed: _fitActiveLeg,
+                    selected:
+                        widget.displayMode == JourneyMapDisplayMode.activeLeg,
+                    onPressed: () =>
+                        _selectDisplayMode(JourneyMapDisplayMode.activeLeg),
                   ),
                 ],
                 if (widget.realtimeMarkers.isNotEmpty) ...[
@@ -537,7 +584,10 @@ class _JourneyRouteMapState extends State<JourneyRouteMap> {
                     key: const Key('follow-live-bus'),
                     tooltip: 'Follow live bus',
                     icon: Icons.directions_bus,
-                    onPressed: _followBus,
+                    selected:
+                        widget.displayMode == JourneyMapDisplayMode.liveBus,
+                    onPressed: () =>
+                        _selectDisplayMode(JourneyMapDisplayMode.liveBus),
                   ),
                 ],
               ],
@@ -553,23 +603,30 @@ class _MapControl extends StatelessWidget {
     required this.tooltip,
     required this.icon,
     required this.onPressed,
+    this.selected = false,
     super.key,
   });
 
   final String tooltip;
   final IconData icon;
   final VoidCallback onPressed;
+  final bool selected;
 
   @override
-  Widget build(BuildContext context) => Material(
-    color: Theme.of(context).colorScheme.surfaceContainerHigh,
-    shape: const CircleBorder(),
-    elevation: 3,
-    child: IconButton(
-      tooltip: tooltip,
-      onPressed: onPressed,
-      icon: Icon(icon),
-      visualDensity: VisualDensity.compact,
+  Widget build(BuildContext context) => Semantics(
+    selected: selected,
+    child: Material(
+      color: selected
+          ? Theme.of(context).colorScheme.primaryContainer
+          : Theme.of(context).colorScheme.surfaceContainerHigh,
+      shape: const CircleBorder(),
+      elevation: 3,
+      child: IconButton(
+        tooltip: tooltip,
+        onPressed: onPressed,
+        icon: Icon(icon),
+        visualDensity: VisualDensity.compact,
+      ),
     ),
   );
 }

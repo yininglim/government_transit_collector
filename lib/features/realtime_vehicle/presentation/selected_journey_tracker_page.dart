@@ -76,6 +76,8 @@ class _SelectedJourneyTrackerPageState extends State<SelectedJourneyTrackerPage>
   var _followsCurrentStage = true;
   final _expandedUpcomingLegs = <int>{};
   final _expandedPassedLegs = <int>{};
+  var _mapDisplayMode = JourneyMapDisplayMode.wholeJourney;
+  final _journeyMapKey = GlobalKey();
 
   @override
   void initState() {
@@ -352,7 +354,7 @@ class _SelectedJourneyTrackerPageState extends State<SelectedJourneyTrackerPage>
     if (_controller.refreshWarning != null) {
       return _lastKnownByLeg[_selectedLeg] == null
           ? 'Unable to refresh realtime vehicle data.'
-          : 'Unable to refresh — showing last known position';
+          : _controller.refreshWarning!;
     }
     if (_currentByLeg[_selectedLeg] != null) return 'Live tracking active';
     if (_lastKnownByLeg[_selectedLeg] != null) {
@@ -519,6 +521,16 @@ class _SelectedJourneyTrackerPageState extends State<SelectedJourneyTrackerPage>
           key: const Key('selected-tracking-status'),
           style: Theme.of(context).textTheme.titleSmall,
         ),
+        if (_controller.snapshot != null)
+          Text(
+            'API checked ${_formatUpdated(_controller.lastSuccessfulRefreshAt)}',
+            key: const Key('selected-live-update-indicator'),
+          ),
+        if (_controller.isRefreshing && _controller.snapshot != null)
+          const Padding(
+            padding: EdgeInsets.only(top: 4),
+            child: LinearProgressIndicator(key: Key('selected-refreshing')),
+          ),
         if (_controller.isInitialLoading) ...[
           const SizedBox(height: 8),
           const LinearProgressIndicator(),
@@ -925,12 +937,17 @@ class _SelectedJourneyTrackerPageState extends State<SelectedJourneyTrackerPage>
                   _passengerLocationResult.location,
                 ) ??
                 JourneyRouteMap(
+                  key: _journeyMapKey,
                   data: const JourneyMapData(stops: [], legs: []),
                   realtimeMarkers: markers,
                   passengerLocation: _passengerLocationResult.location,
                   activeLegIndex: _selectedLeg,
                   showCameraControls: true,
                   busLabel: widget.journey.legs[_selectedLeg].routeName,
+                  displayMode: _mapDisplayMode,
+                  onDisplayModeChanged: (mode) {
+                    if (mounted) setState(() => _mapDisplayMode = mode);
+                  },
                 );
       return Stack(
         children: [
@@ -966,12 +983,17 @@ class _SelectedJourneyTrackerPageState extends State<SelectedJourneyTrackerPage>
           _passengerLocationResult.location,
         ) ??
         JourneyRouteMap(
+          key: _journeyMapKey,
           data: data,
           realtimeMarkers: markers,
           passengerLocation: _passengerLocationResult.location,
           activeLegIndex: _selectedLeg,
           showCameraControls: true,
           busLabel: widget.journey.legs[_selectedLeg].routeName,
+          displayMode: _mapDisplayMode,
+          onDisplayModeChanged: (mode) {
+            if (mounted) setState(() => _mapDisplayMode = mode);
+          },
         );
   }
 

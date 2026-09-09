@@ -104,6 +104,23 @@ void main() {
     );
   });
 
+  test('HTTP 429 is reported as a readable temporary fetch failure', () async {
+    final repository = DataGovMyRealtimeVehicleRepository(
+      client: MockClient((_) async => http.Response('rate limited', 429)),
+    );
+
+    expect(
+      repository.fetchVehiclePositions(),
+      throwsA(
+        isA<RealtimeVehicleReadException>().having(
+          (error) => error.message,
+          'message',
+          contains('429'),
+        ),
+      ),
+    );
+  });
+
   test('network client failure becomes a readable exception', () async {
     final repository = DataGovMyRealtimeVehicleRepository(
       client: MockClient((_) async => throw http.ClientException('offline')),
