@@ -3,13 +3,20 @@ import 'package:government_transit_collector/core/time/transit_service_time.dart
 import 'package:government_transit_collector/features/route_performance/data/route_performance_calculator.dart';
 import 'package:government_transit_collector/features/route_performance/data/route_performance_models.dart';
 import 'package:government_transit_collector/features/route_performance/data/route_performance_repository.dart';
+import 'package:government_transit_collector/features/saved_operational_reports/data/saved_operational_report_repository.dart';
 import 'package:timezone/timezone.dart' as timezone;
 
 enum RoutePerformancePeriod { today, lastSevenDays, custom }
 
 class RoutePerformanceDashboardPage extends StatefulWidget {
-  const RoutePerformanceDashboardPage({this.repository, this.now, super.key});
+  const RoutePerformanceDashboardPage({
+    this.repository,
+    this.savedReportRepository,
+    this.now,
+    super.key,
+  });
   final RoutePerformanceRepository? repository;
+  final SavedOperationalReportRepository? savedReportRepository;
   final DateTime Function()? now;
 
   @override
@@ -19,6 +26,7 @@ class RoutePerformanceDashboardPage extends StatefulWidget {
 class _DashboardState extends State<RoutePerformanceDashboardPage> {
   final _calculator = const RoutePerformanceCalculator();
   late final RoutePerformanceRepository _repository;
+  SavedOperationalReportRepository? _savedReportRepository;
   List<RoutePerformanceRoute> _routes = const [];
   RoutePerformanceRoute? _route;
   RoutePerformancePeriod _period = RoutePerformancePeriod.today;
@@ -29,6 +37,7 @@ class _DashboardState extends State<RoutePerformanceDashboardPage> {
   bool _loading = true;
   bool _refreshing = false;
   bool _showPartial = false;
+  bool _savingReport = false;
   String? _error;
   int _requestGeneration = 0;
 
@@ -36,6 +45,7 @@ class _DashboardState extends State<RoutePerformanceDashboardPage> {
   void initState() {
     super.initState();
     _repository = widget.repository ?? DefaultRoutePerformanceRepository();
+    _savedReportRepository = widget.savedReportRepository;
     _reloadAvailableRoutes();
   }
 
@@ -421,6 +431,8 @@ class _DashboardState extends State<RoutePerformanceDashboardPage> {
             );
           },
         ),
+        const SizedBox(height: 12),
+        _saveReportSection(summary),
         if (complete.isNotEmpty) ...[
           _sectionTitle('Observed trip performance'),
           ...complete.map(_tripCard),
@@ -428,6 +440,116 @@ class _DashboardState extends State<RoutePerformanceDashboardPage> {
         if (summary.partialTripCount > 0) _partialSection(summary),
       ],
     );
+  }
+
+  Widget _saveReportSection(RoutePerformanceSummary summary) => Card(
+    key: const Key('route-performance-save-section'),
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final description = Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Save operational report',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Preserve the displayed analysis as a historical snapshot.',
+              ),
+            ],
+          );
+          final button = FilledButton.icon(
+            key: const Key('save-route-performance-report'),
+            onPressed: _refreshing || _savingReport
+                ? null
+                : () => _showSaveReportDialog(summary),
+            icon: const Icon(Icons.save_outlined),
+            label: const Text('Save Report'),
+          );
+          if (constraints.maxWidth < 520) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                description,
+                const SizedBox(height: 12),
+                Align(alignment: Alignment.centerRight, child: button),
+              ],
+            );
+          }
+          return Row(
+            children: [
+              Expanded(child: description),
+              const SizedBox(width: 16),
+              button,
+            ],
+          );
+        },
+      ),
+    ),
+  );
+
+  Future<void> _showSaveReportDialog(RoutePerformanceSummary summary) async {
+    if (_savingReport || _route == null) return;
+    final route = _route!;
+    final range = _range();
+    final saved = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _SaveRoutePerformanceDialog(
+        defaultTitle:
+            '${route.shortName?.trim().isNotEmpty == true ? route.shortName!.trim() : route.displayName} '
+            'Route Performance - ${_periodLabel()}',
+        onSave: ({required title, required adminNotes}) async {
+          setState(() => _savingReport = true);
+          try {
+            final repository = _savedReportRepository ??=
+                DefaultSavedOperationalReportRepository();
+            await repository.createRoutePerformanceReport(
+              routeId: route.routeId,
+              routeNameSnapshot: route.displayName,
+              periodStart: range.startUtc,
+              periodEnd: range.endUtc,
+              title: title,
+              adminNotes: adminNotes,
+              resultSnapshot: _snapshot(summary),
+            );
+          } finally {
+            if (mounted) setState(() => _savingReport = false);
+          }
+        },
+      ),
+    );
+    if (saved == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Route Performance report saved.')),
+      );
+    }
+  }
+
+  String _periodLabel() => switch (_period) {
+    RoutePerformancePeriod.today => 'Today',
+    RoutePerformancePeriod.lastSevenDays => '7 Days',
+    RoutePerformancePeriod.custom => 'Custom',
+  };
+
+  Map<String, dynamic> _snapshot(RoutePerformanceSummary summary) {
+    final tripsUsed = summary.completeTrips.length;
+    return {
+      'average_travel_time_minutes': summary.averageTravelTime!.inSeconds / 60,
+      'delay_frequency_percent': summary.delayFrequencyPercent,
+      'schedule_adherence_percent': summary.scheduleAdherencePercent,
+      'total_observed_trip_occurrences': summary.trips.length,
+      'trips_used_in_metrics': tripsUsed,
+      'partial_trip_occurrences': summary.partialTripCount,
+      'total_observations': summary.totalObservations,
+      'delayed_trip_count': summary.delayedTripCount,
+      'on_time_trip_count': tripsUsed - summary.delayedTripCount,
+    };
   }
 
   Widget _metrics(RoutePerformanceSummary summary) {
@@ -867,6 +989,139 @@ class _DashboardState extends State<RoutePerformanceDashboardPage> {
   Widget _sectionTitle(String text) => Padding(
     padding: const EdgeInsets.only(top: 20, bottom: 8),
     child: Text(text, style: Theme.of(context).textTheme.titleLarge),
+  );
+}
+
+class _SaveRoutePerformanceDialog extends StatefulWidget {
+  const _SaveRoutePerformanceDialog({
+    required this.defaultTitle,
+    required this.onSave,
+  });
+
+  final String defaultTitle;
+  final Future<void> Function({
+    required String title,
+    required String? adminNotes,
+  })
+  onSave;
+
+  @override
+  State<_SaveRoutePerformanceDialog> createState() =>
+      _SaveRoutePerformanceDialogState();
+}
+
+class _SaveRoutePerformanceDialogState
+    extends State<_SaveRoutePerformanceDialog> {
+  late final TextEditingController _titleController;
+  final _notesController = TextEditingController();
+  String? _titleError;
+  String? _saveError;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _titleController = TextEditingController(text: widget.defaultTitle);
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _notesController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final title = _titleController.text.trim();
+    if (title.isEmpty) {
+      setState(() => _titleError = 'Report title is required.');
+      return;
+    }
+    final notes = _notesController.text.trim();
+    setState(() {
+      _saving = true;
+      _saveError = null;
+    });
+    try {
+      await widget.onSave(
+        title: title,
+        adminNotes: notes.isEmpty ? null : notes,
+      );
+      if (mounted) Navigator.of(context).pop(true);
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _saveError = error.toString();
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Save Route Performance Report'),
+    content: SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            key: const Key('save-report-title'),
+            controller: _titleController,
+            autofocus: true,
+            decoration: InputDecoration(
+              labelText: 'Report Title',
+              border: const OutlineInputBorder(),
+              errorText: _titleError,
+            ),
+            onChanged: (_) {
+              if (_titleError != null || _saveError != null) {
+                setState(() {
+                  _titleError = null;
+                  _saveError = null;
+                });
+              }
+            },
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            key: const Key('save-report-notes'),
+            controller: _notesController,
+            minLines: 3,
+            maxLines: 6,
+            decoration: const InputDecoration(
+              labelText: 'Admin Notes (optional)',
+              alignLabelWithHint: true,
+              border: OutlineInputBorder(),
+            ),
+          ),
+          if (_saveError != null) ...[
+            const SizedBox(height: 12),
+            Text(
+              _saveError!,
+              key: const Key('save-report-error'),
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ],
+        ],
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+        child: const Text('Cancel'),
+      ),
+      FilledButton(
+        key: const Key('confirm-save-route-performance-report'),
+        onPressed: _saving ? null : _save,
+        child: _saving
+            ? const SizedBox.square(
+                dimension: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Text('Save Report'),
+      ),
+    ],
   );
 }
 
