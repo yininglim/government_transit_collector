@@ -36,6 +36,7 @@ enum RouteStopRecommendationSource { deterministicGate, gemini }
 
 class RouteStopCandidateArea {
   const RouteStopCandidateArea({
+    required this.routeId,
     required this.fromStopId,
     required this.fromStopName,
     required this.toStopId,
@@ -43,6 +44,7 @@ class RouteStopCandidateArea {
     required this.areaDescription,
   });
 
+  final String routeId;
   final String fromStopId;
   final String fromStopName;
   final String toStopId;
@@ -50,16 +52,15 @@ class RouteStopCandidateArea {
   final String areaDescription;
 }
 
-class RouteStopRecommendation {
-  const RouteStopRecommendation({
+class RouteStopRecommendationGroup {
+  const RouteStopRecommendationGroup({
     required this.action,
     required this.summary,
     required this.rationale,
     required this.evidenceReferences,
     required this.limitations,
-    required this.evidenceSufficiency,
-    required this.candidateArea,
-    required this.source,
+    required this.routeIds,
+    required this.candidateAreas,
   });
 
   final RouteStopRecommendationAction action;
@@ -67,15 +68,26 @@ class RouteStopRecommendation {
   final List<String> rationale;
   final List<String> evidenceReferences;
   final List<String> limitations;
-  final RouteStopEvidenceSufficiency evidenceSufficiency;
-  final RouteStopCandidateArea? candidateArea;
-  final RouteStopRecommendationSource source;
+  final List<String> routeIds;
+  final List<RouteStopCandidateArea> candidateAreas;
+}
+
+class RouteStopRecommendationSynthesis {
+  const RouteStopRecommendationSynthesis({
+    required this.overallSummary,
+    required this.recommendationGroups,
+    required this.needsMoreEvidence,
+  });
+
+  final String overallSummary;
+  final List<RouteStopRecommendationGroup> recommendationGroups;
+  final RouteStopRecommendationGroup? needsMoreEvidence;
 }
 
 class RouteStopRecommendationResult {
   const RouteStopRecommendationResult({
     required this.status,
-    required this.recommendation,
+    required this.synthesis,
     required this.failure,
     required this.evidence,
     required this.payload,
@@ -83,9 +95,9 @@ class RouteStopRecommendationResult {
   });
 
   final RouteStopRecommendationStatus status;
-  final RouteStopRecommendation? recommendation;
+  final RouteStopRecommendationSynthesis? synthesis;
   final RouteStopRecommendationFailure? failure;
-  final DistrictRouteStopEvidence? evidence;
+  final List<DistrictRouteStopEvidence> evidence;
   final RouteStopGeminiEvidencePayload? payload;
   final int? httpStatusCode;
 }

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/district_route_stop_evidence_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/district_route_stop_evidence_repository.dart';
@@ -14,195 +16,386 @@ import 'package:government_transit_collector/features/peak_operation/data/peak_o
 import 'package:government_transit_collector/features/route_performance/data/route_performance_models.dart';
 
 void main() {
-  for (final action in RouteStopRecommendationAction.values) {
-    test('accepts valid ${action.name} response', () async {
-      final response = validResponse(action);
-      final result = await repository(response: response).generate(
-        routeId: 'J15',
+  test(
+    'one request includes all eligible routes and compact allow-lists',
+    () async {
+      final gemini = FakeGeminiDataSource(response: response(['R1', 'R2']));
+      final result = await repository(gemini).generate(
+        evidence: [
+          evidence(routeId: 'R1'),
+          evidence(routeId: 'R2'),
+        ],
         startUtc: periodStart,
         endExclusiveUtc: periodEnd,
       );
+      expect(gemini.callCount, 1);
+      expect(result.synthesis?.recommendationGroups.single.routeIds, [
+        'R1',
+        'R2',
+      ]);
+      final payload = jsonDecode(gemini.request!.input) as Map<String, dynamic>;
+      expect(payload['eligible_route_ids'], ['R1', 'R2']);
+      expect((payload['routes'] as List), hasLength(2));
+    },
+  );
 
-      expect(result.recommendation?.action, action);
-      expect(
-        result.status,
-        action == RouteStopRecommendationAction.insufficientEvidence
-            ? RouteStopRecommendationStatus.insufficientEvidence
-            : RouteStopRecommendationStatus.available,
-      );
-      expect(result.failure, isNull);
-    });
-  }
-
-  test('accepts candidate area between submitted consecutive stops', () async {
-    final result =
-        await repository(
-          response: validResponse(
-            RouteStopRecommendationAction.additionalStopCoverage,
-          ),
-        ).generate(
-          routeId: 'J15',
-          startUtc: periodStart,
-          endExclusiveUtc: periodEnd,
-        );
-
-    expect(result.recommendation?.candidateArea?.fromStopId, 'stop-a');
-    expect(result.recommendation?.candidateArea?.toStopId, 'stop-b');
+  test('zero routes make zero requests', () async {
+    final gemini = FakeGeminiDataSource(response: response(['R1']));
+    final repo = repository(gemini);
+    expect(
+      (await repo.generate(
+        evidence: const [],
+        startUtc: periodStart,
+        endExclusiveUtc: periodEnd,
+      )).status,
+      RouteStopRecommendationStatus.insufficientEvidence,
+    );
+    expect(gemini.callCount, 0);
   });
 
-  for (final mutation in <void Function(Map<String, dynamic>)>[
-    (response) =>
-        (response['candidateArea'] as Map<String, dynamic>)['toStopId'] =
-            'invented-stop',
-    (response) =>
-        (response['candidateArea'] as Map<String, dynamic>)['toStopName'] =
-            'Invented name',
-  ]) {
-    test('rejects fabricated candidate stop references', () async {
-      final response = validResponse(
-        RouteStopRecommendationAction.additionalStopCoverage,
-      );
-      mutation(response);
-
-      final result = await repository(response: response).generate(
-        routeId: 'J15',
-        startUtc: periodStart,
-        endExclusiveUtc: periodEnd,
-      );
-
-      expect(
-        result.failure,
-        RouteStopRecommendationFailure.unknownStopReference,
-      );
-    });
-  }
-
-  test('rejects coordinate properties in candidate area', () async {
-    final response = validResponse(
-      RouteStopRecommendationAction.additionalStopCoverage,
-    );
-    (response['candidateArea'] as Map<String, dynamic>)['latitude'] = 1.5;
-
-    final result = await repository(response: response).generate(
-      routeId: 'J15',
+  test('21 eligible routes use one complete compact request', () async {
+    final routeIds = List.generate(21, (index) => 'R${index + 1}');
+    final gemini = FakeGeminiDataSource(response: response(routeIds));
+    final result = await repository(gemini).generate(
+      evidence: [for (final routeId in routeIds) evidence(routeId: routeId)],
       startUtc: periodStart,
       endExclusiveUtc: periodEnd,
     );
-
-    expect(result.failure, RouteStopRecommendationFailure.invalidResponse);
+    expect(gemini.callCount, 1);
+    expect(result.status, RouteStopRecommendationStatus.available);
+    expect(result.synthesis?.recommendationGroups.single.routeIds, routeIds);
+    final payload = jsonDecode(gemini.request!.input) as Map<String, dynamic>;
+    expect(payload['eligible_route_ids'], routeIds);
     expect(
-      _allKeys(routeStopRecommendationResponseSchema),
-      isNot(anyOf(contains('latitude'), contains('longitude'))),
+      (payload['routes'] as List<dynamic>)
+          .map(
+            (route) =>
+                ((route as Map<String, dynamic>)['route']
+                    as Map<String, dynamic>)['route_id'],
+          )
+          .toList(),
+      routeIds,
     );
   });
 
-  test('rejects unknown and duplicate evidence references', () async {
-    for (final references in [
-      ['invented.reference'],
-      ['network.trip.0', 'network.trip.0'],
-    ]) {
-      final response = validResponse(
-        RouteStopRecommendationAction.routeImprovement,
-      )..['evidenceReferences'] = references;
-      final result = await repository(response: response).generate(
-        routeId: 'J15',
-        startUtc: periodStart,
-        endExclusiveUtc: periodEnd,
-      );
-
-      expect(
-        result.failure,
-        references.first == 'invented.reference'
-            ? RouteStopRecommendationFailure.unknownEvidenceReference
-            : RouteStopRecommendationFailure.invalidResponse,
-      );
-    }
-  });
-
-  test('rejects missing fields and unknown properties', () async {
-    final missing = validResponse(
-      RouteStopRecommendationAction.routeImprovement,
-    )..remove('summary');
-    final unknown = validResponse(
-      RouteStopRecommendationAction.routeImprovement,
-    )..['constructionFeasibility'] = true;
-    for (final response in [missing, unknown]) {
-      final result = await repository(response: response).generate(
-        routeId: 'J15',
-        startUtc: periodStart,
-        endExclusiveUtc: periodEnd,
-      );
-      expect(result.failure, RouteStopRecommendationFailure.invalidResponse);
-    }
-  });
-
-  test('rejects invalid action and contradictory sufficiency', () async {
-    final invalidAction = validResponse(
-      RouteStopRecommendationAction.routeImprovement,
-    )..['action'] = 'buildRouteExtension';
-    final contradictory = validResponse(
-      RouteStopRecommendationAction.routeImprovement,
-    )..['evidenceSufficiency'] = 'insufficient';
-    for (final response in [invalidAction, contradictory]) {
-      final result = await repository(response: response).generate(
-        routeId: 'J15',
-        startUtc: periodStart,
-        endExclusiveUtc: periodEnd,
-      );
-      expect(result.failure, RouteStopRecommendationFailure.invalidResponse);
-    }
-  });
-
-  test('maps malformed structured transport output safely', () async {
-    final result =
+  test('21-route response must reconcile route 21 exactly', () async {
+    final routeIds = List.generate(21, (index) => 'R${index + 1}');
+    final retained = [
+      for (final routeId in routeIds) evidence(routeId: routeId),
+    ];
+    final omitted =
         await repository(
-          failure: GeminiTransportFailure.invalidStructuredJson,
+          FakeGeminiDataSource(response: response(routeIds.take(20).toList())),
         ).generate(
-          routeId: 'J15',
+          evidence: retained,
           startUtc: periodStart,
           endExclusiveUtc: periodEnd,
         );
-
-    expect(result.status, RouteStopRecommendationStatus.invalidAiResponse);
-    expect(result.failure, RouteStopRecommendationFailure.malformedResponse);
+    final fabricatedIds = [...routeIds.take(20), 'R22'];
+    final fabricated =
+        await repository(
+          FakeGeminiDataSource(response: response(fabricatedIds)),
+        ).generate(
+          evidence: retained,
+          startUtc: periodStart,
+          endExclusiveUtc: periodEnd,
+        );
+    expect(omitted.failure, RouteStopRecommendationFailure.invalidResponse);
+    expect(fabricated.status, RouteStopRecommendationStatus.invalidAiResponse);
+    expect(fabricated.synthesis, isNull);
   });
 
   test(
-    'deterministic gate prevents Gemini for unusable network evidence',
+    'rejects duplicate actions, routes, omitted and fabricated routes',
     () async {
-      final gemini = FakeGeminiDataSource(
-        response: validResponse(RouteStopRecommendationAction.routeImprovement),
-      );
-      final result =
+      for (final groups in [
+        [
+          group(['R1']),
+          group(['R2']),
+        ],
+        [
+          group(['R1', 'R1']),
+        ],
+        [
+          group(['R1']),
+        ],
+        [
+          group(['R1', 'X']),
+        ],
+      ]) {
+        final result =
+            await repository(
+              FakeGeminiDataSource(
+                response: {
+                  'overallSummary': 'Summary',
+                  'recommendationGroups': groups,
+                },
+              ),
+            ).generate(
+              evidence: [
+                evidence(routeId: 'R1'),
+                evidence(routeId: 'R2'),
+              ],
+              startUtc: periodStart,
+              endExclusiveUtc: periodEnd,
+            );
+        expect(result.status, RouteStopRecommendationStatus.invalidAiResponse);
+      }
+    },
+  );
+
+  test('separates needs more evidence and supports maintain', () async {
+    final result =
+        await repository(
+          FakeGeminiDataSource(
+            response: {
+              'overallSummary': 'Summary',
+              'recommendationGroups': [
+                group(['R1'], action: 'maintainCurrentConfiguration'),
+                group(
+                  ['R2'],
+                  action: 'insufficientEvidence',
+                  limitations: ['More evidence required.'],
+                ),
+              ],
+            },
+          ),
+        ).generate(
+          evidence: [
+            evidence(routeId: 'R1'),
+            evidence(routeId: 'R2'),
+          ],
+          startUtc: periodStart,
+          endExclusiveUtc: periodEnd,
+        );
+    expect(
+      result.synthesis?.recommendationGroups.single.action,
+      RouteStopRecommendationAction.maintainCurrentConfiguration,
+    );
+    expect(result.synthesis?.needsMoreEvidence?.routeIds, ['R2']);
+  });
+
+  test(
+    'validates route-scoped references and directed candidate pairs',
+    () async {
+      final valid =
           await repository(
-            gemini: gemini,
-            sourceEvidence: evidence(stopCount: 1),
+            FakeGeminiDataSource(
+              response: {
+                'overallSummary': 'Summary',
+                'recommendationGroups': [
+                  group(
+                    ['R1'],
+                    action: 'additionalStopCoverage',
+                    areas: [area('R1')],
+                  ),
+                ],
+              },
+            ),
           ).generate(
-            routeId: 'J15',
+            evidence: [evidence(routeId: 'R1')],
             startUtc: periodStart,
             endExclusiveUtc: periodEnd,
           );
-
-      expect(gemini.callCount, 0);
-      expect(result.status, RouteStopRecommendationStatus.insufficientEvidence);
+      expect(valid.status, RouteStopRecommendationStatus.available);
+      for (final changed in [
+        area('R1')..['toStopId'] = 'unknown',
+        area('R1')..addAll({'latitude': 1.5}),
+        area('R1')
+          ..['fromStopId'] = 'stop-b'
+          ..['fromStopName'] = 'Stop B'
+          ..['toStopId'] = 'stop-a'
+          ..['toStopName'] = 'Stop A',
+      ]) {
+        final result =
+            await repository(
+              FakeGeminiDataSource(
+                response: {
+                  'overallSummary': 'Summary',
+                  'recommendationGroups': [
+                    group(
+                      ['R1'],
+                      action: 'additionalStopCoverage',
+                      areas: [changed],
+                    ),
+                  ],
+                },
+              ),
+            ).generate(
+              evidence: [evidence(routeId: 'R1')],
+              startUtc: periodStart,
+              endExclusiveUtc: periodEnd,
+            );
+        expect(result.status, RouteStopRecommendationStatus.invalidAiResponse);
+      }
+      final cross = group(['R1']);
+      cross['evidenceReferences'] = ['route.R2.network.trip.0'];
+      final rejected =
+          await repository(
+            FakeGeminiDataSource(
+              response: {
+                'overallSummary': 'Summary',
+                'recommendationGroups': [
+                  cross,
+                  group(['R2'], action: 'stopImprovement'),
+                ],
+              },
+            ),
+          ).generate(
+            evidence: [
+              evidence(routeId: 'R1'),
+              evidence(routeId: 'R2'),
+            ],
+            startUtc: periodStart,
+            endExclusiveUtc: periodEnd,
+          );
       expect(
-        result.recommendation?.source,
-        RouteStopRecommendationSource.deterministicGate,
+        rejected.failure,
+        RouteStopRecommendationFailure.unknownEvidenceReference,
       );
     },
   );
 
-  test('zero feedback does not prevent analysis with usable stops', () async {
-    final gemini = FakeGeminiDataSource(
-      response: validResponse(RouteStopRecommendationAction.stopImprovement),
-    );
-    await repository(gemini: gemini).generate(
-      routeId: 'J15',
-      startUtc: periodStart,
-      endExclusiveUtc: periodEnd,
-    );
+  test('feature failure is atomic', () async {
+    final result =
+        await repository(
+          FakeGeminiDataSource(
+            response: {
+              'overallSummary': 'Summary',
+              'recommendationGroups': [
+                group(['R1']),
+                group(
+                  ['R2'],
+                  action: 'additionalStopCoverage',
+                  areas: [area('R2')..['toStopId'] = 'bad'],
+                ),
+              ],
+            },
+          ),
+        ).generate(
+          evidence: [
+            evidence(routeId: 'R1'),
+            evidence(routeId: 'R2'),
+          ],
+          startUtc: periodStart,
+          endExclusiveUtc: periodEnd,
+        );
+    expect(result.synthesis, isNull);
+    expect(result.status, RouteStopRecommendationStatus.invalidAiResponse);
+  });
 
-    expect(gemini.callCount, 1);
+  for (final action in RouteStopRecommendationAction.values) {
+    test('accepts valid grouped ${action.name} response', () async {
+      final areas =
+          action == RouteStopRecommendationAction.additionalStopCoverage
+          ? [area('R1')]
+          : const <Map<String, dynamic>>[];
+      final limitations =
+          action == RouteStopRecommendationAction.insufficientEvidence
+          ? ['More evidence is required.']
+          : const ['Known limitation.'];
+      final result =
+          await repository(
+            FakeGeminiDataSource(
+              response: {
+                'overallSummary': 'Overall summary',
+                'recommendationGroups': [
+                  group(
+                    ['R1'],
+                    action: action.name,
+                    areas: areas,
+                    limitations: limitations,
+                  ),
+                ],
+              },
+            ),
+          ).generate(
+            evidence: [evidence(routeId: 'R1')],
+            startUtc: periodStart,
+            endExclusiveUtc: periodEnd,
+          );
+      expect(result.failure, isNull);
+      if (action == RouteStopRecommendationAction.insufficientEvidence) {
+        expect(result.synthesis?.needsMoreEvidence?.routeIds, ['R1']);
+      } else {
+        expect(result.synthesis?.recommendationGroups.single.action, action);
+      }
+    });
+  }
+
+  test('rejects duplicate evidence references', () async {
+    final invalid = group(['R1']);
+    invalid['evidenceReferences'] = [
+      'route.R1.network.trip.0',
+      'route.R1.network.trip.0',
+    ];
+    final result = await generateResponse({
+      'overallSummary': 'Summary',
+      'recommendationGroups': [invalid],
+    });
+    expect(result.failure, RouteStopRecommendationFailure.invalidResponse);
+  });
+
+  test('rejects missing and unknown top-level properties', () async {
+    for (final invalid in [
+      {
+        'recommendationGroups': [
+          group(['R1']),
+        ],
+      },
+      {
+        'overallSummary': 'Summary',
+        'recommendationGroups': [
+          group(['R1']),
+        ],
+        'unexpected': true,
+      },
+    ]) {
+      expect(
+        (await generateResponse(invalid)).failure,
+        RouteStopRecommendationFailure.invalidResponse,
+      );
+    }
+  });
+
+  test('rejects missing and unknown group properties', () async {
+    final missing = group(['R1'])..remove('summary');
+    final unknown = group(['R1'])..['geometry'] = 'invented';
+    for (final invalid in [missing, unknown]) {
+      expect(
+        (await generateResponse({
+          'overallSummary': 'Summary',
+          'recommendationGroups': [invalid],
+        })).failure,
+        RouteStopRecommendationFailure.invalidResponse,
+      );
+    }
+  });
+
+  test('rejects an invalid grouped action', () async {
+    final invalid = group(['R1'])..['action'] = 'extendRoute';
+    expect(
+      (await generateResponse({
+        'overallSummary': 'Summary',
+        'recommendationGroups': [invalid],
+      })).failure,
+      RouteStopRecommendationFailure.invalidResponse,
+    );
+  });
+
+  test('maps malformed structured output safely', () async {
+    final result =
+        await repository(
+          FakeGeminiDataSource(
+            failure: GeminiTransportFailure.invalidStructuredJson,
+          ),
+        ).generate(
+          evidence: [evidence(routeId: 'R1')],
+          startUtc: periodStart,
+          endExclusiveUtc: periodEnd,
+        );
+    expect(result.status, RouteStopRecommendationStatus.invalidAiResponse);
+    expect(result.failure, RouteStopRecommendationFailure.malformedResponse);
   });
 
   for (final mapping in [
@@ -222,147 +415,77 @@ void main() {
       RouteStopRecommendationFailure.geminiNotConfigured,
     ),
   ]) {
-    test('maps ${mapping.$1.name} safely without retry', () async {
+    test('maps ${mapping.$1.name} feature failure without retry', () async {
       final gemini = FakeGeminiDataSource(
         failure: mapping.$1,
         statusCode: mapping.$1 == GeminiTransportFailure.http ? 503 : null,
       );
-      final result = await repository(gemini: gemini).generate(
-        routeId: 'J15',
+      final result = await repository(gemini).generate(
+        evidence: [evidence(routeId: 'R1')],
         startUtc: periodStart,
         endExclusiveUtc: periodEnd,
       );
-
       expect(result.failure, mapping.$2);
-      expect(gemini.callCount, 1);
       expect(
         result.httpStatusCode,
         mapping.$1 == GeminiTransportFailure.http ? 503 : isNull,
       );
+      expect(gemini.callCount, 1);
     });
   }
 
-  test(
-    'request uses bounded Part 6B payload and safety instructions',
-    () async {
-      final gemini = FakeGeminiDataSource(
-        response: validResponse(RouteStopRecommendationAction.routeImprovement),
-      );
-      await repository(gemini: gemini).generate(
-        routeId: 'J15',
-        startUtc: periodStart,
-        endExclusiveUtc: periodEnd,
-      );
-
-      expect(gemini.request?.input, contains('route_stop_evidence'));
-      expect(
-        gemini.request?.instructions,
-        contains('Do not fabricate stop coordinates'),
-      );
-      expect(
-        gemini.request?.instructions,
-        contains('Operational activity is not passenger demand'),
-      );
-      expect(
-        _allKeys(gemini.request!.responseSchema),
-        isNot(contains('capacity')),
-      );
-    },
-  );
-
-  test('uses retained evidence without loading it again', () async {
-    final retainedEvidence = evidence();
-    final evidenceRepository = FakeEvidenceRepository(retainedEvidence);
-    final gemini = FakeGeminiDataSource(
-      response: validResponse(RouteStopRecommendationAction.routeImprovement),
-    );
-    final recommendationRepository = DefaultRouteStopRecommendationRepository(
-      evidenceRepository: evidenceRepository,
-      geminiDataSource: gemini,
-    );
-
-    final result = await recommendationRepository.generate(
-      routeId: 'J15',
+  test('zero feedback remains eligible for feature synthesis', () async {
+    final gemini = FakeGeminiDataSource(response: response(['R1']));
+    final result = await repository(gemini).generate(
+      evidence: [evidence(routeId: 'R1')],
       startUtc: periodStart,
       endExclusiveUtc: periodEnd,
-      evidence: retainedEvidence,
     );
-
-    expect(evidenceRepository.callCount, 0);
-    expect(result.evidence, same(retainedEvidence));
-    expect(gemini.request!.input, contains('route_stop_evidence'));
-    expect(
-      result.payload!.toJson()['evidence_references'],
-      contains('network.trip.0'),
-    );
+    expect(result.status, RouteStopRecommendationStatus.available);
+    expect(gemini.callCount, 1);
   });
 
-  test('rejects non-consecutive and reversed candidate pairs', () async {
-    for (final pair in [
-      ('stop-a', 'Stop A', 'stop-c', 'Stop C'),
-      ('stop-b', 'Stop B', 'stop-a', 'Stop A'),
-    ]) {
-      final response = validResponse(
-        RouteStopRecommendationAction.additionalStopCoverage,
-      );
-      final area = response['candidateArea'] as Map<String, dynamic>;
-      area['fromStopId'] = pair.$1;
-      area['fromStopName'] = pair.$2;
-      area['toStopId'] = pair.$3;
-      area['toStopName'] = pair.$4;
-
-      final result =
-          await repository(
-            response: response,
-            sourceEvidence: evidence(stopCount: 3),
-          ).generate(
-            routeId: 'J15',
-            startUtc: periodStart,
-            endExclusiveUtc: periodEnd,
-          );
-
-      expect(
-        result.failure,
-        RouteStopRecommendationFailure.unknownStopReference,
-      );
-    }
+  test('rejects a non-consecutive known-stop pair', () async {
+    final invalidArea = area('R1')
+      ..['toStopId'] = 'stop-c'
+      ..['toStopName'] = 'Stop C';
+    final result =
+        await repository(
+          FakeGeminiDataSource(
+            response: {
+              'overallSummary': 'Summary',
+              'recommendationGroups': [
+                group(
+                  ['R1'],
+                  action: 'additionalStopCoverage',
+                  areas: [invalidArea],
+                ),
+              ],
+            },
+          ),
+        ).generate(
+          evidence: [evidence(routeId: 'R1', stopCount: 3)],
+          startUtc: periodStart,
+          endExclusiveUtc: periodEnd,
+        );
+    expect(result.failure, RouteStopRecommendationFailure.unknownStopReference);
   });
 
-  test('rejects a candidate pair spanning different patterns', () {
-    final response = validResponse(
-      RouteStopRecommendationAction.additionalStopCoverage,
-    );
-    final area = response['candidateArea'] as Map<String, dynamic>;
-    area['toStopId'] = 'stop-d';
-    area['toStopName'] = 'Stop D';
-    final payload = <String, dynamic>{
-      'evidence_references': ['network.trip.0', 'stop.stop-a', 'stop.stop-b'],
-      'network': {
-        'stop_catalog': [
-          {'stop_id': 'stop-a', 'stop_name': 'Stop A'},
-          {'stop_id': 'stop-b', 'stop_name': 'Stop B'},
-          {'stop_id': 'stop-c', 'stop_name': 'Stop C'},
-          {'stop_id': 'stop-d', 'stop_name': 'Stop D'},
-        ],
-        'trip_patterns': [
-          {
-            'ordered_stops': [
-              {'stop_id': 'stop-a'},
-              {'stop_id': 'stop-b'},
-            ],
-          },
-          {
-            'ordered_stops': [
-              {'stop_id': 'stop-c'},
-              {'stop_id': 'stop-d'},
-            ],
-          },
-        ],
-      },
-    };
-
+  test('rejects a candidate pair spanning separate submitted patterns', () {
+    final payload = featurePayloadWithPatterns([
+      ['stop-a', 'stop-b'],
+      ['stop-c', 'stop-d'],
+    ]);
+    final invalidArea = area('R1')
+      ..['toStopId'] = 'stop-d'
+      ..['toStopName'] = 'Stop D';
     expect(
-      () => parseRouteStopRecommendation(response, payload: payload),
+      () => parseRouteStopRecommendationSynthesis({
+        'overallSummary': 'Summary',
+        'recommendationGroups': [
+          group(['R1'], action: 'additionalStopCoverage', areas: [invalidArea]),
+        ],
+      }, payload: payload),
       throwsA(
         isA<RouteStopRecommendationValidationException>().having(
           (error) => error.failure,
@@ -373,86 +496,113 @@ void main() {
     );
   });
 
-  test('rejects conflicting retained stop metadata before Gemini', () async {
-    final retainedEvidence = evidence(conflictingMembership: true);
-    final gemini = FakeGeminiDataSource(
-      response: validResponse(RouteStopRecommendationAction.routeImprovement),
+  test('conflicting retained stop metadata fails before Gemini', () async {
+    final gemini = FakeGeminiDataSource(response: response(['R1']));
+    final result = await repository(gemini).generate(
+      evidence: [evidence(routeId: 'R1', conflictingMembership: true)],
+      startUtc: periodStart,
+      endExclusiveUtc: periodEnd,
     );
+    expect(result.failure, RouteStopRecommendationFailure.evidenceUnavailable);
+    expect(gemini.callCount, 0);
+  });
 
+  test('uses supplied retained evidence without repository reload', () async {
+    final evidenceRepository = CountingEvidenceRepository();
+    final retained = evidence(routeId: 'R1');
+    final gemini = FakeGeminiDataSource(response: response(['R1']));
     final result =
-        await repository(
-          gemini: gemini,
-          sourceEvidence: retainedEvidence,
+        await DefaultRouteStopRecommendationRepository(
+          evidenceRepository: evidenceRepository,
+          geminiDataSource: gemini,
         ).generate(
-          routeId: 'J15',
+          evidence: [retained],
           startUtc: periodStart,
           endExclusiveUtc: periodEnd,
-          evidence: retainedEvidence,
         );
-
-    expect(result.status, RouteStopRecommendationStatus.temporarilyUnavailable);
-    expect(result.failure, RouteStopRecommendationFailure.evidenceUnavailable);
-    expect(result.evidence, same(retainedEvidence));
-    expect(result.payload, isNull);
-    expect(gemini.callCount, 0);
+    expect(evidenceRepository.calls, 0);
+    expect(result.evidence.single, same(retained));
   });
 }
 
-final periodStart = DateTime.utc(2026, 7, 1);
-final periodEnd = DateTime.utc(2026, 8, 1);
-
-DefaultRouteStopRecommendationRepository repository({
-  Map<String, dynamic>? response,
-  GeminiTransportFailure? failure,
-  FakeGeminiDataSource? gemini,
-  DistrictRouteStopEvidence? sourceEvidence,
-}) => DefaultRouteStopRecommendationRepository(
-  evidenceRepository: FakeEvidenceRepository(sourceEvidence ?? evidence()),
-  geminiDataSource:
-      gemini ??
-      FakeGeminiDataSource(
-        response:
-            response ??
-            validResponse(RouteStopRecommendationAction.routeImprovement),
-        failure: failure,
-      ),
+Future<RouteStopRecommendationResult> generateResponse(
+  Map<String, dynamic> value,
+) => repository(FakeGeminiDataSource(response: value)).generate(
+  evidence: [evidence(routeId: 'R1')],
+  startUtc: periodStart,
+  endExclusiveUtc: periodEnd,
 );
 
-Map<String, dynamic> validResponse(RouteStopRecommendationAction action) => {
-  'action': action.name,
-  'summary': 'Review the existing route and stop evidence.',
-  'rationale': ['Existing route evidence supports this result.'],
-  'evidenceReferences':
-      action == RouteStopRecommendationAction.additionalStopCoverage
-      ? ['network.trip.0', 'stop.stop-a', 'stop.stop-b']
-      : ['network.trip.0'],
-  'limitations': action == RouteStopRecommendationAction.insufficientEvidence
-      ? ['Additional route evidence is required.']
-      : ['Operational coverage is limited.'],
-  'evidenceSufficiency':
-      action == RouteStopRecommendationAction.insufficientEvidence
-      ? 'insufficient'
-      : 'limited',
-  'candidateArea':
-      action == RouteStopRecommendationAction.additionalStopCoverage
-      ? <String, dynamic>{
-          'fromStopId': 'stop-a',
-          'fromStopName': 'Stop A',
-          'toStopId': 'stop-b',
-          'toStopName': 'Stop B',
-          'areaDescription':
-              'Evaluate additional stop coverage between Stop A and Stop B.',
-        }
-      : null,
+Map<String, dynamic> featurePayloadWithPatterns(
+  List<List<String>> patterns,
+) => {
+  'eligible_route_ids': ['R1'],
+  'routes': [
+    {
+      'route': {'route_id': 'R1'},
+      'evidence_references': ['route.R1.network.trip.0'],
+      'network': {
+        'stop_catalog': [
+          for (final id in patterns.expand((items) => items).toSet())
+            {
+              'stop_id': id,
+              'stop_name': 'Stop ${id.substring(id.length - 1).toUpperCase()}',
+            },
+        ],
+        'trip_patterns': [
+          for (final pattern in patterns)
+            {
+              'ordered_stops': [
+                for (final id in pattern) {'stop_id': id},
+              ],
+            },
+        ],
+      },
+    },
+  ],
 };
 
+DefaultRouteStopRecommendationRepository repository(
+  FakeGeminiDataSource gemini,
+) => DefaultRouteStopRecommendationRepository(geminiDataSource: gemini);
+Map<String, dynamic> response(List<String> routes) => {
+  'overallSummary': 'Cross-route summary',
+  'recommendationGroups': [group(routes)],
+};
+Map<String, dynamic> group(
+  List<String> routes, {
+  String action = 'routeImprovement',
+  List<Map<String, dynamic>> areas = const [],
+  List<String> limitations = const ['Limited operations.'],
+}) => {
+  'action': action,
+  'summary': 'Group summary',
+  'rationale': ['Evidence supports review.'],
+  'routeIds': routes,
+  'evidenceReferences': [
+    for (final id in routes) 'route.${Uri.encodeComponent(id)}.network.trip.0',
+  ],
+  'limitations': limitations,
+  'candidateAreas': areas,
+};
+Map<String, dynamic> area(String routeId) => {
+  'routeId': routeId,
+  'fromStopId': 'stop-a',
+  'fromStopName': 'Stop A',
+  'toStopId': 'stop-b',
+  'toStopName': 'Stop B',
+  'areaDescription': 'Evaluate the submitted gap.',
+};
+final periodStart = DateTime.utc(2026, 7, 1);
+final periodEnd = DateTime.utc(2026, 8, 1);
 DistrictRouteStopEvidence evidence({
+  String routeId = 'J15',
   int stopCount = 2,
   bool conflictingMembership = false,
 }) {
-  const route = RoutePerformanceRoute(
-    routeId: 'J15',
-    shortName: 'J15',
+  final route = RoutePerformanceRoute(
+    routeId: routeId,
+    shortName: routeId,
     longName: 'Johor Bahru route',
   );
   final stops = [
@@ -509,7 +659,7 @@ DistrictRouteStopEvidence evidence({
     periodStart: periodStart,
     periodEnd: periodEnd,
     peakOperationSummary: PeakOperationSummary(
-      routeId: 'J15',
+      routeId: routeId,
       periodStart: periodStart,
       periodEnd: periodEnd,
       observationCount: 0,
@@ -537,7 +687,7 @@ DistrictRouteStopEvidence evidence({
     ),
   );
   final routeStop = RouteStopEvidence(
-    routeId: 'J15',
+    routeId: routeId,
     periodStart: periodStart,
     periodEnd: periodEnd,
     network: network,
@@ -600,37 +750,6 @@ DistrictRouteStopEvidence evidence({
   );
 }
 
-Set<String> _allKeys(Object? value) {
-  final keys = <String>{};
-  if (value is Map<String, dynamic>) {
-    keys.addAll(value.keys);
-    for (final item in value.values) {
-      keys.addAll(_allKeys(item));
-    }
-  } else if (value is List<dynamic>) {
-    for (final item in value) {
-      keys.addAll(_allKeys(item));
-    }
-  }
-  return keys;
-}
-
-class FakeEvidenceRepository implements DistrictRouteStopEvidenceRepository {
-  FakeEvidenceRepository(this.result);
-  final DistrictRouteStopEvidence result;
-  int callCount = 0;
-
-  @override
-  Future<DistrictRouteStopEvidence> loadEvidence({
-    required String routeId,
-    required DateTime startUtc,
-    required DateTime endExclusiveUtc,
-  }) async {
-    callCount++;
-    return result;
-  }
-}
-
 class FakeGeminiDataSource implements GeminiDataSource {
   FakeGeminiDataSource({this.response, this.failure, this.statusCode});
 
@@ -657,5 +776,20 @@ class FakeGeminiDataSource implements GeminiDataSource {
       interactionId: null,
       value: response!,
     );
+  }
+}
+
+class CountingEvidenceRepository
+    implements DistrictRouteStopEvidenceRepository {
+  int calls = 0;
+
+  @override
+  Future<DistrictRouteStopEvidence> loadEvidence({
+    required String routeId,
+    required DateTime startUtc,
+    required DateTime endExclusiveUtc,
+  }) async {
+    calls++;
+    return evidence(routeId: routeId);
   }
 }

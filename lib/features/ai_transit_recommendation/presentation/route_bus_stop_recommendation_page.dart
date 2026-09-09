@@ -39,24 +39,18 @@ class _RouteBusStopRecommendationPageState
   late final RouteStopDashboardSession _session;
   bool _screening = false;
   bool _analysing = false;
-  String? _retryingRouteId;
+  bool _retrying = false;
 
   List<RouteStopDashboardCandidate> get _candidates => _session.candidates;
   List<RouteStopDashboardExcludedRoute> get _excludedRoutes =>
       _session.excludedRoutes;
-  List<RouteStopDashboardEntry> get _entries => _session.entries;
+  RouteStopRecommendationResult? get _result => _session.recommendationResult;
   DateTime? get _periodStartUtc => _session.periodStartUtc;
   DateTime? get _periodEndUtc => _session.periodEndUtc;
   bool get _empty => _session.empty;
   set _empty(bool value) => _session.empty = value;
   bool get _setupFailure => _session.setupFailure;
   set _setupFailure(bool value) => _session.setupFailure = value;
-  int get _completedInBatch => _session.completedInBatch;
-  set _completedInBatch(int value) => _session.completedInBatch = value;
-  int get _batchTotal => _session.batchTotal;
-  set _batchTotal(int value) => _session.batchTotal = value;
-  int get _nextCandidateIndex => _session.nextCandidateIndex;
-  set _nextCandidateIndex(int value) => _session.nextCandidateIndex = value;
 
   @override
   void initState() {
@@ -96,7 +90,7 @@ class _RouteBusStopRecommendationPageState
   }
 
   Future<void> _prepareEvidence() async {
-    if (_screening || _analysing || _retryingRouteId != null) return;
+    if (_screening || _analysing || _retrying) return;
     final period = _newPeriod();
     setState(() {
       _session.begin(period.startUtc, period.endUtc);
@@ -129,76 +123,53 @@ class _RouteBusStopRecommendationPageState
   Future<void> _generateRecommendations() async {
     if (!_session.screeningComplete ||
         _candidates.isEmpty ||
-        _entries.isNotEmpty ||
+        _result != null ||
         _analysing) {
       return;
     }
-    await _analyseNextBatch();
+    await _analyse();
   }
 
-  Future<void> _analyseNextBatch() async {
+  Future<void> _analyse() async {
     final start = _periodStartUtc;
     final end = _periodEndUtc;
-    if (_analysing ||
-        _retryingRouteId != null ||
-        start == null ||
-        end == null) {
+    if (_analysing || _retrying || start == null || end == null) {
       return;
     }
-    final remaining = _candidates.skip(_nextCandidateIndex).toList();
-    if (remaining.isEmpty) return;
-    final total = remaining.length.clamp(0, routeStopDashboardBatchSize);
-    setState(() {
-      _analysing = true;
-      _completedInBatch = 0;
-      _batchTotal = total;
-    });
-    await _coordinator.analyseBatch(
-      candidates: remaining,
+    if (_candidates.isEmpty) return;
+    setState(() => _analysing = true);
+    final result = await _coordinator.analyse(
+      candidates: _candidates,
       startUtc: start,
       endExclusiveUtc: end,
-      onCompleted: (completed, batchTotal, entry) {
-        if (!mounted) return;
-        setState(() {
-          _entries.add(entry);
-          _completedInBatch = completed;
-          _batchTotal = batchTotal;
-          _nextCandidateIndex++;
-        });
-      },
     );
     if (!mounted) return;
-    setState(() => _analysing = false);
+    setState(() {
+      _session.recommendationResult = result;
+      _analysing = false;
+    });
   }
 
-  Future<void> _retry(RouteStopDashboardEntry entry) async {
-    if (_screening || _analysing || _retryingRouteId != null) return;
+  Future<void> _retry() async {
+    if (_screening || _analysing || _retrying) return;
     final start = _periodStartUtc;
     final end = _periodEndUtc;
-    final candidate = _candidates
-        .where((item) => item.route.routeId == entry.route.routeId)
-        .firstOrNull;
-    if (start == null || end == null || candidate == null) return;
-    setState(() => _retryingRouteId = entry.route.routeId);
+    if (start == null || end == null || _candidates.isEmpty) return;
+    setState(() => _retrying = true);
     try {
       final replacement = await _coordinator.retry(
-        candidate: candidate,
+        candidates: _candidates,
         startUtc: start,
         endExclusiveUtc: end,
       );
       if (!mounted) return;
-      final index = _entries.indexWhere(
-        (item) => item.route.routeId == entry.route.routeId,
-      );
-      if (index >= 0) setState(() => _entries[index] = replacement);
+      setState(() => _session.recommendationResult = replacement);
     } on Object {
       if (!mounted) return;
     } finally {
-      if (mounted) setState(() => _retryingRouteId = null);
+      if (mounted) setState(() => _retrying = false);
     }
   }
-
-  int get _remainingCount => _candidates.length - _nextCandidateIndex;
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -223,10 +194,7 @@ class _RouteBusStopRecommendationPageState
                   FilledButton.icon(
                     key: const Key('generate-ai-recommendation'),
                     onPressed:
-                        _analysing ||
-                            _screening ||
-                            _retryingRouteId != null ||
-                            _entries.isNotEmpty
+                        _analysing || _screening || _retrying || _result != null
                         ? null
                         : _generateRecommendations,
                     icon: const Icon(Icons.auto_awesome),
@@ -241,7 +209,7 @@ class _RouteBusStopRecommendationPageState
                 Text(
                   _screening
                       ? 'Screening routes using deterministic evidence...'
-                      : 'Analysing route ${(_completedInBatch + 1).clamp(1, _batchTotal)} of $_batchTotal',
+                      : 'Analysing eligible routes in one feature synthesis...',
                   key: const Key('analysis-progress-label'),
                   textAlign: TextAlign.center,
                 ),
@@ -260,35 +228,14 @@ class _RouteBusStopRecommendationPageState
                   'No routes currently have enough deterministic route and stop evidence for AI analysis over the past 30 days.',
                 ),
               ],
-              if (_entries.isNotEmpty) ...[
+              if (_result != null) ...[
                 const SizedBox(height: 24),
                 Text(
                   'Recommendation Results',
                   style: Theme.of(context).textTheme.titleLarge,
                 ),
                 const SizedBox(height: 12),
-                for (final entry in _entries) ...[
-                  _resultCard(entry),
-                  const SizedBox(height: 12),
-                ],
-                Text(
-                  '${_entries.length} of ${_candidates.length} eligible routes analysed',
-                  key: const Key('analysed-count'),
-                ),
-                if (_remainingCount > 0) ...[
-                  const SizedBox(height: 12),
-                  FilledButton.icon(
-                    key: const Key('analyse-next-routes'),
-                    onPressed:
-                        _analysing || _screening || _retryingRouteId != null
-                        ? null
-                        : _analyseNextBatch,
-                    icon: const Icon(Icons.navigate_next),
-                    label: Text(
-                      'Analyse Next Routes ($_remainingCount remaining)',
-                    ),
-                  ),
-                ],
+                _groupedResult(_result!),
               ],
             ],
           ),
@@ -341,7 +288,7 @@ class _RouteBusStopRecommendationPageState
           const SizedBox(height: 16),
           FilledButton.icon(
             key: const Key('analyse-routes'),
-            onPressed: _screening || _analysing || _retryingRouteId != null
+            onPressed: _screening || _analysing || _retrying
                 ? null
                 : _prepareEvidence,
             icon: const Icon(Icons.refresh),
@@ -774,150 +721,113 @@ class _RouteBusStopRecommendationPageState
         : values;
   }
 
-  Widget _resultCard(RouteStopDashboardEntry entry) {
-    final recommendation = entry.result.recommendation;
-    final failure =
-        entry.result.status ==
-            RouteStopRecommendationStatus.temporarilyUnavailable ||
-        entry.result.status == RouteStopRecommendationStatus.invalidAiResponse;
+  Widget _groupedResult(RouteStopRecommendationResult result) {
+    final synthesis = result.synthesis;
+    if (synthesis == null) {
+      return Card(
+        key: const Key('route-stop-feature-failure'),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                result.status == RouteStopRecommendationStatus.invalidAiResponse
+                    ? 'Response Could Not Be Validated'
+                    : 'Recommendation Temporarily Unavailable',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 8),
+              Text(_failureMessage(result.failure)),
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  key: const Key('retry-feature-synthesis'),
+                  onPressed: _retrying || _analysing ? null : _retry,
+                  icon: _retrying
+                      ? const SizedBox.square(
+                          dimension: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.refresh),
+                  label: const Text('Retry Feature Analysis'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     return Card(
-      key: Key('route-result-${entry.route.routeId}'),
+      key: const Key('route-stop-grouped-result'),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              entry.route.displayName,
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              failure
-                  ? _routeFailureTitle(entry.result)
-                  : _actionLabel(recommendation!.action),
+              'Overall Route & Stop Analysis',
               style: Theme.of(context).textTheme.titleLarge,
             ),
-            if (recommendation != null) ...[
-              const SizedBox(height: 4),
-              Text(
-                'Evidence: ${_sufficiencyLabel(recommendation.evidenceSufficiency)}',
-              ),
-              const SizedBox(height: 8),
-              Text(recommendation.summary),
-              if (recommendation.candidateArea case final area?) ...[
-                const SizedBox(height: 12),
-                Text(
-                  'Suggested Area for Further Evaluation',
-                  style: Theme.of(context).textTheme.titleSmall,
-                ),
-                Text('Between ${area.fromStopName} and ${area.toStopName}'),
-                Text(area.areaDescription),
-              ],
-            ] else ...[
-              const SizedBox(height: 8),
-              Text(_failureMessage(entry.result.failure)),
+            const SizedBox(height: 8),
+            Text(synthesis.overallSummary),
+            for (final group in synthesis.recommendationGroups) ...[
+              const SizedBox(height: 16),
+              _actionGroup(group),
             ],
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              children: [
-                OutlinedButton(
-                  key: Key('view-details-${entry.route.routeId}'),
-                  onPressed: () => _showDetails(entry),
-                  child: const Text('View Details'),
-                ),
-                if (failure)
-                  TextButton.icon(
-                    key: Key('retry-${entry.route.routeId}'),
-                    onPressed: _retryingRouteId == null && !_analysing
-                        ? () => _retry(entry)
-                        : null,
-                    icon: _retryingRouteId == entry.route.routeId
-                        ? const SizedBox.square(
-                            dimension: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.refresh),
-                    label: const Text('Retry'),
-                  ),
-              ],
-            ),
+            if (synthesis.needsMoreEvidence case final group?) ...[
+              const Divider(height: 28),
+              ExpansionTile(
+                key: const Key('needs-more-evidence'),
+                tilePadding: EdgeInsets.zero,
+                title: const Text('Needs More Evidence'),
+                subtitle: Text('${group.routeIds.length} Routes'),
+                children: [
+                  for (final routeId in group.routeIds)
+                    ListTile(title: Text(_routeName(routeId))),
+                ],
+              ),
+            ],
           ],
         ),
       ),
     );
   }
 
-  Future<void> _showDetails(RouteStopDashboardEntry entry) =>
-      showModalBottomSheet<void>(
-        context: context,
-        isScrollControlled: true,
-        builder: (context) => DraggableScrollableSheet(
-          expand: false,
-          initialChildSize: 0.8,
-          builder: (context, controller) => ListView(
-            key: const Key('recommendation-details'),
-            controller: controller,
-            padding: const EdgeInsets.all(24),
-            children: [
-              Text(
-                'Recommendation Details',
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              const SizedBox(height: 16),
-              _detail('Route', entry.route.displayName),
-              _detail('Analysis Period', 'Past 30 Days'),
-              if (entry.result.recommendation case final recommendation?) ...[
-                _detail('Recommendation', _actionLabel(recommendation.action)),
-                _detail(
-                  'Evidence Sufficiency',
-                  _sufficiencyLabel(recommendation.evidenceSufficiency),
-                ),
-                const Divider(height: 32),
-                Text(recommendation.summary),
-                if (recommendation.candidateArea case final area?) ...[
-                  const SizedBox(height: 20),
-                  Text(
-                    'Suggested Area for Further Evaluation',
-                    style: Theme.of(context).textTheme.titleSmall,
-                  ),
-                  _detail(
-                    'From Stop',
-                    '${area.fromStopName} (${area.fromStopId})',
-                  ),
-                  _detail('To Stop', '${area.toStopName} (${area.toStopId})'),
-                  _detail('Area Description', area.areaDescription),
-                ],
-                if (recommendation.rationale.isNotEmpty) ...[
-                  const SizedBox(height: 20),
-                  _section('Rationale', recommendation.rationale),
-                ],
-                if (recommendation.evidenceReferences.isNotEmpty) ...[
-                  const SizedBox(height: 20),
-                  _section(
-                    'Supporting Evidence',
-                    recommendation.evidenceReferences
-                        .map(
-                          (reference) =>
-                              '${_evidenceLabel(reference)} ($reference)',
-                        )
-                        .toList(),
-                  ),
-                ],
-                if (recommendation.limitations.isNotEmpty) ...[
-                  const SizedBox(height: 20),
-                  _section('Limitations', recommendation.limitations),
-                ],
-              ] else ...[
-                _detail('Recommendation', _routeFailureTitle(entry.result)),
-                const SizedBox(height: 12),
-                Text(_failureMessage(entry.result.failure)),
-              ],
-            ],
+  Widget _actionGroup(RouteStopRecommendationGroup group) => Card.outlined(
+    key: Key('action-group-${group.action.name}'),
+    child: Padding(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            _actionLabel(group.action),
+            style: Theme.of(context).textTheme.titleMedium,
           ),
-        ),
-      );
+          const SizedBox(height: 2),
+          Text(_routeCountLabel(group.routeIds.length)),
+          const SizedBox(height: 8),
+          Text(group.summary),
+          const SizedBox(height: 10),
+          for (final routeId in group.routeIds)
+            Padding(
+              key: Key('group-route-$routeId'),
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Text(_routeName(routeId)),
+            ),
+        ],
+      ),
+    ),
+  );
+
+  String _routeName(String routeId) =>
+      _candidates
+          .where((candidate) => candidate.route.routeId == routeId)
+          .map((candidate) => candidate.route.displayName)
+          .firstOrNull ??
+      routeId;
 
   Widget _messageCard(String title, String body) => Card(
     child: Padding(
@@ -931,33 +841,6 @@ class _RouteBusStopRecommendationPageState
         ],
       ),
     ),
-  );
-
-  Widget _detail(String label, String value) => Padding(
-    padding: const EdgeInsets.only(top: 8),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(
-          width: 140,
-          child: Text(
-            label,
-            style: const TextStyle(fontWeight: FontWeight.w600),
-          ),
-        ),
-        Expanded(child: Text(value)),
-      ],
-    ),
-  );
-
-  Widget _section(String title, List<String> items) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Text(title, style: Theme.of(context).textTheme.titleSmall),
-      const SizedBox(height: 6),
-      for (final item in items)
-        Padding(padding: const EdgeInsets.only(top: 4), child: Text('• $item')),
-    ],
   );
 }
 
@@ -1137,24 +1020,16 @@ String _exclusionReason(RouteStopDashboardExclusionReason reason) =>
 
 String _actionLabel(RouteStopRecommendationAction action) => switch (action) {
   RouteStopRecommendationAction.routeImprovement => 'Route Improvement',
-  RouteStopRecommendationAction.stopImprovement => 'Bus Stop Improvement',
+  RouteStopRecommendationAction.stopImprovement => 'Stop Improvement',
   RouteStopRecommendationAction.additionalStopCoverage =>
     'Additional Stop Coverage',
   RouteStopRecommendationAction.maintainCurrentConfiguration =>
     'Maintain Current Configuration',
-  RouteStopRecommendationAction.insufficientEvidence => 'Insufficient Evidence',
+  RouteStopRecommendationAction.insufficientEvidence => 'Needs More Evidence',
 };
 
-String _sufficiencyLabel(RouteStopEvidenceSufficiency value) => switch (value) {
-  RouteStopEvidenceSufficiency.sufficient => 'Sufficient',
-  RouteStopEvidenceSufficiency.limited => 'Limited',
-  RouteStopEvidenceSufficiency.insufficient => 'Insufficient',
-};
-
-String _routeFailureTitle(RouteStopRecommendationResult result) =>
-    result.status == RouteStopRecommendationStatus.invalidAiResponse
-    ? 'Response Could Not Be Validated'
-    : 'Recommendation Temporarily Unavailable';
+String _routeCountLabel(int count) =>
+    '$count ${count == 1 ? 'Route' : 'Routes'}';
 
 String _failureMessage(RouteStopRecommendationFailure? failure) =>
     switch (failure) {
@@ -1174,20 +1049,3 @@ String _failureMessage(RouteStopRecommendationFailure? failure) =>
         'Route evidence could not be prepared.',
       _ => 'The AI response could not be validated. Please try again.',
     };
-
-String _evidenceLabel(String reference) {
-  if (reference.startsWith('stop.')) return 'Existing stop evidence';
-  if (reference.startsWith('trip.')) return 'Route trip evidence';
-  return switch (reference) {
-    'network.route' => 'Route network evidence',
-    'network.stop_spacing' => 'Consecutive stop-spacing evidence',
-    'district.membership' => 'Johor Bahru District evidence',
-    'operational.peak_operation' => 'Peak operation evidence',
-    'operational.route_performance' => 'Route performance evidence',
-    'feedback.missing_bus_stop' => 'Missing bus stop feedback',
-    'feedback.long_walking_distance' => 'Long walking distance feedback',
-    'feedback.incorrect_route_information' =>
-      'Incorrect route information feedback',
-    _ => 'Evidence reference',
-  };
-}

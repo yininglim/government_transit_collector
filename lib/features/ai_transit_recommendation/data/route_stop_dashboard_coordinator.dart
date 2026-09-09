@@ -5,9 +5,6 @@ import 'package:government_transit_collector/features/ai_transit_recommendation/
 import 'package:government_transit_collector/features/route_performance/data/route_performance_models.dart';
 import 'package:government_transit_collector/features/route_performance/data/route_performance_repository.dart';
 
-const routeStopDashboardBatchSize = 3;
-const routeStopDashboardMaximumConcurrency = 2;
-
 class RouteStopDashboardCandidate {
   const RouteStopDashboardCandidate({
     required this.route,
@@ -16,13 +13,6 @@ class RouteStopDashboardCandidate {
 
   final RoutePerformanceRoute route;
   final DistrictRouteStopEvidence evidence;
-}
-
-class RouteStopDashboardEntry {
-  const RouteStopDashboardEntry({required this.route, required this.result});
-
-  final RoutePerformanceRoute route;
-  final RouteStopRecommendationResult result;
 }
 
 enum RouteStopDashboardExclusionReason {
@@ -57,7 +47,7 @@ class RouteStopDashboardScreeningResult {
 class RouteStopDashboardSession {
   final candidates = <RouteStopDashboardCandidate>[];
   final excludedRoutes = <RouteStopDashboardExcludedRoute>[];
-  final entries = <RouteStopDashboardEntry>[];
+  RouteStopRecommendationResult? recommendationResult;
   DateTime? periodStartUtc;
   DateTime? periodEndUtc;
   bool empty = false;
@@ -65,9 +55,6 @@ class RouteStopDashboardSession {
   bool screeningComplete = false;
   int routesAnalysed = 0;
   String? selectedRouteId;
-  int completedInBatch = 0;
-  int batchTotal = 0;
-  int nextCandidateIndex = 0;
 
   bool matchesPeriod(DateTime startUtc, DateTime endExclusiveUtc) =>
       periodStartUtc?.isAtSameMomentAs(startUtc) == true &&
@@ -78,15 +65,12 @@ class RouteStopDashboardSession {
     periodEndUtc = endExclusiveUtc;
     candidates.clear();
     excludedRoutes.clear();
-    entries.clear();
+    recommendationResult = null;
     empty = false;
     setupFailure = false;
     screeningComplete = false;
     routesAnalysed = 0;
     selectedRouteId = null;
-    completedInBatch = 0;
-    batchTotal = 0;
-    nextCandidateIndex = 0;
   }
 
   void clear() {
@@ -94,15 +78,12 @@ class RouteStopDashboardSession {
     periodEndUtc = null;
     candidates.clear();
     excludedRoutes.clear();
-    entries.clear();
+    recommendationResult = null;
     empty = false;
     setupFailure = false;
     screeningComplete = false;
     routesAnalysed = 0;
     selectedRouteId = null;
-    completedInBatch = 0;
-    batchTotal = 0;
-    nextCandidateIndex = 0;
   }
 }
 
@@ -179,85 +160,28 @@ class RouteStopDashboardCoordinator {
     );
   }
 
-  Future<List<RouteStopDashboardEntry>> analyseBatch({
+  Future<RouteStopRecommendationResult> analyse({
     required List<RouteStopDashboardCandidate> candidates,
     required DateTime startUtc,
     required DateTime endExclusiveUtc,
-    void Function(int completed, int total, RouteStopDashboardEntry entry)?
-    onCompleted,
   }) async {
-    final batch = candidates.take(routeStopDashboardBatchSize).toList();
-    final entries = List<RouteStopDashboardEntry?>.filled(batch.length, null);
-    var nextIndex = 0;
-    var nextCompletedIndex = 0;
-    var completed = 0;
-
-    void reportCompleted() {
-      while (nextCompletedIndex < entries.length &&
-          entries[nextCompletedIndex] != null) {
-        completed++;
-        onCompleted?.call(
-          completed,
-          batch.length,
-          entries[nextCompletedIndex]!,
-        );
-        nextCompletedIndex++;
-      }
-    }
-
-    Future<void> worker() async {
-      while (nextIndex < batch.length) {
-        final index = nextIndex++;
-        final candidate = batch[index];
-        RouteStopRecommendationResult result;
-        try {
-          result = await _recommendationRepository.generate(
-            routeId: candidate.route.routeId,
-            startUtc: startUtc,
-            endExclusiveUtc: endExclusiveUtc,
-            evidence: candidate.evidence,
-          );
-        } on Object {
-          result = const RouteStopRecommendationResult(
-            status: RouteStopRecommendationStatus.temporarilyUnavailable,
-            recommendation: null,
-            failure: RouteStopRecommendationFailure.network,
-            evidence: null,
-            payload: null,
-          );
-        }
-        final entry = RouteStopDashboardEntry(
-          route: candidate.route,
-          result: result,
-        );
-        entries[index] = entry;
-        reportCompleted();
-      }
-    }
-
-    await Future.wait([
-      for (
-        var index = 0;
-        index < batch.length && index < routeStopDashboardMaximumConcurrency;
-        index++
-      )
-        worker(),
-    ]);
-    return entries.cast<RouteStopDashboardEntry>();
+    return _recommendationRepository.generate(
+      evidence: candidates.map((candidate) => candidate.evidence).toList(),
+      startUtc: startUtc,
+      endExclusiveUtc: endExclusiveUtc,
+    );
   }
 
-  Future<RouteStopDashboardEntry> retry({
-    required RouteStopDashboardCandidate candidate,
+  Future<RouteStopRecommendationResult> retry({
+    required List<RouteStopDashboardCandidate> candidates,
     required DateTime startUtc,
     required DateTime endExclusiveUtc,
   }) async {
-    final result = await _recommendationRepository.generate(
-      routeId: candidate.route.routeId,
+    return _recommendationRepository.generate(
+      evidence: candidates.map((candidate) => candidate.evidence).toList(),
       startUtc: startUtc,
       endExclusiveUtc: endExclusiveUtc,
-      evidence: candidate.evidence,
     );
-    return RouteStopDashboardEntry(route: candidate.route, result: result);
   }
 }
 

@@ -218,6 +218,38 @@ class BusFrequencyGeminiPayloadBuilder {
 class RouteStopGeminiPayloadBuilder {
   const RouteStopGeminiPayloadBuilder();
 
+  RouteStopGeminiEvidencePayload buildFeature(
+    List<DistrictRouteStopEvidence> evidence,
+  ) {
+    if (evidence.isEmpty) {
+      throw RouteStopGeminiPayloadBuildException(
+        'Feature evidence must contain at least one route.',
+      );
+    }
+    final routeIds = <String>{};
+    final routes = <Map<String, dynamic>>[];
+    for (final item in evidence) {
+      final routeId = item.routeStopEvidence.routeId.trim();
+      if (routeId.isEmpty || !routeIds.add(routeId)) {
+        throw RouteStopGeminiPayloadBuildException(
+          'Feature route IDs must be non-empty and unique.',
+        );
+      }
+      final single = build(item).toJson();
+      final namespace = 'route.${Uri.encodeComponent(routeId)}.';
+      routes.add(_namespaceRouteStopPayload(single, namespace));
+    }
+    return RouteStopGeminiEvidencePayload({
+      'payload_type': 'route_stop_feature_evidence',
+      'analysis_period': _period(
+        evidence.first.routeStopEvidence.periodStart,
+        evidence.first.routeStopEvidence.periodEnd,
+      ),
+      'eligible_route_ids': routeIds.toList(growable: false),
+      'routes': routes,
+    });
+  }
+
   RouteStopGeminiEvidencePayload build(DistrictRouteStopEvidence evidence) {
     final source = evidence.routeStopEvidence;
     final includedTrips = source.network.trips
@@ -431,6 +463,35 @@ class RouteStopGeminiPayloadBuilder {
       'evidence_references': references.toList()..sort(),
     });
   }
+}
+
+Map<String, dynamic> _namespaceRouteStopPayload(
+  Map<String, dynamic> payload,
+  String namespace,
+) {
+  Object? visit(Object? value) {
+    if (value is List<dynamic>) return value.map(visit).toList(growable: false);
+    if (value is Map<String, dynamic>) {
+      return value.map((key, item) {
+        if (key == 'evidence_ref' && item is String) {
+          return MapEntry(key, '$namespace$item');
+        }
+        if (key == 'evidence_references' && item is List<dynamic>) {
+          return MapEntry(
+            key,
+            item.map((reference) => '$namespace$reference').toList(),
+          );
+        }
+        return MapEntry(key, visit(item));
+      });
+    }
+    return value;
+  }
+
+  final result = visit(payload) as Map<String, dynamic>;
+  result.remove('payload_type');
+  result.remove('analysis_period');
+  return result;
 }
 
 class RouteStopGeminiPayloadBuildException implements Exception {
