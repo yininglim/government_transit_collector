@@ -5,6 +5,7 @@ import 'package:sqflite/sqflite.dart' as sqflite;
 abstract interface class RecentSearchRepository {
   Future<List<RecentJourneySearch>> getRecentSearches();
   Future<void> saveRecentSearch(RecentJourneySearch search);
+  Future<void> deleteRecentSearch(int id);
   Future<void> clearRecentSearches();
 }
 
@@ -90,5 +91,11 @@ class SqliteRecentSearchRepository implements RecentSearchRepository {
   Future<void> clearRecentSearches() async {
     final db = await _db;
     await db.delete(_table);
+  }
+
+  @override
+  Future<void> deleteRecentSearch(int id) async {
+    final db = await _db;
+    await db.delete(_table, where: 'id = ?', whereArgs: [id]);
   }
 }

@@ -10,6 +10,22 @@ void main() {
     expect(routes.single.displayName, 'J15 — Friendly route');
   });
 
+  test('loads only routes with observations in the requested period', () async {
+    final source = FakeSource()
+      ..routes = allRoutes
+      ..observedRouteIds = ['A', 'A'];
+    final start = DateTime.utc(2026, 8, 26);
+    final end = DateTime.utc(2026, 8, 27);
+
+    final routes = await DefaultPeakOperationRepository(
+      dataSource: source,
+    ).loadRoutesWithObservations(startUtc: start, endExclusiveUtc: end);
+
+    expect(routes.map((route) => route.routeId), ['A']);
+    expect(source.availabilityStart, start);
+    expect(source.availabilityEnd, end);
+  });
+
   test(
     'passes half-open date and route filters and excludes unrelated rows',
     () async {
@@ -48,6 +64,14 @@ void main() {
 }
 
 class FakeSource implements PeakOperationDataSource {
+  List<PeakOperationRoute> routes = const [
+    PeakOperationRoute(
+      routeId: 'A',
+      shortName: 'J15',
+      longName: 'Friendly route',
+    ),
+  ];
+  List<String> observedRouteIds = [];
   List<PeakOperationObservation> rows = [];
   bool fullPage = false;
   bool fail = false;
@@ -55,15 +79,25 @@ class FakeSource implements PeakOperationDataSource {
   DateTime? end;
   String? route;
   final offsets = <int>[];
+  DateTime? availabilityStart;
+  DateTime? availabilityEnd;
 
   @override
-  Future<List<PeakOperationRoute>> fetchRoutes() async => const [
-    PeakOperationRoute(
-      routeId: 'A',
-      shortName: 'J15',
-      longName: 'Friendly route',
-    ),
-  ];
+  Future<List<PeakOperationRoute>> fetchRoutes() async => routes;
+
+  @override
+  Future<List<String>> fetchObservedRouteIds({
+    required DateTime startUtc,
+    required DateTime endExclusiveUtc,
+    required int offset,
+    required int limit,
+  }) async {
+    availabilityStart = startUtc;
+    availabilityEnd = endExclusiveUtc;
+    if (offset >= observedRouteIds.length) return const [];
+    final end = (offset + limit).clamp(0, observedRouteIds.length);
+    return observedRouteIds.sublist(offset, end);
+  }
 
   @override
   Future<List<PeakOperationObservation>> fetchObservations({
@@ -83,6 +117,15 @@ class FakeSource implements PeakOperationDataSource {
     return offset == 0 ? rows : const [];
   }
 }
+
+const allRoutes = [
+  PeakOperationRoute(
+    routeId: 'A',
+    shortName: 'J15',
+    longName: 'Friendly route',
+  ),
+  PeakOperationRoute(routeId: 'B', shortName: 'J30', longName: 'Second route'),
+];
 
 PeakOperationObservation row(String route) => PeakOperationObservation(
   routeId: route,

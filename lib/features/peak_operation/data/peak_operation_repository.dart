@@ -3,6 +3,12 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 abstract interface class PeakOperationDataSource {
   Future<List<PeakOperationRoute>> fetchRoutes();
+  Future<List<String>> fetchObservedRouteIds({
+    required DateTime startUtc,
+    required DateTime endExclusiveUtc,
+    required int offset,
+    required int limit,
+  });
   Future<List<PeakOperationObservation>> fetchObservations({
     required DateTime startUtc,
     required DateTime endExclusiveUtc,
@@ -21,7 +27,15 @@ abstract interface class PeakOperationRepository {
   });
 }
 
-class DefaultPeakOperationRepository implements PeakOperationRepository {
+abstract interface class PeriodPeakOperationRepository {
+  Future<List<PeakOperationRoute>> loadRoutesWithObservations({
+    required DateTime startUtc,
+    required DateTime endExclusiveUtc,
+  });
+}
+
+class DefaultPeakOperationRepository
+    implements PeakOperationRepository, PeriodPeakOperationRepository {
   DefaultPeakOperationRepository({PeakOperationDataSource? dataSource})
     : _dataSource = dataSource ?? SupabasePeakOperationDataSource();
   static const pageSize = 1000;
@@ -29,6 +43,37 @@ class DefaultPeakOperationRepository implements PeakOperationRepository {
 
   @override
   Future<List<PeakOperationRoute>> loadRoutes() => _dataSource.fetchRoutes();
+
+  @override
+  Future<List<PeakOperationRoute>> loadRoutesWithObservations({
+    required DateTime startUtc,
+    required DateTime endExclusiveUtc,
+  }) async {
+    try {
+      final observedRouteIds = <String>{};
+      for (var offset = 0; ; offset += pageSize) {
+        final page = await _dataSource.fetchObservedRouteIds(
+          startUtc: startUtc,
+          endExclusiveUtc: endExclusiveUtc,
+          offset: offset,
+          limit: pageSize,
+        );
+        observedRouteIds.addAll(page);
+        if (page.length < pageSize) break;
+      }
+      if (observedRouteIds.isEmpty) return const [];
+      final routes = await _dataSource.fetchRoutes();
+      return routes
+          .where((route) => observedRouteIds.contains(route.routeId))
+          .toList(growable: false);
+    } on PeakOperationReadException {
+      rethrow;
+    } on Object {
+      throw const PeakOperationReadException(
+        'Unable to load routes with operational history.',
+      );
+    }
+  }
 
   @override
   Future<List<PeakOperationObservation>> loadObservations({
@@ -86,6 +131,32 @@ class SupabasePeakOperationDataSource implements PeakOperationDataSource {
           .toList(growable: false);
     } on Object {
       throw const PeakOperationReadException('Unable to load routes.');
+    }
+  }
+
+  @override
+  Future<List<String>> fetchObservedRouteIds({
+    required DateTime startUtc,
+    required DateTime endExclusiveUtc,
+    required int offset,
+    required int limit,
+  }) async {
+    try {
+      final rows = await _client
+          .from('vehicle_positions')
+          .select('route_id, position_id')
+          .gte('recorded_at', startUtc.toUtc().toIso8601String())
+          .lt('recorded_at', endExclusiveUtc.toUtc().toIso8601String())
+          .order('route_id')
+          .order('position_id')
+          .range(offset, offset + limit - 1);
+      return rows
+          .map((row) => row['route_id'] as String)
+          .toList(growable: false);
+    } on Object {
+      throw const PeakOperationReadException(
+        'Unable to load routes with operational history.',
+      );
     }
   }
 

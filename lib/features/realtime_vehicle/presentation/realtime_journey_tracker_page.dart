@@ -1405,6 +1405,14 @@ class _RealtimeVehicleMapState extends State<RealtimeVehicleMap>
       return;
     }
     if (!_mapReady) return;
+    final layoutSize = context.size;
+    if (layoutSize == null ||
+        _mapController.camera.nonRotatedSize != layoutSize) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _applyPendingCameraFit(expectedScope, token);
+      });
+      return;
+    }
     _pendingCameraFitScope = null;
     final points = widget.markers
         .map((marker) => LatLng(marker.latitude, marker.longitude))
@@ -1447,6 +1455,17 @@ class _RealtimeVehicleMapState extends State<RealtimeVehicleMap>
       });
     }
     return tile;
+  }
+
+  void _handleMapEvent(MapEvent event) {
+    if (event.source != MapEventSource.nonRotatedSizeChange ||
+        widget.viewMode != RealtimeTrackerView.allBuses ||
+        widget.markers.isEmpty) {
+      return;
+    }
+    _beginMapTileLoad();
+    _queueAllBusesCameraFit(widget.cameraScope);
+    if (mounted) setState(() {});
   }
 
   void _completePendingCameraFitAfterLayout() {
@@ -1524,6 +1543,7 @@ class _RealtimeVehicleMapState extends State<RealtimeVehicleMap>
           key: const Key('realtime-vehicle-map'),
           mapController: _mapController,
           options: MapOptions(
+            onMapEvent: _handleMapEvent,
             onMapReady: () {
               _mapReady = true;
               if (widget.viewMode == RealtimeTrackerView.selectedBus) {

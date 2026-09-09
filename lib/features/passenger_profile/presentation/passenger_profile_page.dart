@@ -34,6 +34,7 @@ class _PassengerProfilePageState extends State<PassengerProfilePage> {
   late String _displayName;
   List<SavedJourney>? _saved;
   List<RecentJourneySearch>? _recent;
+  final Set<int> _deletingRecentSearchIds = {};
   String? _savedError, _recentError, _preferenceError;
   int _radius = 1000;
   bool _savingName = false, _savingRadius = false;
@@ -180,6 +181,25 @@ class _PassengerProfilePageState extends State<PassengerProfilePage> {
       if (mounted) await _loadRecent();
     } on Object {
       _message('Unable to clear recent searches.');
+    }
+  }
+
+  Future<void> _deleteRecent(RecentJourneySearch search) async {
+    final id = search.id;
+    if (id == null || _deletingRecentSearchIds.contains(id)) return;
+    setState(() => _deletingRecentSearchIds.add(id));
+    try {
+      await widget.recentRepository.deleteRecentSearch(id);
+      if (!mounted) return;
+      setState(() {
+        _recent = _recent
+            ?.where((candidate) => candidate.id != id)
+            .toList(growable: false);
+      });
+    } on Object {
+      _message('Unable to delete recent search.');
+    } finally {
+      if (mounted) setState(() => _deletingRecentSearchIds.remove(id));
     }
   }
 
@@ -389,12 +409,42 @@ class _PassengerProfilePageState extends State<PassengerProfilePage> {
                   for (final recent in _recent!)
                     ListTile(
                       contentPadding: EdgeInsets.zero,
-                      trailing: TextButton(
-                        onPressed: () => Navigator.pop(context, recent),
-                        child: const Text('Search Again'),
-                      ),
-                      title: Text(
-                        '${recent.originStopName} → ${recent.destinationStopName}',
+                      leading: const Icon(Icons.history),
+                      title: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Text(
+                            '${recent.originStopName} → ${recent.destinationStopName}',
+                          ),
+                          const SizedBox(height: 4),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: Wrap(
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                TextButton(
+                                  onPressed: () =>
+                                      Navigator.pop(context, recent),
+                                  child: const Text('Search Again'),
+                                ),
+                                IconButton(
+                                  key: ValueKey(
+                                    'delete-recent-search-${recent.id}',
+                                  ),
+                                  tooltip: 'Delete recent search',
+                                  onPressed:
+                                      recent.id == null ||
+                                          _deletingRecentSearchIds.contains(
+                                            recent.id,
+                                          )
+                                      ? null
+                                      : () => _deleteRecent(recent),
+                                  icon: const Icon(Icons.delete_outline),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
                     ),
               ]),

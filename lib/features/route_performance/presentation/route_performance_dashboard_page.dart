@@ -3,13 +3,20 @@ import 'package:government_transit_collector/core/time/transit_service_time.dart
 import 'package:government_transit_collector/features/route_performance/data/route_performance_calculator.dart';
 import 'package:government_transit_collector/features/route_performance/data/route_performance_models.dart';
 import 'package:government_transit_collector/features/route_performance/data/route_performance_repository.dart';
+import 'package:government_transit_collector/features/saved_operational_reports/data/saved_operational_report_repository.dart';
 import 'package:timezone/timezone.dart' as timezone;
 
 enum RoutePerformancePeriod { today, lastSevenDays, custom }
 
 class RoutePerformanceDashboardPage extends StatefulWidget {
-  const RoutePerformanceDashboardPage({this.repository, this.now, super.key});
+  const RoutePerformanceDashboardPage({
+    this.repository,
+    this.savedReportRepository,
+    this.now,
+    super.key,
+  });
   final RoutePerformanceRepository? repository;
+  final SavedOperationalReportRepository? savedReportRepository;
   final DateTime Function()? now;
 
   @override
@@ -19,6 +26,7 @@ class RoutePerformanceDashboardPage extends StatefulWidget {
 class _DashboardState extends State<RoutePerformanceDashboardPage> {
   final _calculator = const RoutePerformanceCalculator();
   late final RoutePerformanceRepository _repository;
+  SavedOperationalReportRepository? _savedReportRepository;
   List<RoutePerformanceRoute> _routes = const [];
   RoutePerformanceRoute? _route;
   RoutePerformancePeriod _period = RoutePerformancePeriod.today;
@@ -29,34 +37,67 @@ class _DashboardState extends State<RoutePerformanceDashboardPage> {
   bool _loading = true;
   bool _refreshing = false;
   bool _showPartial = false;
+  bool _savingReport = false;
   String? _error;
+  int _requestGeneration = 0;
 
   @override
   void initState() {
     super.initState();
     _repository = widget.repository ?? DefaultRoutePerformanceRepository();
-    _loadRoutes();
+    _savedReportRepository = widget.savedReportRepository;
+    _reloadAvailableRoutes();
   }
 
-  Future<void> _loadRoutes() async {
+  Future<void> _reloadAvailableRoutes() async {
+    final generation = ++_requestGeneration;
     setState(() {
-      _loading = true;
+      _refreshing = _summary != null;
+      _loading = _summary == null;
       _error = null;
     });
+    final range = _range();
     try {
-      final routes = await _repository.loadRoutes();
-      if (!mounted) return;
-      _routes = routes;
-      _route = routes.firstOrNull;
+      final routes = _repository is PeriodRoutePerformanceRepository
+          ? await (_repository as PeriodRoutePerformanceRepository)
+                .loadRoutesWithObservations(
+                  startUtc: range.startUtc,
+                  endExclusiveUtc: range.endUtc,
+                )
+          : await _repository.loadRoutes();
+      if (!mounted || generation != _requestGeneration) return;
+      final previousRouteId = _route?.routeId;
+      final selected = routes
+          .where((route) => route.routeId == previousRouteId)
+          .firstOrNull;
+      final nextRoute = selected ?? routes.firstOrNull;
+      final keepSummary =
+          _summary != null && nextRoute?.routeId == previousRouteId;
+      setState(() {
+        _routes = routes;
+        _route = nextRoute;
+        if (!keepSummary) _summary = null;
+        _loading = nextRoute != null && !keepSummary;
+        _showPartial = false;
+      });
       if (_route == null) {
-        setState(() => _loading = false);
-      } else {
-        await _refresh();
+        setState(() {
+          _loading = false;
+          _refreshing = false;
+          _lastUpdated = currentTransitServiceDateTime(now: widget.now);
+        });
+        return;
       }
+      await _loadSelectedRoute(
+        route: _route!,
+        range: range,
+        generation: generation,
+      );
     } on Object catch (error) {
-      if (!mounted) return;
+      if (!mounted || generation != _requestGeneration) return;
       setState(() {
         _loading = false;
+        _refreshing = false;
         _error = error.toString();
       });
     }
@@ -103,22 +144,29 @@ class _DashboardState extends State<RoutePerformanceDashboardPage> {
     );
   }
 
-  Future<void> _refresh() async {
-    final route = _route;
-    if (route == null || _refreshing) return;
-    setState(() {
-      _refreshing = _summary != null;
-      _loading = _summary == null;
-      _error = null;
-    });
-    final range = _range();
+  Future<void> _loadSelectedRoute({
+    RoutePerformanceRoute? route,
+    ({DateTime startUtc, DateTime endUtc, String label})? range,
+    int? generation,
+  }) async {
+    final requestGeneration = generation ?? ++_requestGeneration;
+    final selectedRoute = route ?? _route;
+    if (selectedRoute == null) return;
+    if (generation == null) {
+      setState(() {
+        _refreshing = _summary != null;
+        _loading = _summary == null;
+        _error = null;
+      });
+    }
+    final selectedRange = range ?? _range();
     try {
       final data = await _repository.loadRoutePerformance(
-        routeId: route.routeId,
-        startUtc: range.startUtc,
-        endExclusiveUtc: range.endUtc,
+        routeId: selectedRoute.routeId,
+        startUtc: selectedRange.startUtc,
+        endExclusiveUtc: selectedRange.endUtc,
       );
-      if (!mounted) return;
+      if (!mounted || requestGeneration != _requestGeneration) return;
       setState(() {
         _summary = _calculator.calculate(data);
         _lastUpdated = currentTransitServiceDateTime(now: widget.now);
@@ -126,7 +174,7 @@ class _DashboardState extends State<RoutePerformanceDashboardPage> {
         _refreshing = false;
       });
     } on Object catch (error) {
-      if (!mounted) return;
+      if (!mounted || requestGeneration != _requestGeneration) return;
       setState(() {
         _loading = false;
         _refreshing = false;
@@ -135,7 +183,7 @@ class _DashboardState extends State<RoutePerformanceDashboardPage> {
     }
   }
 
-  Future<void> _chooseCustomDates() async {
+  Future<bool> _chooseCustomDates() async {
     final local = currentTransitServiceDateTime(now: widget.now);
     final range = await showDateRangePicker(
       context: context,
@@ -146,12 +194,12 @@ class _DashboardState extends State<RoutePerformanceDashboardPage> {
         end: _customEnd ?? DateTime(local.year, local.month, local.day),
       ),
     );
-    if (range == null) return;
+    if (range == null) return false;
     setState(() {
       _customStart = range.start;
       _customEnd = range.end;
     });
-    await _refresh();
+    return true;
   }
 
   @override
@@ -215,7 +263,7 @@ class _DashboardState extends State<RoutePerformanceDashboardPage> {
       ),
       IconButton.filledTonal(
         tooltip: 'Refresh',
-        onPressed: _loading || _refreshing ? null : _refresh,
+        onPressed: _loading || _refreshing ? null : _reloadAvailableRoutes,
         icon: const Icon(Icons.refresh),
       ),
     ],
@@ -253,12 +301,13 @@ class _DashboardState extends State<RoutePerformanceDashboardPage> {
             )
             .toList(),
         onChanged: (value) {
+          if (value == null) return;
           setState(() {
             _route = value;
             _summary = null;
             _showPartial = false;
           });
-          _refresh();
+          _loadSelectedRoute();
         },
       );
       final periods = SegmentedButton<RoutePerformancePeriod>(
@@ -278,12 +327,16 @@ class _DashboardState extends State<RoutePerformanceDashboardPage> {
         ],
         selected: {_period},
         onSelectionChanged: (value) async {
+          final previous = _period;
           setState(() => _period = value.first);
           if (_period == RoutePerformancePeriod.custom) {
-            await _chooseCustomDates();
-          } else {
-            await _refresh();
+            final selected = await _chooseCustomDates();
+            if (!selected) {
+              if (mounted) setState(() => _period = previous);
+              return;
+            }
           }
+          await _reloadAvailableRoutes();
         },
       );
       final routeSelector = Column(
@@ -347,10 +400,11 @@ class _DashboardState extends State<RoutePerformanceDashboardPage> {
   );
 
   Widget _content() {
-    if (_routes.isEmpty) return const Text('No routes are available.');
+    if (_routes.isEmpty) return _noRoutesState();
     final summary = _summary;
     if (summary == null || summary.totalObservations == 0) return _emptyState();
     final complete = summary.completeTrips;
+    if (complete.isEmpty) return _insufficientState(summary);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -361,9 +415,7 @@ class _DashboardState extends State<RoutePerformanceDashboardPage> {
         LayoutBuilder(
           builder: (context, constraints) {
             final coverage = _coverage(summary);
-            final second = complete.isEmpty
-                ? _insufficientState(summary)
-                : _delayBreakdown(summary);
+            final second = _delayBreakdown(summary);
             if (constraints.maxWidth >= 760) {
               return Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -379,6 +431,8 @@ class _DashboardState extends State<RoutePerformanceDashboardPage> {
             );
           },
         ),
+        const SizedBox(height: 12),
+        _saveReportSection(summary),
         if (complete.isNotEmpty) ...[
           _sectionTitle('Observed trip performance'),
           ...complete.map(_tripCard),
@@ -386,6 +440,116 @@ class _DashboardState extends State<RoutePerformanceDashboardPage> {
         if (summary.partialTripCount > 0) _partialSection(summary),
       ],
     );
+  }
+
+  Widget _saveReportSection(RoutePerformanceSummary summary) => Card(
+    key: const Key('route-performance-save-section'),
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final description = Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Save operational report',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Preserve the displayed analysis as a historical snapshot.',
+              ),
+            ],
+          );
+          final button = FilledButton.icon(
+            key: const Key('save-route-performance-report'),
+            onPressed: _refreshing || _savingReport
+                ? null
+                : () => _showSaveReportDialog(summary),
+            icon: const Icon(Icons.save_outlined),
+            label: const Text('Save Report'),
+          );
+          if (constraints.maxWidth < 520) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                description,
+                const SizedBox(height: 12),
+                Align(alignment: Alignment.centerRight, child: button),
+              ],
+            );
+          }
+          return Row(
+            children: [
+              Expanded(child: description),
+              const SizedBox(width: 16),
+              button,
+            ],
+          );
+        },
+      ),
+    ),
+  );
+
+  Future<void> _showSaveReportDialog(RoutePerformanceSummary summary) async {
+    if (_savingReport || _route == null) return;
+    final route = _route!;
+    final range = _range();
+    final saved = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _SaveRoutePerformanceDialog(
+        defaultTitle:
+            '${route.shortName?.trim().isNotEmpty == true ? route.shortName!.trim() : route.displayName} '
+            'Route Performance - ${_periodLabel()}',
+        onSave: ({required title, required adminNotes}) async {
+          setState(() => _savingReport = true);
+          try {
+            final repository = _savedReportRepository ??=
+                DefaultSavedOperationalReportRepository();
+            await repository.createRoutePerformanceReport(
+              routeId: route.routeId,
+              routeNameSnapshot: route.displayName,
+              periodStart: range.startUtc,
+              periodEnd: range.endUtc,
+              title: title,
+              adminNotes: adminNotes,
+              resultSnapshot: _snapshot(summary),
+            );
+          } finally {
+            if (mounted) setState(() => _savingReport = false);
+          }
+        },
+      ),
+    );
+    if (saved == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Route Performance report saved.')),
+      );
+    }
+  }
+
+  String _periodLabel() => switch (_period) {
+    RoutePerformancePeriod.today => 'Today',
+    RoutePerformancePeriod.lastSevenDays => '7 Days',
+    RoutePerformancePeriod.custom => 'Custom',
+  };
+
+  Map<String, dynamic> _snapshot(RoutePerformanceSummary summary) {
+    final tripsUsed = summary.completeTrips.length;
+    return {
+      'average_travel_time_minutes': summary.averageTravelTime!.inSeconds / 60,
+      'delay_frequency_percent': summary.delayFrequencyPercent,
+      'schedule_adherence_percent': summary.scheduleAdherencePercent,
+      'total_observed_trip_occurrences': summary.trips.length,
+      'trips_used_in_metrics': tripsUsed,
+      'partial_trip_occurrences': summary.partialTripCount,
+      'total_observations': summary.totalObservations,
+      'delayed_trip_count': summary.delayedTripCount,
+      'on_time_trip_count': tripsUsed - summary.delayedTripCount,
+    };
   }
 
   Widget _metrics(RoutePerformanceSummary summary) {
@@ -726,21 +890,67 @@ class _DashboardState extends State<RoutePerformanceDashboardPage> {
     ),
   );
 
-  Widget _insufficientState(RoutePerformanceSummary summary) => Card(
+  Widget _noRoutesState() => Card(
+    key: const Key('no-historical-route-data'),
     child: Padding(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(28),
       child: Column(
         children: [
-          const Icon(Icons.hourglass_empty, size: 36),
-          const SizedBox(height: 8),
-          Text(
-            'Historical data found',
-            style: Theme.of(context).textTheme.titleMedium,
+          Icon(
+            Icons.analytics_outlined,
+            size: 52,
+            color: Theme.of(context).colorScheme.primary,
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 12),
           Text(
-            '${summary.totalObservations} observations were collected, but there is not yet enough complete trip coverage to calculate route performance.',
+            'No historical route data',
+            style: Theme.of(context).textTheme.titleLarge,
             textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'No realtime observations are available for any route during this period.',
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Try another period or collect more historical data.',
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    ),
+  );
+
+  Widget _insufficientState(RoutePerformanceSummary summary) => Card(
+    key: const Key('insufficient-trip-coverage'),
+    child: Padding(
+      padding: const EdgeInsets.all(28),
+      child: Column(
+        children: [
+          Icon(
+            Icons.hourglass_empty,
+            size: 52,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'Insufficient trip coverage',
+            style: Theme.of(context).textTheme.titleLarge,
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Realtime observations are available for this route, but no complete trips could be evaluated during this period.',
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 12),
+          Text(
+            '${summary.totalObservations} observations · '
+            '${summary.trips.length} matched trip occurrences · '
+            '${summary.partialTripCount} partial or insufficient',
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodySmall,
           ),
         ],
       ),
@@ -757,7 +967,7 @@ class _DashboardState extends State<RoutePerformanceDashboardPage> {
           Text(_error ?? 'Unable to load route performance.'),
           const SizedBox(height: 8),
           FilledButton.icon(
-            onPressed: _loadRoutes,
+            onPressed: _reloadAvailableRoutes,
             icon: const Icon(Icons.refresh),
             label: const Text('Retry'),
           ),
@@ -779,6 +989,139 @@ class _DashboardState extends State<RoutePerformanceDashboardPage> {
   Widget _sectionTitle(String text) => Padding(
     padding: const EdgeInsets.only(top: 20, bottom: 8),
     child: Text(text, style: Theme.of(context).textTheme.titleLarge),
+  );
+}
+
+class _SaveRoutePerformanceDialog extends StatefulWidget {
+  const _SaveRoutePerformanceDialog({
+    required this.defaultTitle,
+    required this.onSave,
+  });
+
+  final String defaultTitle;
+  final Future<void> Function({
+    required String title,
+    required String? adminNotes,
+  })
+  onSave;
+
+  @override
+  State<_SaveRoutePerformanceDialog> createState() =>
+      _SaveRoutePerformanceDialogState();
+}
+
+class _SaveRoutePerformanceDialogState
+    extends State<_SaveRoutePerformanceDialog> {
+  late final TextEditingController _titleController;
+  final _notesController = TextEditingController();
+  String? _titleError;
+  String? _saveError;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _titleController = TextEditingController(text: widget.defaultTitle);
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _notesController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final title = _titleController.text.trim();
+    if (title.isEmpty) {
+      setState(() => _titleError = 'Report title is required.');
+      return;
+    }
+    final notes = _notesController.text.trim();
+    setState(() {
+      _saving = true;
+      _saveError = null;
+    });
+    try {
+      await widget.onSave(
+        title: title,
+        adminNotes: notes.isEmpty ? null : notes,
+      );
+      if (mounted) Navigator.of(context).pop(true);
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _saveError = error.toString();
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Save Route Performance Report'),
+    content: SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            key: const Key('save-report-title'),
+            controller: _titleController,
+            autofocus: true,
+            decoration: InputDecoration(
+              labelText: 'Report Title',
+              border: const OutlineInputBorder(),
+              errorText: _titleError,
+            ),
+            onChanged: (_) {
+              if (_titleError != null || _saveError != null) {
+                setState(() {
+                  _titleError = null;
+                  _saveError = null;
+                });
+              }
+            },
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            key: const Key('save-report-notes'),
+            controller: _notesController,
+            minLines: 3,
+            maxLines: 6,
+            decoration: const InputDecoration(
+              labelText: 'Admin Notes (optional)',
+              alignLabelWithHint: true,
+              border: OutlineInputBorder(),
+            ),
+          ),
+          if (_saveError != null) ...[
+            const SizedBox(height: 12),
+            Text(
+              _saveError!,
+              key: const Key('save-report-error'),
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ],
+        ],
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+        child: const Text('Cancel'),
+      ),
+      FilledButton(
+        key: const Key('confirm-save-route-performance-report'),
+        onPressed: _saving ? null : _save,
+        child: _saving
+            ? const SizedBox.square(
+                dimension: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Text('Save Report'),
+      ),
+    ],
   );
 }
 

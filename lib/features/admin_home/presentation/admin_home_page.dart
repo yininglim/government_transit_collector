@@ -5,6 +5,8 @@ import 'package:government_transit_collector/features/peak_operation/data/peak_o
 import 'package:government_transit_collector/features/peak_operation/presentation/peak_operation_analysis_page.dart';
 import 'package:government_transit_collector/features/route_performance/data/route_performance_repository.dart';
 import 'package:government_transit_collector/features/route_performance/presentation/route_performance_dashboard_page.dart';
+import 'package:government_transit_collector/features/saved_operational_reports/data/saved_operational_report_repository.dart';
+import 'package:government_transit_collector/features/saved_operational_reports/presentation/saved_operational_reports_page.dart';
 
 class AdminHomePage extends StatefulWidget {
   const AdminHomePage({
@@ -12,6 +14,7 @@ class AdminHomePage extends StatefulWidget {
     required this.repository,
     this.routePerformanceRepository,
     this.peakOperationRepository,
+    this.savedOperationalReportRepository,
     super.key,
   });
 
@@ -19,6 +22,7 @@ class AdminHomePage extends StatefulWidget {
   final AuthRepository repository;
   final RoutePerformanceRepository? routePerformanceRepository;
   final PeakOperationRepository? peakOperationRepository;
+  final SavedOperationalReportRepository? savedOperationalReportRepository;
 
   @override
   State<AdminHomePage> createState() => _AdminHomePageState();
@@ -122,6 +126,23 @@ class _AdminHomePageState extends State<AdminHomePage> {
                   MaterialPageRoute<void>(
                     builder: (_) => PeakOperationAnalysisPage(
                       repository: widget.peakOperationRepository,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.inventory_2_outlined),
+                title: const Text('Saved Operational Reports'),
+                subtitle: const Text(
+                  'Review historical Route Performance and Peak Operation snapshots.',
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => SavedOperationalReportsPage(
+                      repository: widget.savedOperationalReportRepository,
                     ),
                   ),
                 ),
