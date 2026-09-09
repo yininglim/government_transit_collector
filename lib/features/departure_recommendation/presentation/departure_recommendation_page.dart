@@ -142,6 +142,60 @@ class DepartureRecommendationPage extends StatefulWidget {
 
 class _DepartureRecommendationPageState
     extends State<DepartureRecommendationPage> {
+  late Future<List<SavedJourney>> _savedJourneys = _loadSavedJourneys();
+
+  Future<List<SavedJourney>> _loadSavedJourneys() async =>
+      (widget.savedJourneyRepository ?? SupabaseSavedJourneyRepository()).load();
+
+  Future<void> _useSavedJourney(SavedJourney journey) async {
+    if (_inputsBusy || !journey.usable) return;
+    setState(() {
+      _origin = journey.origin;
+      _destination = journey.destination;
+      _resetSearchState();
+    });
+    await _refreshDestinations();
+  }
+
+  Widget _buildSavedJourneys() => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Text('Saved Journeys', style: Theme.of(context).textTheme.titleMedium),
+      FutureBuilder<List<SavedJourney>>(
+        future: _savedJourneys,
+        builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return TextButton(
+              onPressed: () => setState(() => _savedJourneys = _loadSavedJourneys()),
+              child: const Text('Unable to load saved journeys. Retry'),
+            );
+          }
+          if (!snapshot.hasData) {
+            return const Text('Loading saved journeys...');
+          }
+          if (snapshot.data!.isEmpty) return const Text('No saved journeys yet.');
+          return Column(
+            children: [
+              for (final journey in snapshot.data!)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.bookmark_outline),
+                  title: Text(journey.name),
+                  subtitle: Text(journey.usable
+                      ? '${journey.origin!.name} \u2192 ${journey.destination!.name}'
+                      : 'A saved stop is no longer available.'),
+                  onTap: _inputsBusy || !journey.usable
+                      ? null
+                      : () => _useSavedJourney(journey),
+                ),
+            ],
+          );
+        },
+      ),
+      const SizedBox(height: 24),
+    ],
+  );
+
   DepartureStop? _origin;
   DepartureStop? _destination;
   List<DepartureStop> _reachable = const [];
@@ -346,6 +400,7 @@ class _DepartureRecommendationPageState
       await (widget.savedJourneyRepository ?? SupabaseSavedJourneyRepository())
           .save(name, origin, destination);
       if (mounted) {
+        setState(() => _savedJourneys = _loadSavedJourneys());
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Journey saved. View it in My Travel Profile.'),
@@ -807,6 +862,7 @@ class _DepartureRecommendationPageState
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
+                      _buildSavedJourneys(),
                       Text(
                         'Where would you like to go?',
                         style: Theme.of(context).textTheme.headlineSmall,
