@@ -161,6 +161,7 @@ class _DepartureRecommendationPageState
   final _scrollController = ScrollController();
 
   List<RecentJourneySearch>? _recentSearches;
+  final Set<int> _deletingRecentSearchIds = {};
   String? _historyError;
 
   late DateTime _travelDate;
@@ -681,6 +682,29 @@ class _DepartureRecommendationPageState
     }
   }
 
+  Future<void> _deleteRecentSearch(RecentJourneySearch search) async {
+    final id = search.id;
+    if (id == null || _deletingRecentSearchIds.contains(id)) return;
+    setState(() => _deletingRecentSearchIds.add(id));
+    try {
+      await widget.recentSearchRepository.deleteRecentSearch(id);
+      if (!mounted) return;
+      setState(() {
+        _recentSearches = _recentSearches
+            ?.where((candidate) => candidate.id != id)
+            .toList(growable: false);
+        _historyError = null;
+      });
+    } on Object {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to delete recent search.')),
+      );
+    } finally {
+      if (mounted) setState(() => _deletingRecentSearchIds.remove(id));
+    }
+  }
+
   BusFeedbackRepository _feedbackRepository() {
     return widget.feedbackRepository ?? SupabaseBusFeedbackRepository();
   }
@@ -1153,14 +1177,42 @@ class _DepartureRecommendationPageState
                         'recent-${search.originStopId}-${search.destinationStopId}',
                       ),
                       leading: const Icon(Icons.history),
-                      title: Text(
-                        '${search.originStopName} → ${search.destinationStopName}',
-                      ),
-                      trailing: TextButton(
-                        onPressed: _inputsBusy
-                            ? null
-                            : () => _restoreRecentSearch(search),
-                        child: const Text('Search Again'),
+                      title: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Text(
+                            '${search.originStopName} → ${search.destinationStopName}',
+                          ),
+                          const SizedBox(height: 4),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: Wrap(
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                TextButton(
+                                  onPressed: _inputsBusy
+                                      ? null
+                                      : () => _restoreRecentSearch(search),
+                                  child: const Text('Search Again'),
+                                ),
+                                IconButton(
+                                  key: ValueKey(
+                                    'delete-recent-search-${search.id}',
+                                  ),
+                                  tooltip: 'Delete recent search',
+                                  onPressed:
+                                      search.id == null ||
+                                          _deletingRecentSearchIds.contains(
+                                            search.id,
+                                          )
+                                      ? null
+                                      : () => _deleteRecentSearch(search),
+                                  icon: const Icon(Icons.delete_outline),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
                       onTap: _inputsBusy
                           ? null

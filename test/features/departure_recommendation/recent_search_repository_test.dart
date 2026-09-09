@@ -61,11 +61,12 @@ void main() {
     },
   );
 
-  setUp(() {
+  setUp(() async {
     repository = SqliteRecentSearchRepository(
       databaseFactory: databaseFactoryFfi,
       databasePath: inMemoryDatabasePath,
     );
+    await repository.clearRecentSearches();
   });
 
   RecentJourneySearch search({
@@ -126,5 +127,36 @@ void main() {
     await repository.clearRecentSearches();
 
     expect(await repository.getRecentSearches(), isEmpty);
+  });
+
+  test('deletes only the recent search with the selected SQLite id', () async {
+    await repository.saveRecentSearch(search(originId: 'first'));
+    await repository.saveRecentSearch(search(originId: 'second'));
+    await repository.saveRecentSearch(search(originId: 'third'));
+    final before = await repository.getRecentSearches();
+    final selected = before.singleWhere(
+      (item) => item.originStopId == 'second',
+    );
+
+    await repository.deleteRecentSearch(selected.id!);
+
+    final after = await repository.getRecentSearches();
+    expect(after.map((item) => item.originStopId), ['third', 'first']);
+  });
+
+  test('retains only the ten newest recent searches', () async {
+    for (var index = 0; index < 12; index++) {
+      await repository.saveRecentSearch(
+        search(
+          originId: 'origin-$index',
+          searchedAt: DateTime.utc(2026, 8, 1).add(Duration(days: index)),
+        ),
+      );
+    }
+
+    final searches = await repository.getRecentSearches();
+    expect(searches, hasLength(SqliteRecentSearchRepository.historyLimit));
+    expect(searches.first.originStopId, 'origin-11');
+    expect(searches.last.originStopId, 'origin-2');
   });
 }

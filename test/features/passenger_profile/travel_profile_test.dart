@@ -63,6 +63,7 @@ class PreferencesFake implements TravelPreferencesRepository {
 class RecentFake implements RecentSearchRepository {
   final rows = <RecentJourneySearch>[
     RecentJourneySearch(
+      id: 1,
       originStopId: 'a',
       originStopName: 'Recent A',
       destinationStopId: 'b',
@@ -74,6 +75,10 @@ class RecentFake implements RecentSearchRepository {
   Future<List<RecentJourneySearch>> getRecentSearches() async => List.of(rows);
   @override
   Future<void> clearRecentSearches() async => rows.clear();
+
+  @override
+  Future<void> deleteRecentSearch(int id) async =>
+      rows.removeWhere((search) => search.id == id);
   @override
   Future<void> saveRecentSearch(RecentJourneySearch search) async =>
       rows.add(search);
@@ -261,6 +266,49 @@ void main() {
       expect(recent.rows, isEmpty);
     },
   );
+  testWidgets('profile deletes one recent search without closing', (
+    tester,
+  ) async {
+    final recent = RecentFake()
+      ..rows.add(
+        RecentJourneySearch(
+          id: 2,
+          originStopId: 'c',
+          originStopName: 'Recent C',
+          destinationStopId: 'd',
+          destinationStopName: 'Recent D',
+          searchedAt: DateTime.utc(2026, 1, 2),
+        ),
+      );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PassengerProfilePage(
+          profile: profile,
+          authRepository: ProfileAuth(client),
+          savedRepository: SavedFake(),
+          recentRepository: recent,
+          preferencesRepository: PreferencesFake(),
+          onProfileUpdated: (_) {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('delete-recent-search-1')),
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
+    final deleteButton = tester.widget<IconButton>(
+      find.byKey(const ValueKey('delete-recent-search-1')),
+    );
+    expect(deleteButton.onPressed, isNotNull);
+    deleteButton.onPressed!();
+    await tester.pumpAndSettle();
+
+    expect(find.text('Recent A → Recent B'), findsNothing);
+    expect(find.text('Recent C → Recent D'), findsOneWidget);
+    expect(recent.rows.map((item) => item.id), [2]);
+  });
   testWidgets('selecting saved journey returns only the stop pair', (
     tester,
   ) async {

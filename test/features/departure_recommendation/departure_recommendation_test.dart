@@ -166,6 +166,10 @@ class FakeRecentSearchRepository implements RecentSearchRepository {
   Future<void> clearRecentSearches() async => searches.clear();
 
   @override
+  Future<void> deleteRecentSearch(int id) async =>
+      searches.removeWhere((search) => search.id == id);
+
+  @override
   Future<List<RecentJourneySearch>> getRecentSearches() async =>
       List.of(searches);
 
@@ -710,6 +714,139 @@ void main() {
       );
       expect(find.byKey(const Key('journey-results')), findsNothing);
     });
+
+    testWidgets('deletes one recent search and keeps the other reusable', (
+      tester,
+    ) async {
+      final first = RecentJourneySearch(
+        id: 1,
+        originStopId: larkin.id,
+        originStopName: larkin.name,
+        destinationStopId: jbSentral.id,
+        destinationStopName: jbSentral.name,
+        searchedAt: DateTime.utc(2026, 8, 21),
+      );
+      final second = RecentJourneySearch(
+        id: 2,
+        originStopId: jbSentral.id,
+        originStopName: jbSentral.name,
+        destinationStopId: larkin.id,
+        destinationStopName: larkin.name,
+        searchedAt: DateTime.utc(2026, 8, 20),
+      );
+      final repository = FakeRecentSearchRepository([first, second]);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: DepartureRecommendationPage(
+            stopRepository: FakeDepartureStopRepository(),
+            tripRepository: FakeDirectTripRepository(),
+            transferRepository: FakeTransferJourneyRepository(),
+            timetableRepository: FakeTimetableRecommendationRepository(),
+            recentSearchRepository: repository,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('delete-recent-search-1')),
+      );
+
+      await tester.tap(find.byKey(const ValueKey('delete-recent-search-1')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Larkin Sentral → JB Sentral'), findsNothing);
+      expect(find.text('JB Sentral → Larkin Sentral'), findsOneWidget);
+      expect(repository.searches, [second]);
+      await tester.tap(find.text('JB Sentral → Larkin Sentral'));
+      await tester.pump();
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('origin-field')),
+          matching: find.text('JB Sentral'),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('deleting the final recent search shows the empty state', (
+      tester,
+    ) async {
+      final repository = FakeRecentSearchRepository([
+        RecentJourneySearch(
+          id: 7,
+          originStopId: larkin.id,
+          originStopName: larkin.name,
+          destinationStopId: jbSentral.id,
+          destinationStopName: jbSentral.name,
+          searchedAt: DateTime.utc(2026, 8, 21),
+        ),
+      ]);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: DepartureRecommendationPage(
+            stopRepository: FakeDepartureStopRepository(),
+            tripRepository: FakeDirectTripRepository(),
+            transferRepository: FakeTransferJourneyRepository(),
+            timetableRepository: FakeTimetableRecommendationRepository(),
+            recentSearchRepository: repository,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('delete-recent-search-7')),
+      );
+      await tester.tap(find.byKey(const ValueKey('delete-recent-search-7')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('No recent searches yet.'), findsOneWidget);
+      expect(repository.searches, isEmpty);
+    });
+
+    testWidgets(
+      'long recent search gives journey text a full row on a narrow phone',
+      (tester) async {
+        const origin = 'Flat Pelanduk Utama Community Transport Hub';
+        const destination = 'Jalan Merbah 2 Taman Scientex Terminal';
+        tester.view.physicalSize = const Size(320, 800);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        await tester.pumpWidget(
+          MaterialApp(
+            home: DepartureRecommendationPage(
+              stopRepository: FakeDepartureStopRepository(),
+              tripRepository: FakeDirectTripRepository(),
+              transferRepository: FakeTransferJourneyRepository(),
+              timetableRepository: FakeTimetableRecommendationRepository(),
+              recentSearchRepository: FakeRecentSearchRepository([
+                RecentJourneySearch(
+                  id: 9,
+                  originStopId: 'long-origin',
+                  originStopName: origin,
+                  destinationStopId: 'long-destination',
+                  destinationStopName: destination,
+                  searchedAt: DateTime.utc(2026, 8, 21),
+                ),
+              ]),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        final journeyText = find.text('$origin → $destination');
+        await tester.ensureVisible(journeyText);
+        await tester.pump();
+
+        expect(journeyText, findsOneWidget);
+        expect(tester.widget<Text>(journeyText).maxLines, isNull);
+        expect(find.text('Search Again'), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('delete-recent-search-9')),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
 
     for (final size in <Size>[const Size(400, 800), const Size(800, 400)]) {
       testWidgets('renders without overflow at ${size.width}x${size.height}', (
