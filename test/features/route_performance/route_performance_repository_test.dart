@@ -11,6 +11,33 @@ void main() {
     expect(routes.single.displayName, 'J30 — Johor route');
   });
 
+  test('loads only routes with observations in the requested period', () async {
+    final source = FakeSource()
+      ..routes = const [
+        RoutePerformanceRoute(
+          routeId: 'route',
+          shortName: 'J30',
+          longName: null,
+        ),
+        RoutePerformanceRoute(
+          routeId: 'other',
+          shortName: 'J50',
+          longName: null,
+        ),
+      ]
+      ..observedRouteIds = ['route', 'route'];
+    final start = DateTime.utc(2026, 8, 26);
+    final end = DateTime.utc(2026, 8, 27);
+
+    final routes = await DefaultRoutePerformanceRepository(
+      dataSource: source,
+    ).loadRoutesWithObservations(startUtc: start, endExclusiveUtc: end);
+
+    expect(routes.map((route) => route.routeId), ['route']);
+    expect(source.availabilityStart, start);
+    expect(source.availabilityEnd, end);
+  });
+
   test(
     'applies route and timestamp range and excludes unrelated route rows',
     () async {
@@ -73,6 +100,14 @@ void main() {
 }
 
 class FakeSource implements RoutePerformanceDataSource {
+  List<RoutePerformanceRoute> routes = const [
+    RoutePerformanceRoute(
+      routeId: 'route',
+      shortName: 'J30',
+      longName: 'Johor route',
+    ),
+  ];
+  List<String> observedRouteIds = [];
   List<HistoricalVehicleObservation> observations = [];
   bool fullFirstPage = false;
   bool failure = false;
@@ -81,15 +116,25 @@ class FakeSource implements RoutePerformanceDataSource {
   DateTime? end;
   final observationOffsets = <int>[];
   List<String> scheduleTripIds = [];
+  DateTime? availabilityStart;
+  DateTime? availabilityEnd;
 
   @override
-  Future<List<RoutePerformanceRoute>> fetchRoutes() async => const [
-    RoutePerformanceRoute(
-      routeId: 'route',
-      shortName: 'J30',
-      longName: 'Johor route',
-    ),
-  ];
+  Future<List<RoutePerformanceRoute>> fetchRoutes() async => routes;
+
+  @override
+  Future<List<String>> fetchObservedRouteIds({
+    required DateTime startUtc,
+    required DateTime endExclusiveUtc,
+    required int offset,
+    required int limit,
+  }) async {
+    availabilityStart = startUtc;
+    availabilityEnd = endExclusiveUtc;
+    if (offset >= observedRouteIds.length) return const [];
+    final end = (offset + limit).clamp(0, observedRouteIds.length);
+    return observedRouteIds.sublist(offset, end);
+  }
 
   @override
   Future<List<HistoricalVehicleObservation>> fetchObservations({

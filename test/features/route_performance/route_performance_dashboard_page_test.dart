@@ -84,11 +84,10 @@ void main() {
   testWidgets('shows partial-data state without fake metrics', (tester) async {
     final data = dataWithTrips(complete: false);
     await pump(tester, FakeRepository(data: data));
-    expect(
-      find.textContaining('not yet enough complete trip coverage'),
-      findsOneWidget,
-    );
-    expect(find.text('—'), findsNWidgets(3));
+    expect(find.text('Insufficient trip coverage'), findsOneWidget);
+    expect(find.text('Average Travel Time'), findsNothing);
+    expect(find.text('Delay Frequency'), findsNothing);
+    expect(find.text('Schedule Adherence'), findsNothing);
   });
 
   testWidgets('refresh re-queries current collector data', (tester) async {
@@ -154,6 +153,90 @@ void main() {
     await tester.tap(find.text('7 Days'));
     await tester.pumpAndSettle();
     expect(repository.loadCount, 2);
+    expect(repository.availabilityCount, 2);
+    expect(
+      repository.availabilityRanges.last.$1,
+      DateTime.utc(2026, 8, 19, 16),
+    );
+    expect(
+      repository.availabilityRanges.last.$2,
+      DateTime.utc(2026, 8, 26, 16),
+    );
+  });
+
+  testWidgets('period availability keeps the selected route when possible', (
+    tester,
+  ) async {
+    final repository = FakeRepository(
+      data: dataWithTrips(),
+      routesForRange: (_, end) =>
+          end.difference(DateTime.utc(2026)).inDays > 230
+          ? twoRoutes
+          : twoRoutes,
+    );
+    await pump(tester, repository);
+    await tester.tap(
+      find.byType(DropdownButtonFormField<RoutePerformanceRoute>),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('J50').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('7 Days'));
+    await tester.pumpAndSettle();
+    expect(repository.loadedRouteIds.last, 'other');
+  });
+
+  testWidgets(
+    'period availability replaces a route that is no longer present',
+    (tester) async {
+      var request = 0;
+      final repository = FakeRepository(
+        data: dataWithTrips(),
+        routesForRange: (_, _) =>
+            request++ == 0 ? twoRoutes : [twoRoutes.first],
+      );
+      await pump(tester, repository);
+      await tester.tap(
+        find.byType(DropdownButtonFormField<RoutePerformanceRoute>),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('J50').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('7 Days'));
+      await tester.pumpAndSettle();
+      expect(repository.loadedRouteIds.last, 'route');
+      expect(find.text('J50'), findsNothing);
+    },
+  );
+
+  testWidgets('no observed routes shows the period-wide empty state', (
+    tester,
+  ) async {
+    await pump(
+      tester,
+      FakeRepository(data: dataWithTrips(), routesForRange: (_, _) => const []),
+    );
+    expect(find.text('No historical route data'), findsOneWidget);
+    expect(find.byKey(const Key('no-historical-route-data')), findsOneWidget);
+    expect(find.text('J30'), findsNothing);
+  });
+
+  testWidgets('refresh re-evaluates route availability', (tester) async {
+    var request = 0;
+    final repository = FakeRepository(
+      data: dataWithTrips(),
+      routesForRange: (_, _) =>
+          request++ == 0 ? [twoRoutes.first] : [twoRoutes.last],
+    );
+    await pump(tester, repository);
+    expect(repository.loadedRouteIds.last, 'route');
+
+    await tester.tap(find.byTooltip('Refresh'));
+    await tester.pumpAndSettle();
+
+    expect(repository.loadedRouteIds.last, 'other');
+    expect(find.text('J50'), findsWidgets);
+    expect(find.text('J30'), findsNothing);
   });
 
   testWidgets('Custom opens a date range picker', (tester) async {
@@ -161,6 +244,28 @@ void main() {
     await tester.tap(find.text('Custom'));
     await tester.pumpAndSettle();
     expect(find.byType(DateRangePickerDialog), findsOneWidget);
+  });
+
+  testWidgets('Custom availability uses an inclusive selected end date', (
+    tester,
+  ) async {
+    final repository = FakeRepository(data: dataWithTrips());
+    await pump(tester, repository);
+    await tester.tap(find.text('Custom'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('20').last);
+    await tester.tap(find.text('22').last);
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+
+    expect(
+      repository.availabilityRanges.last.$1,
+      DateTime.utc(2026, 8, 19, 16),
+    );
+    expect(
+      repository.availabilityRanges.last.$2,
+      DateTime.utc(2026, 8, 22, 16),
+    );
   });
 }
 
@@ -179,12 +284,18 @@ Future<void> pump(
   await tester.pumpAndSettle();
 }
 
-class FakeRepository implements RoutePerformanceRepository {
-  FakeRepository({required this.data, this.fail = false});
+class FakeRepository
+    implements RoutePerformanceRepository, PeriodRoutePerformanceRepository {
+  FakeRepository({required this.data, this.fail = false, this.routesForRange});
   final RoutePerformanceData data;
   final bool fail;
+  final List<RoutePerformanceRoute> Function(DateTime, DateTime)?
+  routesForRange;
   int loadCount = 0;
+  int availabilityCount = 0;
   Completer<RoutePerformanceData>? pending;
+  final availabilityRanges = <(DateTime, DateTime)>[];
+  final loadedRouteIds = <String>[];
 
   @override
   Future<List<RoutePerformanceRoute>> loadRoutes() async {
@@ -199,16 +310,41 @@ class FakeRepository implements RoutePerformanceRepository {
   }
 
   @override
+  Future<List<RoutePerformanceRoute>> loadRoutesWithObservations({
+    required DateTime startUtc,
+    required DateTime endExclusiveUtc,
+  }) async {
+    if (fail) throw const RoutePerformanceReadException('Load failed');
+    availabilityCount++;
+    availabilityRanges.add((startUtc, endExclusiveUtc));
+    return routesForRange?.call(startUtc, endExclusiveUtc) ?? [twoRoutes.first];
+  }
+
+  @override
   Future<RoutePerformanceData> loadRoutePerformance({
     required String routeId,
     required DateTime startUtc,
     required DateTime endExclusiveUtc,
   }) async {
     loadCount++;
+    loadedRouteIds.add(routeId);
     if (pending != null) return pending!.future;
     return data;
   }
 }
+
+const twoRoutes = [
+  RoutePerformanceRoute(
+    routeId: 'route',
+    shortName: 'J30',
+    longName: 'Johor route',
+  ),
+  RoutePerformanceRoute(
+    routeId: 'other',
+    shortName: 'J50',
+    longName: 'Other route with a long description',
+  ),
+];
 
 RoutePerformanceData dataWithTrips({
   bool complete = true,

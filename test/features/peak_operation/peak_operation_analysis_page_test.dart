@@ -74,6 +74,15 @@ void main() {
     await tester.tap(find.text('7 Days'));
     await tester.pumpAndSettle();
     expect(repository.loadCount, 2);
+    expect(repository.availabilityCount, 2);
+    expect(
+      repository.availabilityRanges.last.$1,
+      DateTime.utc(2026, 8, 19, 16),
+    );
+    expect(
+      repository.availabilityRanges.last.$2,
+      DateTime.utc(2026, 8, 26, 16),
+    );
     await tester.tap(find.text('Custom'));
     await tester.pumpAndSettle();
     expect(find.byType(DateRangePickerDialog), findsOneWidget);
@@ -97,10 +106,95 @@ void main() {
   testWidgets('handles no-data and limited-data states', (tester) async {
     await pump(tester, FakeRepository(rows: const []));
     expect(find.text('No operational history'), findsOneWidget);
+    expect(find.text('All Routes'), findsNothing);
+    expect(find.text('No routes with data'), findsOneWidget);
     await tester.pumpWidget(const SizedBox.shrink());
     await pump(tester, FakeRepository(rows: [activityRows().first]));
     expect(find.text('Limited operational history'), findsOneWidget);
     expect(find.text('Peak Period'), findsNothing);
+  });
+
+  testWidgets('scope contains All Routes and only observed routes', (
+    tester,
+  ) async {
+    await pump(
+      tester,
+      FakeRepository(
+        rows: activityRows(),
+        routesForRange: (_, _) => [peakRoutes.first],
+      ),
+    );
+    await tester.tap(find.byKey(const Key('peak-scope-selector')));
+    await tester.pumpAndSettle();
+    expect(find.text('All Routes'), findsWidgets);
+    expect(find.text('J15 — Friendly route'), findsWidgets);
+    expect(find.text('J30 — Second route'), findsNothing);
+  });
+
+  testWidgets('period change preserves an available specific route', (
+    tester,
+  ) async {
+    final repository = FakeRepository(
+      rows: activityRows(),
+      routesForRange: (_, _) => peakRoutes,
+    );
+    await pump(tester, repository);
+    await selectScope(tester, 'J15 — Friendly route');
+    await tester.tap(find.text('7 Days'));
+    await tester.pumpAndSettle();
+    expect(repository.lastRoute, 'A');
+  });
+
+  testWidgets('period change falls back to All Routes when route disappears', (
+    tester,
+  ) async {
+    var request = 0;
+    final repository = FakeRepository(
+      rows: activityRows(),
+      routesForRange: (_, _) => request++ == 0 ? peakRoutes : [peakRoutes.last],
+    );
+    await pump(tester, repository);
+    await selectScope(tester, 'J15 — Friendly route');
+    await tester.tap(find.text('7 Days'));
+    await tester.pumpAndSettle();
+    expect(repository.lastRoute, isNull);
+    expect(find.text('All Routes'), findsOneWidget);
+    expect(find.text('J15 — Friendly route'), findsNothing);
+  });
+
+  testWidgets('refresh re-evaluates scope availability', (tester) async {
+    var request = 0;
+    final repository = FakeRepository(
+      rows: activityRows(),
+      routesForRange: (_, _) => request++ == 0 ? peakRoutes : [peakRoutes.last],
+    );
+    await pump(tester, repository);
+    await selectScope(tester, 'J15 — Friendly route');
+    await tester.tap(find.byTooltip('Refresh'));
+    await tester.pumpAndSettle();
+    expect(repository.lastRoute, isNull);
+    expect(repository.availabilityCount, 2);
+  });
+
+  testWidgets('Custom availability uses the inclusive selected end date', (
+    tester,
+  ) async {
+    final repository = FakeRepository(rows: activityRows());
+    await pump(tester, repository);
+    await tester.tap(find.text('Custom'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('20').last);
+    await tester.tap(find.text('22').last);
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(
+      repository.availabilityRanges.last.$1,
+      DateTime.utc(2026, 8, 19, 16),
+    );
+    expect(
+      repository.availabilityRanges.last.$2,
+      DateTime.utc(2026, 8, 22, 16),
+    );
   });
 
   for (final size in [const Size(400, 800), const Size(800, 400)]) {
@@ -131,26 +225,42 @@ Future<void> pump(
   await tester.pumpAndSettle();
 }
 
-class FakeRepository implements PeakOperationRepository {
-  FakeRepository({required this.rows});
+Future<void> selectScope(WidgetTester tester, String label) async {
+  await tester.tap(find.byKey(const Key('peak-scope-selector')));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text(label).last);
+  await tester.pumpAndSettle();
+}
+
+class FakeRepository
+    implements PeakOperationRepository, PeriodPeakOperationRepository {
+  FakeRepository({required this.rows, this.routesForRange});
   final List<PeakOperationObservation> rows;
+  final List<PeakOperationRoute> Function(DateTime, DateTime)? routesForRange;
   int loadCount = 0;
+  int availabilityCount = 0;
   String? lastRoute;
   Completer<List<PeakOperationObservation>>? pending;
+  final availabilityRanges = <(DateTime, DateTime)>[];
 
   @override
-  Future<List<PeakOperationRoute>> loadRoutes() async => const [
-    PeakOperationRoute(
-      routeId: 'A',
-      shortName: 'J15',
-      longName: 'Friendly route',
-    ),
-    PeakOperationRoute(
-      routeId: 'B',
-      shortName: 'J30',
-      longName: 'Second route',
-    ),
-  ];
+  Future<List<PeakOperationRoute>> loadRoutes() async => peakRoutes;
+
+  @override
+  Future<List<PeakOperationRoute>> loadRoutesWithObservations({
+    required DateTime startUtc,
+    required DateTime endExclusiveUtc,
+  }) async {
+    availabilityCount++;
+    availabilityRanges.add((startUtc, endExclusiveUtc));
+    if (routesForRange case final resolver?) {
+      return resolver(startUtc, endExclusiveUtc);
+    }
+    final observedIds = rows.map((row) => row.routeId).toSet();
+    return peakRoutes
+        .where((route) => observedIds.contains(route.routeId))
+        .toList();
+  }
 
   @override
   Future<List<PeakOperationObservation>> loadObservations({
@@ -166,6 +276,15 @@ class FakeRepository implements PeakOperationRepository {
         .toList();
   }
 }
+
+const peakRoutes = [
+  PeakOperationRoute(
+    routeId: 'A',
+    shortName: 'J15',
+    longName: 'Friendly route',
+  ),
+  PeakOperationRoute(routeId: 'B', shortName: 'J30', longName: 'Second route'),
+];
 
 List<PeakOperationObservation> activityRows() => [
   item(DateTime.utc(2026, 8, 26, 0, 1), 'A', 'one'),

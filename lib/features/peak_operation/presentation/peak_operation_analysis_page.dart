@@ -29,27 +29,65 @@ class _PeakOperationAnalysisState extends State<PeakOperationAnalysisPage> {
   bool _loading = true;
   bool _refreshing = false;
   String? _error;
+  int _requestGeneration = 0;
 
   @override
   void initState() {
     super.initState();
     _repository = widget.repository ?? DefaultPeakOperationRepository();
-    _load();
+    _reloadAvailability();
   }
 
-  Future<void> _load() async {
+  Future<void> _reloadAvailability() async {
+    final generation = ++_requestGeneration;
     setState(() {
-      _loading = true;
+      _refreshing = _summary != null;
+      _loading = _summary == null;
       _error = null;
     });
+    final range = _range();
     try {
-      _routes = await _repository.loadRoutes();
-      if (!mounted) return;
-      await _refresh();
+      final routes = _repository is PeriodPeakOperationRepository
+          ? await (_repository as PeriodPeakOperationRepository)
+                .loadRoutesWithObservations(
+                  startUtc: range.start,
+                  endExclusiveUtc: range.end,
+                )
+          : await _repository.loadRoutes();
+      if (!mounted || generation != _requestGeneration) return;
+      final previousRouteId = _routeId;
+      final nextRouteId =
+          routes.any((route) => route.routeId == previousRouteId)
+          ? previousRouteId
+          : null;
+      final keepSummary =
+          _summary != null &&
+          nextRouteId == previousRouteId &&
+          routes.isNotEmpty;
+      setState(() {
+        _routes = routes;
+        _routeId = nextRouteId;
+        if (!keepSummary) _summary = null;
+        _loading = routes.isNotEmpty && !keepSummary;
+      });
+      if (routes.isEmpty) {
+        setState(() {
+          _loading = false;
+          _refreshing = false;
+          _updated = currentTransitServiceDateTime(now: widget.now);
+        });
+        return;
+      }
+      await _loadObservations(
+        range: range,
+        routeId: nextRouteId,
+        generation: generation,
+      );
     } on Object catch (error) {
-      if (!mounted) return;
+      if (!mounted || generation != _requestGeneration) return;
       setState(() {
         _loading = false;
+        _refreshing = false;
         _error = error.toString();
       });
     }
@@ -96,34 +134,41 @@ class _PeakOperationAnalysisState extends State<PeakOperationAnalysisPage> {
     );
   }
 
-  Future<void> _refresh() async {
-    if (_refreshing) return;
-    setState(() {
-      _refreshing = _summary != null;
-      _loading = _summary == null;
-      _error = null;
-    });
-    final range = _range();
+  Future<void> _loadObservations({
+    ({DateTime start, DateTime end, String label})? range,
+    String? routeId,
+    int? generation,
+  }) async {
+    final requestGeneration = generation ?? ++_requestGeneration;
+    final selectedRange = range ?? _range();
+    final selectedRouteId = generation == null ? _routeId : routeId;
+    if (generation == null) {
+      setState(() {
+        _refreshing = _summary != null;
+        _loading = _summary == null;
+        _error = null;
+      });
+    }
     try {
       final observations = await _repository.loadObservations(
-        startUtc: range.start,
-        endExclusiveUtc: range.end,
-        routeId: _routeId,
+        startUtc: selectedRange.start,
+        endExclusiveUtc: selectedRange.end,
+        routeId: selectedRouteId,
       );
-      if (!mounted) return;
+      if (!mounted || requestGeneration != _requestGeneration) return;
       setState(() {
         _summary = _calculator.calculate(
           observations: observations,
-          periodStart: range.start,
-          periodEnd: range.end,
-          routeId: _routeId,
+          periodStart: selectedRange.start,
+          periodEnd: selectedRange.end,
+          routeId: selectedRouteId,
         );
         _updated = currentTransitServiceDateTime(now: widget.now);
         _loading = false;
         _refreshing = false;
       });
     } on Object catch (error) {
-      if (!mounted) return;
+      if (!mounted || requestGeneration != _requestGeneration) return;
       setState(() {
         _loading = false;
         _refreshing = false;
@@ -132,7 +177,7 @@ class _PeakOperationAnalysisState extends State<PeakOperationAnalysisPage> {
     }
   }
 
-  Future<void> _customDates() async {
+  Future<bool> _customDates() async {
     final now = currentTransitServiceDateTime(now: widget.now);
     final range = await showDateRangePicker(
       context: context,
@@ -143,12 +188,12 @@ class _PeakOperationAnalysisState extends State<PeakOperationAnalysisPage> {
         end: _customEnd ?? DateTime(now.year, now.month, now.day),
       ),
     );
-    if (range == null) return;
+    if (range == null) return false;
     setState(() {
       _customStart = range.start;
       _customEnd = range.end;
     });
-    await _refresh();
+    return true;
   }
 
   @override
@@ -211,7 +256,7 @@ class _PeakOperationAnalysisState extends State<PeakOperationAnalysisPage> {
       ),
       IconButton.filledTonal(
         tooltip: 'Refresh',
-        onPressed: _loading || _refreshing ? null : _refresh,
+        onPressed: _loading || _refreshing ? null : _reloadAvailability,
         icon: const Icon(Icons.refresh),
       ),
     ],
@@ -219,34 +264,45 @@ class _PeakOperationAnalysisState extends State<PeakOperationAnalysisPage> {
 
   Widget _filters() => LayoutBuilder(
     builder: (context, constraints) {
-      final scope = DropdownButtonFormField<String?>(
+      final scope = KeyedSubtree(
         key: const Key('peak-scope-selector'),
-        initialValue: _routeId,
-        isExpanded: true,
-        decoration: const InputDecoration(
-          labelText: 'Scope',
-          prefixIcon: Icon(Icons.route),
-          border: OutlineInputBorder(),
+        child: DropdownButtonFormField<String?>(
+          key: ValueKey('peak-scope-${_routeId ?? 'all'}-${_routes.length}'),
+          initialValue: _routeId,
+          isExpanded: true,
+          decoration: const InputDecoration(
+            labelText: 'Scope',
+            prefixIcon: Icon(Icons.route),
+            border: OutlineInputBorder(),
+          ),
+          hint: const Text('No routes with data'),
+          items: _routes.isEmpty
+              ? const []
+              : [
+                  const DropdownMenuItem<String?>(
+                    value: null,
+                    child: Text('All Routes'),
+                  ),
+                  ..._routes.map(
+                    (route) => DropdownMenuItem<String?>(
+                      value: route.routeId,
+                      child: Text(
+                        route.displayName,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ),
+                ],
+          onChanged: _routes.isEmpty
+              ? null
+              : (value) {
+                  setState(() {
+                    _routeId = value;
+                    _summary = null;
+                  });
+                  _loadObservations();
+                },
         ),
-        items: [
-          const DropdownMenuItem<String?>(
-            value: null,
-            child: Text('All Routes'),
-          ),
-          ..._routes.map(
-            (route) => DropdownMenuItem<String?>(
-              value: route.routeId,
-              child: Text(route.displayName, overflow: TextOverflow.ellipsis),
-            ),
-          ),
-        ],
-        onChanged: (value) {
-          setState(() {
-            _routeId = value;
-            _summary = null;
-          });
-          _refresh();
-        },
       );
       final periods = SegmentedButton<PeakAnalysisPeriod>(
         segments: const [
@@ -262,12 +318,16 @@ class _PeakOperationAnalysisState extends State<PeakOperationAnalysisPage> {
         ],
         selected: {_period},
         onSelectionChanged: (selection) async {
+          final previous = _period;
           setState(() => _period = selection.first);
           if (_period == PeakAnalysisPeriod.custom) {
-            await _customDates();
-          } else {
-            await _refresh();
+            final selected = await _customDates();
+            if (!selected) {
+              if (mounted) setState(() => _period = previous);
+              return;
+            }
           }
+          await _reloadAvailability();
         },
       );
       if (constraints.maxWidth < 720) {
@@ -293,6 +353,7 @@ class _PeakOperationAnalysisState extends State<PeakOperationAnalysisPage> {
   );
 
   Widget _content() {
+    if (_routes.isEmpty) return _periodEmptyState();
     final summary = _summary!;
     if (!summary.hasData) return _emptyState();
     return Column(
@@ -587,6 +648,34 @@ class _PeakOperationAnalysisState extends State<PeakOperationAnalysisPage> {
     ),
   );
 
+  Widget _periodEmptyState() => Card(
+    key: const Key('no-operational-route-data'),
+    child: Padding(
+      padding: const EdgeInsets.all(28),
+      child: Column(
+        children: [
+          const Icon(Icons.query_stats, size: 52),
+          const SizedBox(height: 8),
+          Text(
+            'No operational history',
+            style: Theme.of(context).textTheme.titleLarge,
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'No realtime observations are available for any route during this period.',
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Try another period or collect more historical data.',
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    ),
+  );
+
   Widget _errorState() => Card(
     child: Padding(
       padding: const EdgeInsets.all(20),
@@ -594,7 +683,10 @@ class _PeakOperationAnalysisState extends State<PeakOperationAnalysisPage> {
         children: [
           Text(_error ?? 'Unable to load peak operation analysis.'),
           const SizedBox(height: 8),
-          FilledButton(onPressed: _load, child: const Text('Retry')),
+          FilledButton(
+            onPressed: _reloadAvailability,
+            child: const Text('Retry'),
+          ),
         ],
       ),
     ),
