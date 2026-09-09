@@ -358,53 +358,58 @@ class _PassengerHomePageState extends State<PassengerHomePage>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Government Transit Collector'),
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(80),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surfaceContainerLow,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: _navigation(_activeTab),
-            ),
-          ),
-        ),
-        actions: [
-          IconButton(
-            tooltip: 'My Travel Profile',
-            onPressed: _signingOut ? null : _openProfile,
-            icon: const Icon(Icons.person_outline),
-          ),
-          IconButton(
-            tooltip: 'Sign out',
-            onPressed: _signingOut ? null : _logout,
-            icon: _signingOut
-                ? const SizedBox.square(
-                    dimension: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.logout),
-          ),
-        ],
-      ),
-      body: NavigatorPopHandler<Object?>(
-        onPopWithResult: (_) => _mainNavigator.currentState!.pop(),
-        child: Navigator(
-          key: _mainNavigator,
-          observers: [_tabObserver],
-          onGenerateInitialRoutes: (_, _) => [
-            MaterialPageRoute<void>(
-              settings: const RouteSettings(name: 'passenger-tab-0'),
-              builder: (_) => ValueListenableBuilder(
-                valueListenable: _homeRevision,
-                builder: (_, _, _) => _homeBody(),
+      body: SafeArea(
+        child: _ScrollingPassengerHeader(
+          header: AppBar(
+            primary: false,
+            title: const Text('Government Transit Collector'),
+            bottom: PreferredSize(
+              preferredSize: const Size.fromHeight(80),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.surfaceContainerLow,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: _navigation(_activeTab),
+                ),
               ),
             ),
-          ],
+            actions: [
+              IconButton(
+                tooltip: 'My Travel Profile',
+                onPressed: _signingOut ? null : _openProfile,
+                icon: const Icon(Icons.person_outline),
+              ),
+              IconButton(
+                tooltip: 'Sign out',
+                onPressed: _signingOut ? null : _logout,
+                icon: _signingOut
+                    ? const SizedBox.square(
+                        dimension: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.logout),
+              ),
+            ],
+          ),
+          child: NavigatorPopHandler<Object?>(
+            onPopWithResult: (_) => _mainNavigator.currentState!.pop(),
+            child: Navigator(
+              key: _mainNavigator,
+              observers: [_tabObserver],
+              onGenerateInitialRoutes: (_, _) => [
+                MaterialPageRoute<void>(
+                  settings: const RouteSettings(name: 'passenger-tab-0'),
+                  builder: (_) => ValueListenableBuilder(
+                    valueListenable: _homeRevision,
+                    builder: (_, _, _) => _homeBody(),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -502,4 +507,73 @@ class _MainTabObserver extends NavigatorObserver {
     }
     _notify();
   }
+}
+
+/// The header occupies layout space, which is returned to the page as it
+/// collapses. Page scroll controllers and nested navigation stay untouched.
+class _ScrollingPassengerHeader extends StatefulWidget {
+  const _ScrollingPassengerHeader({required this.header, required this.child});
+  final PreferredSizeWidget header;
+  final Widget child;
+
+  @override
+  State<_ScrollingPassengerHeader> createState() =>
+      _ScrollingPassengerHeaderState();
+}
+
+class _ScrollingPassengerHeaderState extends State<_ScrollingPassengerHeader> {
+  double _collapsed = 0;
+
+  bool _scroll(ScrollNotification notification) {
+    if (notification.metrics.axis != Axis.vertical) return false;
+    // Only user drags change the header, not layout corrections caused by
+    // resizing the content or programmatic scrolling to a form control.
+    final delta = switch (notification) {
+      ScrollUpdateNotification n when n.dragDetails != null =>
+        n.scrollDelta ?? 0,
+      OverscrollNotification n when n.dragDetails != null => n.overscroll,
+      _ => 0.0,
+    };
+    final next = (_collapsed + delta).clamp(
+      0.0,
+      widget.header.preferredSize.height,
+    );
+    if (next != _collapsed) setState(() => _collapsed = next);
+    return false;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final height = widget.header.preferredSize.height;
+    return Column(
+      children: [
+        ClipRect(
+          key: const Key('passenger-scrolling-header'),
+          child: Align(
+            alignment: Alignment.bottomCenter,
+            heightFactor: (height - _collapsed) / height,
+            child: SizedBox(height: height, child: widget.header),
+          ),
+        ),
+        Expanded(
+          child: NotificationListener<ScrollNotification>(
+            onNotification: _scroll,
+            child: ScrollConfiguration(
+              behavior: const _PassengerScrollBehavior(),
+              child: widget.child,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// Short pages still accept a drag so their shared header can collapse/reopen.
+class _PassengerScrollBehavior extends MaterialScrollBehavior {
+  const _PassengerScrollBehavior();
+
+  @override
+  ScrollPhysics getScrollPhysics(BuildContext context) =>
+      AlwaysScrollableScrollPhysics(parent: super.getScrollPhysics(context));
 }

@@ -1,5 +1,4 @@
 import 'journey_comparison.dart';
-import '../../bus_feedback/data/bus_feedback.dart';
 import 'dart:async';
 import 'package:government_transit_collector/features/journey_reminders/journey_reminder.dart';
 import 'package:government_transit_collector/features/journey_reminders/reminder_controller.dart';
@@ -140,22 +139,6 @@ class DepartureRecommendationPage extends StatefulWidget {
 
 class _DepartureRecommendationPageState
     extends State<DepartureRecommendationPage> {
-  List<BusFeedback>? _issueReports;
-  int _issueRequest = 0;
-
-  Future<void> _loadIssues() async {
-    final request = ++_issueRequest;
-    setState(() => _issueReports = null);
-    try {
-      final reports = await _feedbackRepository().getMyFeedback();
-      if (mounted && request == _issueRequest) {
-        setState(() => _issueReports = reports);
-      }
-    } on Object {
-      // Optional insight must never block journey planning.
-    }
-  }
-
   DepartureStop? _origin;
   DepartureStop? _destination;
   List<DepartureStop> _reachable = const [];
@@ -453,7 +436,6 @@ class _DepartureRecommendationPageState
       return;
     }
 
-    unawaited(_loadIssues());
     final origin = _origin!;
     final destination = _destination!;
 
@@ -1097,7 +1079,6 @@ class _DepartureRecommendationPageState
         const SizedBox(height: 12),
         ...recommendations.map(
           (recommendation) => _RecommendationCard(
-            issueReports: _issueReports,
             bestChoice: identical(recommendation, recommendations.first),
             reasons: journeyRecommendationReasons(
               recommendation,
@@ -1201,7 +1182,6 @@ class _RecommendationCard extends StatelessWidget {
   const _RecommendationCard({
     required this.recommendation,
     required this.bestChoice,
-    this.issueReports,
     required this.reasons,
     required this.originStopName,
     required this.destinationStopName,
@@ -1218,7 +1198,6 @@ class _RecommendationCard extends StatelessWidget {
 
   final JourneyRecommendation recommendation;
   final bool bestChoice;
-  final List<BusFeedback>? issueReports;
   final List<String> reasons;
   final ReminderController? reminders;
   final DateTime Function()? now;
@@ -1298,11 +1277,6 @@ class _RecommendationCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final issues = recentJourneyIssues(
-      issueReports ?? const [],
-      recommendation,
-      (now ?? DateTime.now)(),
-    );
     final departure = formatServiceDaySeconds(recommendation.departureSeconds);
     final reminderJourney = ReminderJourney.fromRecommendation(
       recommendation,
@@ -1387,19 +1361,6 @@ class _RecommendationCard extends StatelessWidget {
                 ),
               const SizedBox(height: 12),
             ],
-            const Text(
-              'Recent Service Issues',
-              style: TextStyle(fontWeight: FontWeight.w600),
-            ),
-            const Text('Your reports on these routes ? Last 7 days'),
-            if (issueReports == null)
-              const Text('Recent issue data unavailable')
-            else if (issues.isEmpty)
-              const Text('No recent reports from you on these routes')
-            else
-              for (final issue in issues.entries)
-                Text('${issue.value} ? ${issue.key}'),
-            const SizedBox(height: 12),
             _JourneySummary(
               label: transfer == null
                   ? '$duration • Direct'

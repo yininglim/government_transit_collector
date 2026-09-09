@@ -26,22 +26,70 @@ void main() {
     }
   });
 
-  void expectSelected(WidgetTester tester, String label) {
+  Future<void> revealHeader(WidgetTester tester) async {
+    final home = find.byKey(const Key('passenger-nav-Home'));
+    if (home.hitTestable().evaluate().isEmpty &&
+        find.byType(Scrollable).evaluate().isNotEmpty) {
+      await tester.drag(find.byType(Scrollable).first, const Offset(0, 250));
+      await tester.pumpAndSettle();
+    }
+    expect(find.byIcon(Icons.menu), findsNothing);
+  }
+
+  Future<void> pressNav(WidgetTester tester, String label) async {
+    await revealHeader(tester);
+    await press(tester, find.byKey(Key('passenger-nav-$label')));
+  }
+
+  Future<void> expectSelected(WidgetTester tester, String label) async {
+    await revealHeader(tester);
+    final target = find.byKey(Key('passenger-nav-$label'));
     expect(
       tester
           .widgetList<Semantics>(
-            find.ancestor(
-              of: find.byKey(Key('passenger-nav-$label')),
-              matching: find.byType(Semantics),
-            ),
+            find.ancestor(of: target, matching: find.byType(Semantics)),
           )
           .any((s) => s.properties.selected == true),
       isTrue,
     );
-    final button = tester.widget<TextButton>(
-      find.byKey(Key('passenger-nav-$label')),
+    expect(
+      tester.widget<TextButton>(target).style!.backgroundColor!.resolve({}),
+      isNotNull,
     );
-    expect(button.style!.backgroundColor!.resolve({}), isNotNull);
+  }
+
+  Widget scrollPage(String title) => Scaffold(
+    appBar: AppBar(title: Text(title)),
+    body: ListView(
+      children: [
+        for (var i = 0; i < 30; i++)
+          SizedBox(height: 60, child: Text('Row $i')),
+      ],
+    ),
+  );
+
+  Future<void> checkCollapse(WidgetTester tester) async {
+    await revealHeader(tester);
+    final header = find.byKey(const Key('passenger-scrolling-header'));
+    final before = tester.getSize(find.byType(Scrollable).first).height;
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, -300));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(header).height, 0);
+    expect(
+      find.byKey(const Key('passenger-nav-Home')).hitTestable(),
+      findsNothing,
+    );
+    expect(
+      tester.getSize(find.byType(Scrollable).first).height,
+      greaterThan(before),
+    );
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, 300));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('passenger-nav-Home')).hitTestable(),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
   }
 
   for (final upcoming in [false, true]) {
@@ -71,14 +119,10 @@ void main() {
               savedJourneyRepository: profile.SavedFake(),
               reminderController: controller,
               feedbackRepository: ReportsFake(),
-              dataCheckPageBuilder: (_) => Scaffold(
-                appBar: AppBar(title: const Text('Data check page')),
-              ),
-              departurePageBuilder: (_) => Scaffold(
-                appBar: AppBar(title: const Text('Departure Recommendation')),
-              ),
-              livePageBuilder: (_) =>
-                  Scaffold(appBar: AppBar(title: const Text('Module 3'))),
+              dataCheckPageBuilder: (_) => scrollPage('Data check page'),
+              departurePageBuilder: (_) =>
+                  scrollPage('Departure Recommendation'),
+              livePageBuilder: (_) => scrollPage('Module 3'),
             ),
           ),
         );
@@ -91,6 +135,7 @@ void main() {
           tester.view.physicalSize = size;
           await tester.pumpAndSettle();
           expect(find.byType(AppBar), findsOneWidget);
+          await revealHeader(tester);
           for (final label in [
             'Home',
             'Plan',
@@ -110,22 +155,22 @@ void main() {
                 .every((s) => s.axisDirection == AxisDirection.down),
             isTrue,
           );
-          await press(
-            tester,
-            find.byKey(const Key('passenger-nav-Data Check')),
-          );
+          await checkCollapse(tester);
+          await pressNav(tester, 'Data Check');
           expect(find.text('Data check page'), findsOneWidget);
-          expectSelected(tester, 'Data Check');
+          await checkCollapse(tester);
+          await expectSelected(tester, 'Data Check');
           tester.view.physicalSize = Size(size.height, size.width);
           await tester.pumpAndSettle();
-          expectSelected(tester, 'Data Check');
+          await expectSelected(tester, 'Data Check');
           tester.view.physicalSize = size;
           await tester.pumpAndSettle();
           await tester.pageBack();
           await tester.pumpAndSettle();
-          await press(tester, find.byKey(const Key('passenger-nav-Reports')));
-          expectSelected(tester, 'Reports');
+          await pressNav(tester, 'Reports');
+          await expectSelected(tester, 'Reports');
           expect(find.text('Report a Transit Issue'), findsOneWidget);
+          await checkCollapse(tester);
           await tester.scrollUntilVisible(
             find.text('My Reports'),
             150,
@@ -142,7 +187,7 @@ void main() {
             ),
           );
           await tester.pumpAndSettle();
-          expectSelected(tester, 'Reports');
+          await expectSelected(tester, 'Reports');
           await tester.binding.handlePopRoute();
           await tester.pumpAndSettle();
           await tester.scrollUntilVisible(
@@ -152,8 +197,8 @@ void main() {
           );
           await tester.pumpAndSettle();
           expect(find.text('My Reports'), findsOneWidget);
-          expectSelected(tester, 'Reports');
-          expect(find.byKey(const Key('passenger-nav-Home')), findsOneWidget);
+          await expectSelected(tester, 'Reports');
+          expect(find.byKey(Key('passenger-nav-Home')), findsOneWidget);
           expect(
             tester
                 .widgetList<Scaffold>(find.byType(Scaffold))
@@ -174,16 +219,18 @@ void main() {
                 .first,
           );
           await press(tester, find.text('Plan a Journey'));
-          expectSelected(tester, 'Plan');
+          await expectSelected(tester, 'Plan');
           expect(find.text('Departure Recommendation'), findsOneWidget);
+          await checkCollapse(tester);
           await tester.pageBack();
           await tester.pumpAndSettle();
-          await press(tester, find.byKey(const Key('passenger-nav-Live')));
-          expectSelected(tester, 'Live');
+          await pressNav(tester, 'Live');
+          await expectSelected(tester, 'Live');
           expect(find.text('Module 3'), findsOneWidget);
+          await checkCollapse(tester);
           await tester.pageBack();
           await tester.pumpAndSettle();
-          expectSelected(tester, 'Home');
+          await expectSelected(tester, 'Home');
           if (upcoming) {
             await tester.scrollUntilVisible(
               find.text('View Journey'),

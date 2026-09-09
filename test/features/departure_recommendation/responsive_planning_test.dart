@@ -103,6 +103,11 @@ void main() {
         await press(tester, find.byKey(const Key('journey-search-button')));
         expect(timetable.requestedMode, TravelTimeMode.arriveBy);
         expect(find.text('BEST CHOICE'), findsOneWidget);
+        expect(find.text('Recent Service Issues'), findsNothing);
+        expect(
+          find.textContaining('Your reports on these routes'),
+          findsNothing,
+        );
         for (final label in ['View Route', 'Remind Me', 'Track Journey']) {
           await tester.ensureVisible(find.text(label));
           await tester.pumpAndSettle();
