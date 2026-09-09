@@ -9,6 +9,41 @@ import '../departure_recommendation/planning_actions_test.dart' show press;
 import 'travel_profile_test.dart' as profile;
 
 void main() {
+  test('Malaysia greeting boundaries use UTC+8', () {
+    for (final entry in {
+      4: 'Good Evening',
+      5: 'Good Morning',
+      11: 'Good Morning',
+      12: 'Good Afternoon',
+      17: 'Good Afternoon',
+      18: 'Good Evening',
+      23: 'Good Evening',
+      0: 'Good Evening',
+    }.entries) {
+      final instant = DateTime.utc(2026, 9, 10, entry.key - 8, 59);
+      expect(malaysiaGreeting(instant), entry.value);
+      expect(malaysiaGreeting(instant.toLocal()), entry.value);
+    }
+  });
+
+  void expectSelected(WidgetTester tester, String label) {
+    expect(
+      tester
+          .widgetList<Semantics>(
+            find.ancestor(
+              of: find.byKey(Key('passenger-nav-$label')),
+              matching: find.byType(Semantics),
+            ),
+          )
+          .any((s) => s.properties.selected == true),
+      isTrue,
+    );
+    final button = tester.widget<TextButton>(
+      find.byKey(Key('passenger-nav-$label')),
+    );
+    expect(button.style!.backgroundColor!.resolve({}), isNotNull);
+  }
+
   for (final upcoming in [false, true]) {
     testWidgets(
       'Home rotation preserves navigation and ${upcoming ? 'upcoming journey' : 'empty state'}',
@@ -63,7 +98,10 @@ void main() {
             'Data Check',
             'Reports',
           ]) {
-            expect(find.text(label).hitTestable(), findsOneWidget);
+            expect(
+              find.byKey(Key('passenger-nav-$label')).hitTestable(),
+              findsOneWidget,
+            );
           }
           expect(find.text('Profile / Reports'), findsNothing);
           expect(
@@ -72,13 +110,57 @@ void main() {
                 .every((s) => s.axisDirection == AxisDirection.down),
             isTrue,
           );
-          await press(tester, find.text('Data Check'));
+          await press(
+            tester,
+            find.byKey(const Key('passenger-nav-Data Check')),
+          );
           expect(find.text('Data check page'), findsOneWidget);
+          expectSelected(tester, 'Data Check');
+          tester.view.physicalSize = Size(size.height, size.width);
+          await tester.pumpAndSettle();
+          expectSelected(tester, 'Data Check');
+          tester.view.physicalSize = size;
+          await tester.pumpAndSettle();
           await tester.pageBack();
           await tester.pumpAndSettle();
-          await press(tester, find.text('Reports'));
+          await press(tester, find.byKey(const Key('passenger-nav-Reports')));
+          expectSelected(tester, 'Reports');
           expect(find.text('Report a Transit Issue'), findsOneWidget);
+          await tester.scrollUntilVisible(
+            find.text('My Reports'),
+            150,
+            scrollable: find.byType(Scrollable).first,
+          );
+          await tester.pumpAndSettle();
           expect(find.text('My Reports'), findsOneWidget);
+          // A child page has no main-tab identity and must retain Reports.
+          final reportsContext = tester.element(find.text('My Reports'));
+          Navigator.of(reportsContext).push(
+            MaterialPageRoute<void>(
+              builder: (_) =>
+                  Scaffold(appBar: AppBar(title: const Text('Report child'))),
+            ),
+          );
+          await tester.pumpAndSettle();
+          expectSelected(tester, 'Reports');
+          await tester.binding.handlePopRoute();
+          await tester.pumpAndSettle();
+          await tester.scrollUntilVisible(
+            find.text('My Reports'),
+            150,
+            scrollable: find.byType(Scrollable).first,
+          );
+          await tester.pumpAndSettle();
+          expect(find.text('My Reports'), findsOneWidget);
+          expectSelected(tester, 'Reports');
+          expect(find.byKey(const Key('passenger-nav-Home')), findsOneWidget);
+          expect(
+            tester
+                .widgetList<Scaffold>(find.byType(Scaffold))
+                .every((s) => s.bottomNavigationBar == null),
+            isTrue,
+          );
+
           await tester.pageBack();
           await tester.pumpAndSettle();
           await tester.scrollUntilVisible(
@@ -92,13 +174,16 @@ void main() {
                 .first,
           );
           await press(tester, find.text('Plan a Journey'));
+          expectSelected(tester, 'Plan');
           expect(find.text('Departure Recommendation'), findsOneWidget);
           await tester.pageBack();
           await tester.pumpAndSettle();
-          await press(tester, find.text('Live'));
+          await press(tester, find.byKey(const Key('passenger-nav-Live')));
+          expectSelected(tester, 'Live');
           expect(find.text('Module 3'), findsOneWidget);
           await tester.pageBack();
           await tester.pumpAndSettle();
+          expectSelected(tester, 'Home');
           if (upcoming) {
             await tester.scrollUntilVisible(
               find.text('View Journey'),
@@ -116,8 +201,13 @@ void main() {
             await tester.pageBack();
             await tester.pumpAndSettle();
           } else {
-            expect(find.text('Upcoming Journey'), findsNothing);
-            expect(find.textContaining('No upcoming journey.'), findsOneWidget);
+            await tester.scrollUntilVisible(
+              find.text('Nothing scheduled yet'),
+              150,
+              scrollable: find.byType(Scrollable).first,
+            );
+            expect(find.text('Upcoming Journey'), findsOneWidget);
+            expect(find.text('Nothing scheduled yet'), findsOneWidget);
           }
           expect(tester.takeException(), isNull);
         }

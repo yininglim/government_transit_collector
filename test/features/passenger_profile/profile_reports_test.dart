@@ -48,13 +48,15 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('My Travel Profile'), findsNothing);
       expect(find.text('Plan a Journey'), findsOneWidget);
-      expect(find.byType(Card), findsOneWidget);
+      expect(find.text("Today's Transit"), findsOneWidget);
       final actions = tester.widget<AppBar>(find.byType(AppBar)).actions!;
       expect((actions[0] as IconButton).tooltip, 'My Travel Profile');
       expect((actions[1] as IconButton).tooltip, 'Sign out');
       await tester.tap(find.byTooltip('My Travel Profile'));
       await tester.pumpAndSettle();
       expect(find.byType(PassengerProfilePage), findsOneWidget);
+      expect(find.byType(MyReportsSection), findsNothing);
+      expect(find.text('My Reports'), findsNothing);
       await tester.enterText(find.byType(TextField), 'Updated Rider');
       await tester.ensureVisible(find.text('Update Name'));
       await tester.tap(find.text('Update Name'));
@@ -65,6 +67,7 @@ void main() {
       await tester.tap(find.byTooltip('Sign out'));
       await tester.pump();
       expect(auth.logouts, 1);
+      await tester.pumpWidget(const SizedBox());
     },
   );
 
@@ -177,12 +180,13 @@ void main() {
           greaterThan(0),
         );
         await tester.scrollUntilVisible(
-          find.text('My Reports'),
+          find.text('Recent Searches'),
           250,
           scrollable: find.byType(Scrollable).first,
         );
         await tester.pumpAndSettle();
-        expect(find.text('My Reports'), findsOneWidget);
+        expect(find.text('Recent Searches'), findsOneWidget);
+        expect(find.text('My Reports'), findsNothing);
         expect(tester.takeException(), isNull);
         expect(find.textContaining('Comment'), findsNothing);
       },

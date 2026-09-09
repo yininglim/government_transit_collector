@@ -1,3 +1,7 @@
+import 'dart:async';
+import 'home_transit_insights.dart';
+import '../../bus_feedback/data/bus_feedback.dart';
+import '../../realtime_vehicle/data/gtfs_realtime_decoder.dart';
 import 'package:government_transit_collector/features/bus_feedback/presentation/passenger_reports_page.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/recent_journey_search.dart';
 import 'package:flutter/material.dart';
@@ -19,6 +23,14 @@ import 'package:government_transit_collector/features/realtime_vehicle/data/stat
 import 'package:government_transit_collector/features/realtime_vehicle/presentation/realtime_data_check_page.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/presentation/realtime_journey_tracker_page.dart';
 
+// Malaysia uses UTC+8; convert the instant independently of device timezone.
+String malaysiaGreeting(DateTime instant) {
+  final hour = malaysiaHomeTime(instant).hour;
+  if (hour >= 5 && hour < 12) return 'Good Morning';
+  if (hour >= 12 && hour < 18) return 'Good Afternoon';
+  return 'Good Evening';
+}
+
 class PassengerHomePage extends StatefulWidget {
   const PassengerHomePage({
     required this.profile,
@@ -31,9 +43,13 @@ class PassengerHomePage extends StatefulWidget {
     this.departurePageBuilder,
     this.livePageBuilder,
     this.dataCheckPageBuilder,
+    this.homeRealtimeRepository,
+    this.now,
     super.key,
   });
 
+  final RealtimeVehicleRepository? homeRealtimeRepository;
+  final DateTime Function()? now;
   final AppProfile profile;
   final WidgetBuilder? departurePageBuilder;
   final WidgetBuilder? livePageBuilder;
@@ -49,7 +65,95 @@ class PassengerHomePage extends StatefulWidget {
   State<PassengerHomePage> createState() => _PassengerHomePageState();
 }
 
-class _PassengerHomePageState extends State<PassengerHomePage> {
+class _PassengerHomePageState extends State<PassengerHomePage>
+    with WidgetsBindingObserver {
+  late final RealtimeVehicleRepository _homeRealtime =
+      widget.homeRealtimeRepository ?? DataGovMyRealtimeVehicleRepository();
+  RealtimeFeedSnapshot? _homeSnapshot;
+  List<BusFeedback>? _homeReports;
+  Timer? _homeTimer;
+  bool _refreshingHome = false;
+  final _mainNavigator = GlobalKey<NavigatorState>();
+  int _activeTab = 0;
+  final _homeRevision = ValueNotifier(0);
+  late final _tabObserver = _MainTabObserver((tab) {
+    if (_activeTab == tab) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() => _activeTab = tab);
+    });
+  });
+
+  void _pushTab(int tab, WidgetBuilder builder) {
+    _mainNavigator.currentState!.push(
+      MaterialPageRoute<void>(
+        settings: RouteSettings(name: 'passenger-tab-$tab'),
+        builder: builder,
+      ),
+    );
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _refreshHome();
+    _homeTimer = Timer.periodic(
+      const Duration(minutes: 1),
+      (_) => _refreshHome(),
+    );
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _refreshHome();
+  }
+
+  Future<void> _refreshHome() async {
+    if (_refreshingHome) return;
+    _refreshingHome = true;
+    await Future.wait([
+      () async {
+        RealtimeFeedSnapshot? snapshot;
+        try {
+          snapshot = await _homeRealtime.fetchVehiclePositions();
+        } on Object {
+          // This optional dashboard read must not block Home.
+        }
+        if (mounted) {
+          _homeSnapshot = snapshot;
+          _homeRevision.value++;
+        }
+      }(),
+      () async {
+        List<BusFeedback>? reports;
+        try {
+          reports =
+              await (widget.feedbackRepository ??
+                      SupabaseBusFeedbackRepository())
+                  .getMyFeedback();
+        } on Object {
+          // Preserve repository ownership rules and show unavailable on failure.
+        }
+        if (mounted) {
+          _homeReports = reports;
+          _homeRevision.value++;
+        }
+      }(),
+    ]);
+    _refreshingHome = false;
+  }
+
+  @override
+  void dispose() {
+    _homeTimer?.cancel();
+    _homeRevision.dispose();
+    WidgetsBinding.instance.removeObserver(this);
+    if (widget.homeRealtimeRepository == null) {
+      (_homeRealtime as DataGovMyRealtimeVehicleRepository).close();
+    }
+    super.dispose();
+  }
+
   bool _signingOut = false;
   late final _reminders = widget.reminderController ?? sharedReminderController;
   AppProfile? _updatedProfile;
@@ -63,23 +167,23 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
       widget.savedJourneyRepository ?? SupabaseSavedJourneyRepository();
 
   void _openDeparture([SavedJourney? journey, RecentJourneySearch? recent]) {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (context) =>
-            widget.departurePageBuilder?.call(context) ??
-            DepartureRecommendationPage(
-              reminderController: _reminders,
-              stopRepository: SupabaseDepartureStopRepository(),
-              tripRepository: SupabaseDirectTripRepository(),
-              transferRepository: SupabaseTransferJourneyRepository(),
-              timetableRepository: SupabaseTimetableRecommendationRepository(),
-              recentSearchRepository: _recentRepository,
-              preferencesRepository: _preferencesRepository,
-              savedJourneyRepository: _savedRepository,
-              initialJourney: journey,
-              initialRecentSearch: recent,
-            ),
-      ),
+    _pushTab(
+      1,
+      (context) =>
+          widget.departurePageBuilder?.call(context) ??
+          DepartureRecommendationPage(
+            reminderController: _reminders,
+            stopRepository: SupabaseDepartureStopRepository(),
+            tripRepository: SupabaseDirectTripRepository(),
+            transferRepository: SupabaseTransferJourneyRepository(),
+            timetableRepository: SupabaseTimetableRecommendationRepository(),
+            recentSearchRepository: _recentRepository,
+            preferencesRepository: _preferencesRepository,
+            savedJourneyRepository: _savedRepository,
+            initialJourney: journey,
+            initialRecentSearch: recent,
+            feedbackRepository: widget.feedbackRepository,
+          ),
     );
   }
 
@@ -94,7 +198,10 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
           preferencesRepository: _preferencesRepository,
           feedbackRepository: widget.feedbackRepository,
           onProfileUpdated: (profile) {
-            if (mounted) setState(() => _updatedProfile = profile);
+            if (mounted) {
+              setState(() => _updatedProfile = profile);
+              _homeRevision.value++;
+            }
           },
         ),
       ),
@@ -124,35 +231,64 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
     }
   }
 
-  String _greeting() {
-    final hour = DateTime.now().hour;
-    return hour < 12
-        ? 'Good Morning'
-        : hour < 18
-        ? 'Good Afternoon'
-        : 'Good Evening';
-  }
+  void _openLive() => _pushTab(
+    2,
+    (context) =>
+        widget.livePageBuilder?.call(context) ??
+        RealtimeJourneyTrackerPage(
+          repository: DataGovMyRealtimeVehicleRepository(),
+          tripMatcher: SupabaseStaticTripMatcher(),
+        ),
+  );
 
-  void _openLive() => Navigator.of(context).push(
-    MaterialPageRoute<void>(
-      builder: (context) =>
-          widget.livePageBuilder?.call(context) ??
-          RealtimeJourneyTrackerPage(
-            repository: DataGovMyRealtimeVehicleRepository(),
-            tripMatcher: SupabaseStaticTripMatcher(),
-          ),
+  void _openDataCheck() => _pushTab(
+    3,
+    (context) =>
+        widget.dataCheckPageBuilder?.call(context) ??
+        RealtimeDataCheckPage(
+          repository: DataGovMyRealtimeVehicleRepository(),
+          tripMatcher: SupabaseStaticTripMatcher(),
+        ),
+  );
+
+  void _openReports() => _pushTab(
+    4,
+    (_) => PassengerReportsPage(
+      userId: widget.profile.userId,
+      repository: widget.feedbackRepository,
     ),
   );
 
-  void _openDataCheck() => Navigator.of(context).push(
-    MaterialPageRoute<void>(
-      builder: (context) =>
-          widget.dataCheckPageBuilder?.call(context) ??
-          RealtimeDataCheckPage(
-            repository: DataGovMyRealtimeVehicleRepository(),
-            tripMatcher: SupabaseStaticTripMatcher(),
-          ),
-    ),
+  Widget _navigation(int active) => Row(
+    children: [
+      _navItem('Home', Icons.home_outlined, () {
+        _mainNavigator.currentState!.popUntil((route) => route.isFirst);
+      }, selected: active == 0),
+      _navItem(
+        'Plan',
+        Icons.route_outlined,
+        active == 1 ? () {} : _openDeparture,
+        selected: active == 1,
+      ),
+      _navItem(
+        'Live',
+        Icons.location_searching,
+        active == 2 ? () {} : _openLive,
+        selected: active == 2,
+      ),
+      _navItem(
+        'Data Check',
+        Icons.data_object,
+        active == 3 ? () {} : _openDataCheck,
+        selected: active == 3,
+      ),
+      _navItem(
+        'Reports',
+        Icons.feedback_outlined,
+        active == 4 ? () {} : _openReports,
+        selected: active == 4,
+      ),
+    ],
   );
 
   Widget _navItem(
@@ -161,29 +297,35 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
     VoidCallback onTap, {
     bool selected = false,
   }) => Expanded(
-    child: TextButton(
-      onPressed: onTap,
-      style: TextButton.styleFrom(
-        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
-        backgroundColor: selected
-            ? Theme.of(context).colorScheme.primaryContainer
-            : null,
-        foregroundColor: selected
-            ? Theme.of(context).colorScheme.primary
-            : Theme.of(context).colorScheme.onSurfaceVariant,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 22),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.labelMedium,
+    child: Semantics(
+      selected: selected,
+      child: TextButton(
+        key: Key('passenger-nav-$label'),
+        onPressed: onTap,
+        style: TextButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
+          backgroundColor: selected
+              ? Theme.of(context).colorScheme.primaryContainer
+              : null,
+          foregroundColor: selected
+              ? Theme.of(context).colorScheme.primary
+              : Theme.of(context).colorScheme.onSurfaceVariant,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
           ),
-        ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 22),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.labelMedium,
+            ),
+          ],
+        ),
       ),
     ),
   );
@@ -197,8 +339,15 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
         children: [
           Icon(Icons.event_available_outlined, size: 32),
           SizedBox(height: 12),
+          Text('Upcoming Journey'),
+          SizedBox(height: 8),
           Text(
-            'No upcoming journey. Plan your next trip when you are ready.',
+            'Nothing scheduled yet',
+            style: TextStyle(fontWeight: FontWeight.w600),
+          ),
+          SizedBox(height: 8),
+          Text(
+            'Your next journey reminder will appear here after you plan a trip.',
             textAlign: TextAlign.center,
           ),
         ],
@@ -220,26 +369,7 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
                 color: Theme.of(context).colorScheme.surfaceContainerLow,
                 borderRadius: BorderRadius.circular(16),
               ),
-              child: Row(
-                children: [
-                  _navItem('Home', Icons.home_outlined, () {}, selected: true),
-                  _navItem('Plan', Icons.route_outlined, _openDeparture),
-                  _navItem('Live', Icons.location_searching, _openLive),
-                  _navItem('Data Check', Icons.data_object, _openDataCheck),
-                  _navItem(
-                    'Reports',
-                    Icons.feedback_outlined,
-                    () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => PassengerReportsPage(
-                          userId: widget.profile.userId,
-                          repository: widget.feedbackRepository,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+              child: _navigation(_activeTab),
             ),
           ),
         ),
@@ -261,44 +391,115 @@ class _PassengerHomePageState extends State<PassengerHomePage> {
           ),
         ],
       ),
-      body: SafeArea(
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 760),
-            child: ListView(
-              physics: const ClampingScrollPhysics(),
-              padding: const EdgeInsets.all(24),
-              children: [
-                Text(
-                  '${_greeting()}, ${(_updatedProfile ?? widget.profile).displayName}',
-                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                const Text('Your journey, made easier.'),
-                const SizedBox(height: 24),
-                FilledButton.icon(
-                  style: FilledButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 18),
-                  ),
-                  onPressed: _openDeparture,
-                  icon: const Icon(Icons.route),
-                  label: const Text('Plan a Journey'),
-                ),
-                const SizedBox(height: 32),
-                if (_reminders != null)
-                  UpcomingJourneys(
-                    controller: _reminders,
-                    emptyState: _emptyJourney(),
-                  )
-                else
-                  _emptyJourney(),
-              ],
+      body: NavigatorPopHandler<Object?>(
+        onPopWithResult: (_) => _mainNavigator.currentState!.pop(),
+        child: Navigator(
+          key: _mainNavigator,
+          observers: [_tabObserver],
+          onGenerateInitialRoutes: (_, _) => [
+            MaterialPageRoute<void>(
+              settings: const RouteSettings(name: 'passenger-tab-0'),
+              builder: (_) => ValueListenableBuilder(
+                valueListenable: _homeRevision,
+                builder: (_, _, _) => _homeBody(),
+              ),
             ),
-          ),
+          ],
         ),
       ),
     );
+  }
+
+  Widget _homeBody() => SafeArea(
+    child: Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 760),
+        child: ListView(
+          physics: const ClampingScrollPhysics(),
+          padding: const EdgeInsets.all(24),
+          children: [
+            Text(
+              '${malaysiaGreeting((widget.now ?? DateTime.now)())}, ${(_updatedProfile ?? widget.profile).displayName}',
+              style: Theme.of(
+                context,
+              ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            const Text('Your journey, made easier.'),
+            const SizedBox(height: 24),
+            FilledButton.icon(
+              style: FilledButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 18),
+              ),
+              onPressed: _openDeparture,
+              icon: const Icon(Icons.route),
+              label: const Text('Plan a Journey'),
+            ),
+            const SizedBox(height: 32),
+            HomeTransitInsights(
+              now: (widget.now ?? DateTime.now)(),
+              userId: widget.profile.userId,
+              reports: _homeReports,
+              snapshot: _homeSnapshot,
+            ),
+            if (_reminders != null)
+              UpcomingJourneys(
+                controller: _reminders,
+                emptyState: _emptyJourney(),
+              )
+            else
+              _emptyJourney(),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+/// Child routes inherit the nearest main-tab route still on the stack.
+class _MainTabObserver extends NavigatorObserver {
+  _MainTabObserver(this.onChanged);
+  final ValueChanged<int> onChanged;
+  final List<Route<dynamic>> _routes = [];
+
+  void _notify() {
+    for (final route in _routes.reversed) {
+      final name = route.settings.name;
+      if (name != null && name.startsWith('passenger-tab-')) {
+        onChanged(int.parse(name.substring('passenger-tab-'.length)));
+        return;
+      }
+    }
+  }
+
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    _routes.add(route);
+    _notify();
+  }
+
+  @override
+  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    _routes.remove(route);
+    _notify();
+  }
+
+  @override
+  void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    _routes.remove(route);
+    _notify();
+  }
+
+  @override
+  void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) {
+    final index = _routes.indexOf(oldRoute!);
+    if (index >= 0) {
+      if (newRoute == null) {
+        _routes.removeAt(index);
+      } else {
+        _routes[index] = newRoute;
+      }
+    }
+    _notify();
   }
 }

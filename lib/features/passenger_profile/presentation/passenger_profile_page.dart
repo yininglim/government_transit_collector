@@ -1,5 +1,4 @@
 import 'package:government_transit_collector/features/bus_feedback/data/bus_feedback_repository.dart';
-import 'my_reports_section.dart';
 import 'package:flutter/material.dart';
 import 'package:government_transit_collector/features/authentication/data/auth_repository.dart';
 import 'package:government_transit_collector/features/authentication/presentation/change_password_page.dart';
@@ -398,12 +397,6 @@ class _PassengerProfilePageState extends State<PassengerProfilePage> {
                         '${recent.originStopName} → ${recent.destinationStopName}',
                       ),
                     ),
-              ]),
-              _section('My Reports', Icons.receipt_long_outlined, [
-                MyReportsSection(
-                  userId: widget.profile.userId,
-                  repository: widget.feedbackRepository,
-                ),
               ]),
             ],
           ),
