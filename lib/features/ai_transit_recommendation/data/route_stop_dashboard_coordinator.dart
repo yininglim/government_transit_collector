@@ -25,13 +25,46 @@ class RouteStopDashboardEntry {
   final RouteStopRecommendationResult result;
 }
 
+enum RouteStopDashboardExclusionReason {
+  unusableTripStructure,
+  evidenceLoadingFailure,
+}
+
+class RouteStopDashboardExcludedRoute {
+  const RouteStopDashboardExcludedRoute({
+    required this.route,
+    required this.reason,
+    required this.evidence,
+  });
+
+  final RoutePerformanceRoute route;
+  final RouteStopDashboardExclusionReason reason;
+  final DistrictRouteStopEvidence? evidence;
+}
+
+class RouteStopDashboardScreeningResult {
+  const RouteStopDashboardScreeningResult({
+    required this.routesAnalysed,
+    required this.candidates,
+    required this.excludedRoutes,
+  });
+
+  final int routesAnalysed;
+  final List<RouteStopDashboardCandidate> candidates;
+  final List<RouteStopDashboardExcludedRoute> excludedRoutes;
+}
+
 class RouteStopDashboardSession {
   final candidates = <RouteStopDashboardCandidate>[];
+  final excludedRoutes = <RouteStopDashboardExcludedRoute>[];
   final entries = <RouteStopDashboardEntry>[];
   DateTime? periodStartUtc;
   DateTime? periodEndUtc;
   bool empty = false;
   bool setupFailure = false;
+  bool screeningComplete = false;
+  int routesAnalysed = 0;
+  String? selectedRouteId;
   int completedInBatch = 0;
   int batchTotal = 0;
   int nextCandidateIndex = 0;
@@ -44,9 +77,13 @@ class RouteStopDashboardSession {
     periodStartUtc = startUtc;
     periodEndUtc = endExclusiveUtc;
     candidates.clear();
+    excludedRoutes.clear();
     entries.clear();
     empty = false;
     setupFailure = false;
+    screeningComplete = false;
+    routesAnalysed = 0;
+    selectedRouteId = null;
     completedInBatch = 0;
     batchTotal = 0;
     nextCandidateIndex = 0;
@@ -56,9 +93,13 @@ class RouteStopDashboardSession {
     periodStartUtc = null;
     periodEndUtc = null;
     candidates.clear();
+    excludedRoutes.clear();
     entries.clear();
     empty = false;
     setupFailure = false;
+    screeningComplete = false;
+    routesAnalysed = 0;
+    selectedRouteId = null;
     completedInBatch = 0;
     batchTotal = 0;
     nextCandidateIndex = 0;
@@ -86,9 +127,21 @@ class RouteStopDashboardCoordinator {
     required DateTime startUtc,
     required DateTime endExclusiveUtc,
   }) async {
+    final result = await screenRoutes(
+      startUtc: startUtc,
+      endExclusiveUtc: endExclusiveUtc,
+    );
+    return result.candidates;
+  }
+
+  Future<RouteStopDashboardScreeningResult> screenRoutes({
+    required DateTime startUtc,
+    required DateTime endExclusiveUtc,
+  }) async {
     final routes = await _routeRepository.loadRoutes();
     final ordered = [...routes]..sort(_compareRoutes);
     final candidates = <RouteStopDashboardCandidate>[];
+    final excludedRoutes = <RouteStopDashboardExcludedRoute>[];
     for (final route in ordered) {
       try {
         final evidence = await _evidenceRepository.loadEvidence(
@@ -100,12 +153,30 @@ class RouteStopDashboardCoordinator {
           candidates.add(
             RouteStopDashboardCandidate(route: route, evidence: evidence),
           );
+        } else {
+          excludedRoutes.add(
+            RouteStopDashboardExcludedRoute(
+              route: route,
+              reason: RouteStopDashboardExclusionReason.unusableTripStructure,
+              evidence: evidence,
+            ),
+          );
         }
       } on Object {
-        continue;
+        excludedRoutes.add(
+          RouteStopDashboardExcludedRoute(
+            route: route,
+            reason: RouteStopDashboardExclusionReason.evidenceLoadingFailure,
+            evidence: null,
+          ),
+        );
       }
     }
-    return candidates;
+    return RouteStopDashboardScreeningResult(
+      routesAnalysed: ordered.length,
+      candidates: List.unmodifiable(candidates),
+      excludedRoutes: List.unmodifiable(excludedRoutes),
+    );
   }
 
   Future<List<RouteStopDashboardEntry>> analyseBatch({
