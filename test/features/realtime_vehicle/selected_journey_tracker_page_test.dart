@@ -1124,7 +1124,7 @@ void main() {
     await refresh(tester);
 
     expect(
-      find.text('Unable to refresh — showing last known position'),
+      find.text('Live update temporarily unavailable. Retrying automatically…'),
       findsOneWidget,
     );
     expect(find.byKey(const Key('map-bus-1')), findsOneWidget);
@@ -1155,24 +1155,38 @@ void main() {
   testWidgets('portrait and landscape retain summary, refresh, and map', (
     tester,
   ) async {
-    for (final size in [const Size(400, 800), const Size(800, 400)]) {
+    final realtime = SequenceRepository([() async => snapshot([])]);
+    await tester.binding.setSurfaceSize(const Size(400, 800));
+    await tester.pumpWidget(
+      app(
+        selected: journey(fixtures.transferRecommendation),
+        realtime: realtime,
+        location: FakePassengerLocationService([
+          PassengerLocationResult.available(johorPassengerLocation),
+        ]),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.textContaining('Leg 2'));
+    await tester.pump();
+
+    for (final size in [const Size(800, 400), const Size(400, 800)]) {
       await tester.binding.setSurfaceSize(size);
-      await tester.pumpWidget(
-        app(
-          selected: journey(fixtures.transferRecommendation),
-          realtime: SequenceRepository([() async => snapshot([])]),
-          location: FakePassengerLocationService([
-            PassengerLocationResult.available(johorPassengerLocation),
-          ]),
-        ),
-      );
       await tester.pumpAndSettle();
       expect(find.text('J13 → J10'), findsOneWidget);
       expect(find.byKey(const Key('selected-leg-selector')), findsOneWidget);
+      expect(
+        tester
+            .widget<SegmentedButton<int>>(
+              find.byKey(const Key('selected-leg-selector')),
+            )
+            .selected,
+        {1},
+      );
       expect(find.byKey(const Key('current-journey-stage')), findsOneWidget);
       expect(find.byKey(const Key('refresh-selected-journey')), findsOneWidget);
       expect(find.text('Your Location'), findsOneWidget);
-      expect(find.text('Boarding stop: Origin Stop'), findsOneWidget);
+      expect(find.text('Boarding stop: JB Sentral'), findsOneWidget);
       expect(
         find.byKey(const Key('refresh-passenger-location')),
         findsOneWidget,
@@ -1181,6 +1195,7 @@ void main() {
       expect(find.byKey(const Key('fake-selected-map')), findsOneWidget);
       expect(tester.takeException(), isNull);
     }
+    expect(realtime.calls, 1);
     await tester.binding.setSurfaceSize(null);
   });
 }

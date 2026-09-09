@@ -135,9 +135,94 @@ void main() {
     await tracker.refresh();
     await tracker.refresh();
     expect(tracker.snapshot!.vehicles.single.vehicleId, 'bus-1');
-    expect(tracker.refreshWarning, contains('last known'));
+    expect(tracker.refreshWarning, realtimeRefreshWarning);
     tracker.dispose();
   });
+
+  testWidgets('HTTP 429 after success remains an inline refresh warning', (
+    tester,
+  ) async {
+    final repository = QueueRepository([
+      () async => snapshot('bus-1'),
+      () => Future.error(
+        const RealtimeVehicleReadException(
+          'Realtime service returned HTTP 429.',
+        ),
+      ),
+    ]);
+    final tracker = controller(repository);
+
+    await tracker.refresh();
+    await tracker.refresh();
+
+    expect(tracker.snapshot!.vehicles.single.vehicleId, 'bus-1');
+    expect(tracker.initialError, isNull);
+    expect(tracker.refreshWarning, realtimeRefreshWarning);
+    tracker.dispose();
+  });
+
+  testWidgets('failure preserves successful check time and success resets it', (
+    tester,
+  ) async {
+    final firstCheck = DateTime.utc(2026, 9, 9, 10, 30);
+    var now = firstCheck;
+    final repository = QueueRepository([
+      () async => snapshot('bus-1'),
+      () => Future.error(
+        const RealtimeVehicleReadException(
+          'Realtime service returned HTTP 429.',
+        ),
+      ),
+      () async => snapshot('bus-1', latitude: 1.52),
+    ]);
+    final tracker = RealtimeTrackerController(
+      repository: repository,
+      tripMatcher: MatchAllTrips(),
+      now: () => now,
+    );
+
+    await tracker.refresh();
+    expect(tracker.lastSuccessfulRefreshAt, firstCheck);
+    now = firstCheck.add(const Duration(seconds: 10));
+    await tracker.refresh();
+    expect(tracker.lastSuccessfulRefreshAt, firstCheck);
+    expect(tracker.refreshWarning, realtimeRefreshWarning);
+
+    now = firstCheck.add(const Duration(seconds: 12));
+    await tracker.refresh();
+    expect(tracker.lastSuccessfulRefreshAt, now);
+    expect(tracker.refreshWarning, isNull);
+    expect(tracker.snapshot!.vehicles.single.latitude, 1.52);
+    tracker.dispose();
+  });
+
+  testWidgets(
+    'successful retry clears transient warning and records check time',
+    (tester) async {
+      final checkedAt = DateTime.utc(2026, 9, 9, 1, 2, 3);
+      final repository = QueueRepository([
+        () async => snapshot('bus-1'),
+        () => Future.error(
+          const RealtimeVehicleReadException('Temporary failure'),
+        ),
+        () async => snapshot('bus-1'),
+      ]);
+      final tracker = RealtimeTrackerController(
+        repository: repository,
+        tripMatcher: MatchAllTrips(),
+        now: () => checkedAt,
+      );
+
+      await tracker.refresh();
+      await tracker.refresh();
+      expect(tracker.refreshWarning, isNotNull);
+      await tracker.refresh();
+
+      expect(tracker.refreshWarning, isNull);
+      expect(tracker.lastSuccessfulRefreshAt, checkedAt);
+      tracker.dispose();
+    },
+  );
 
   testWidgets('dispose cancels timer without later repository calls', (
     tester,

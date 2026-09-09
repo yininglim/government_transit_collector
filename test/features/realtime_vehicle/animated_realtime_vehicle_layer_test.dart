@@ -88,6 +88,30 @@ void main() {
     expect(value(tester, const Key('moving')), 'false');
   });
 
+  testWidgets('new update continues from displayed position without overlap', (
+    tester,
+  ) async {
+    await tester.pumpWidget(app([marker(1.49)]));
+    await tester.pumpWidget(app([marker(1.51)]));
+    await tester.pump(const Duration(milliseconds: 500));
+    final displayedBeforeUpdate = double.parse(
+      value(tester, const Key('latitude')),
+    );
+
+    await tester.pumpWidget(app([marker(1.53)]));
+
+    expect(
+      double.parse(value(tester, const Key('latitude'))),
+      displayedBeforeUpdate,
+    );
+    expect(value(tester, const Key('moving')), 'true');
+
+    await tester.pump(realtimeMarkerMovementDuration);
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(double.parse(value(tester, const Key('latitude'))), 1.53);
+    expect(value(tester, const Key('moving')), 'false');
+  });
+
   testWidgets('vehicle identity remains stable throughout movement', (
     tester,
   ) async {

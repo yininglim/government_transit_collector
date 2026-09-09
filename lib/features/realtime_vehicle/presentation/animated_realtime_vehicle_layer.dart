@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/presentation/realtime_vehicle_marker_data.dart';
 
-const realtimeMarkerMovementDuration = Duration(milliseconds: 1500);
+const realtimeMarkerMovementDuration = Duration(seconds: 2);
 
 typedef AnimatedRealtimeVehicleBuilder =
     Widget Function(
