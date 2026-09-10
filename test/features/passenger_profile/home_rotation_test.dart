@@ -1,3 +1,8 @@
+import '../tracked_journeys/tracked_journey_lifecycle_test.dart'
+    show MemoryJourneys;
+import '../departure_recommendation/departure_recommendation_test.dart' as plan;
+import 'package:government_transit_collector/features/departure_recommendation/presentation/departure_recommendation_page.dart';
+import 'package:government_transit_collector/features/departure_recommendation/data/saved_journey_repository.dart';
 import '../bus_feedback/report_form_test.dart' show ReportsFake;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -91,6 +96,106 @@ void main() {
     );
     expect(tester.takeException(), isNull);
   }
+
+  testWidgets('Plan survives shared tabs and clears only after confirmation', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final saved = profile.SavedFake();
+    final tracked = MemoryJourneys();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PassengerHomePage(
+          profile: profile.profile,
+          repository: PageAuth(),
+          recentSearchRepository: profile.RecentFake(),
+          preferencesRepository: profile.PreferencesFake(),
+          savedJourneyRepository: saved,
+          trackedJourneyRepository: tracked,
+          feedbackRepository: ReportsFake(),
+          departurePageBuilder: (_) => DepartureRecommendationPage(
+            showPageHeader: false,
+            stopRepository: plan.FakeDepartureStopRepository(),
+            tripRepository: plan.FakeDirectTripRepository(
+              results: [plan.directResult],
+            ),
+            transferRepository: plan.FakeTransferJourneyRepository(),
+            timetableRepository: plan.FakeTimetableRecommendationRepository(
+              results: [plan.directRecommendation],
+            ),
+            recentSearchRepository: plan.FakeRecentSearchRepository(),
+            savedJourneyRepository: saved,
+            realtimeRepository: plan.FakeRecommendationRealtimeRepository(),
+            initialJourney: const SavedJourney(
+              id: 'pair',
+              name: 'Pair',
+              origin: plan.larkin,
+              destination: plan.jbSentral,
+            ),
+            initialDateTime: DateTime(2026, 9, 10, 15),
+            now: () => DateTime.utc(2026, 9, 10, 7),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await pressNav(tester, 'Plan');
+    expect(find.byKey(const Key('clear-journey-plan')), findsNothing);
+    await press(tester, find.byKey(const Key('journey-search-button')));
+    final state = tester.state(find.byType(DepartureRecommendationPage));
+    final scroll = tester
+        .widget<SingleChildScrollView>(
+          find.byKey(const Key('departure-page-scroll')),
+        )
+        .controller!;
+    final offset = scroll.offset;
+    for (final tab in ['Reports', 'My Trips', 'Home', 'Plan']) {
+      await pressNav(tester, tab);
+      await expectSelected(tester, tab);
+    }
+    expect(tester.state(find.byType(DepartureRecommendationPage)), same(state));
+    expect(scroll.offset, offset);
+    expect(find.byKey(const Key('journey-results')), findsOneWidget);
+    for (final size in [const Size(320, 640), const Size(844, 390)]) {
+      tester.view.physicalSize = size;
+      await tester.pumpAndSettle();
+      await expectSelected(tester, 'Plan');
+      expect(tester.takeException(), isNull);
+    }
+    final childContext = tester.element(
+      find.byType(DepartureRecommendationPage),
+    );
+    Navigator.of(childContext).push(
+      MaterialPageRoute<void>(
+        builder: (_) => const Scaffold(body: Text('Plan child')),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    await expectSelected(tester, 'Plan');
+    expect(tester.state(find.byType(DepartureRecommendationPage)), same(state));
+    await press(tester, find.byKey(const Key('clear-journey-plan')));
+    await press(tester, find.text('Cancel'));
+    expect(find.byKey(const Key('journey-results')), findsOneWidget);
+    await press(tester, find.byKey(const Key('clear-journey-plan')));
+    await press(
+      tester,
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.text('Clear'),
+      ),
+    );
+    expect(find.byKey(const Key('journey-results')), findsNothing);
+    expect(find.byKey(const Key('clear-journey-plan')), findsNothing);
+    expect(scroll.offset, 0);
+    expect(tracked.starts, 0);
+    expect(tracked.finishes, 0);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 
   for (final upcoming in [false, true]) {
     testWidgets(
