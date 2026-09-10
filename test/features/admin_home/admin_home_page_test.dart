@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:government_transit_collector/features/admin_home/presentation/admin_home_page.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/ai_recommendation_analysis_session_store.dart';
 import 'package:government_transit_collector/features/authentication/data/auth_repository.dart';
 import 'package:government_transit_collector/features/saved_operational_reports/data/saved_operational_report.dart';
 import 'package:government_transit_collector/features/saved_operational_reports/data/saved_operational_report_repository.dart';
@@ -76,6 +77,39 @@ void main() {
     expect(find.text('AI Transit Recommendation'), findsOneWidget);
   });
 
+  testWidgets(
+    'AI destination receives and retains the injected session store',
+    (tester) async {
+      final auth = TestAuthRepository();
+      final store = AiRecommendationAnalysisSessionStore(adminUserId: 'admin');
+      final opened = <AiRecommendationAnalysisSessionStore>[];
+      await tester.pumpWidget(
+        MaterialApp(
+          home: AdminHomePage(
+            profile: adminProfile,
+            repository: auth,
+            aiRecommendationSessionStore: store,
+            aiRecommendationDashboardBuilder: (sessionStore) {
+              opened.add(sessionStore);
+              return const Scaffold(body: Text('Injected AI dashboard'));
+            },
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('AI'));
+      await tester.pump(const Duration(seconds: 1));
+      await tester.tap(find.text('Home'));
+      await tester.pump(const Duration(seconds: 1));
+      await tester.tap(find.text('AI'));
+      await tester.pump(const Duration(seconds: 1));
+
+      expect(opened, hasLength(1));
+      expect(opened.single, same(store));
+      expect(find.text('Injected AI dashboard'), findsOneWidget);
+    },
+  );
+
   for (final size in [const Size(400, 800), const Size(800, 400)]) {
     testWidgets('admin Home has no overflow at ${size.width}x${size.height}', (
       tester,
@@ -97,16 +131,18 @@ Future<void> pumpAdmin(
 }) => tester.pumpWidget(
   MaterialApp(
     home: AdminHomePage(
-      profile: const AppProfile(
-        userId: 'admin',
-        fullName: 'Admin',
-        role: 'admin',
-        email: 'admin@example.com',
-      ),
+      profile: adminProfile,
       repository: auth,
       savedOperationalReportRepository: reports,
     ),
   ),
+);
+
+const adminProfile = AppProfile(
+  userId: 'admin',
+  fullName: 'Admin',
+  role: 'admin',
+  email: 'admin@example.com',
 );
 
 class TestAuthRepository extends AuthRepository {
