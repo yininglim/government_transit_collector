@@ -238,12 +238,15 @@ class AuthRepository extends ChangeNotifier {
     }
   }
 
+  static const passwordRecoveryRedirectUrl =
+      'https://looyien.github.io/government-transit-collector-site/reset-password.html';
+
   DateTime? _resetEmailRetryAt;
 
   Future<void> sendPasswordReset(String email) async {
     final validation = AuthValidation.email(email);
     if (validation != null) throw AuthFlowException(validation);
-    final redirect = redirectUrl;
+    final redirect = passwordRecoveryRedirectUrl;
     // Keep the resend limit when the form closes or is reopened.
     final now = DateTime.now();
     if (_resetEmailRetryAt?.isAfter(now) == true) {

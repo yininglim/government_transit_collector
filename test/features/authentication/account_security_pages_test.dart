@@ -44,6 +44,43 @@ void main() {
     },
   );
 
+  testWidgets(
+    'Google email-password reset returns to Account Security after sending',
+    (tester) async {
+      final repository = PageAuth()
+        ..googleIdentity = true
+        ..sessionMethod = 'oauth';
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: TextButton(
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => ChangePasswordPage(repository: repository),
+                  ),
+                ),
+                child: const Text('Account Security'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tap(tester, find.text('Account Security'));
+      expect(find.text('You signed in with Google.'), findsOneWidget);
+      expect(
+        find.text('Your Google password will not be changed.'),
+        findsOneWidget,
+      );
+      await tap(tester, find.text('Send Password Reset Email'));
+      expect(repository.sentEmail, 'rider@example.test');
+      expect(repository.resetEmailCalls, 1);
+      expect(find.byType(ForgotPasswordPage), findsNothing);
+      expect(find.text('Account Security'), findsOneWidget);
+      expect(repository.changeCalls, 0);
+    },
+  );
+
   testWidgets('signup blocks password equal to email at the form', (
     tester,
   ) async {

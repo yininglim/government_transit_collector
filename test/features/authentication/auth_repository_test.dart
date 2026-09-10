@@ -219,14 +219,14 @@ void main() {
   );
 
   test(
-    'forgot password sends recovery only with exact configured redirect',
+    'forgot password uses HTTPS recovery independently of the app callback',
     () async {
       await repository.sendPasswordReset(' owner@example.test ');
       expect(backend.requests, hasLength(1));
       expect(backend.requests.single.url.path, '/auth/v1/recover');
       expect(
         backend.requests.single.url.queryParameters['redirect_to'],
-        redirect,
+        AuthRepository.passwordRecoveryRedirectUrl,
       );
       expect(
         jsonDecode(backend.requests.single.body)['email'],
@@ -254,7 +254,7 @@ void main() {
       );
       expect(
         backend.requests.single.url.queryParameters['redirect_to'],
-        redirect,
+        AuthRepository.passwordRecoveryRedirectUrl,
       );
       expect(
         jsonDecode(backend.requests.single.body)['code_challenge'],
@@ -459,7 +459,7 @@ void main() {
   }
 
   test(
-    'missing redirect cannot fall back to an invented or dashboard site URL',
+    'missing app redirect blocks Google but not the dedicated web recovery flow',
     () async {
       final unconfigured = AuthRepository(
         client: backend.client,
@@ -470,11 +470,12 @@ void main() {
         unconfigured.signInWithGoogle(),
         throwsA(isA<AuthFlowException>()),
       );
-      await expectLater(
-        unconfigured.sendPasswordReset('owner@example.test'),
-        throwsA(isA<AuthFlowException>()),
-      );
       expect(backend.requests, isEmpty);
+      await unconfigured.sendPasswordReset('owner@example.test');
+      expect(
+        backend.requests.single.url.queryParameters['redirect_to'],
+        AuthRepository.passwordRecoveryRedirectUrl,
+      );
     },
   );
 
