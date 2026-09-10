@@ -33,6 +33,15 @@ class AndroidReminderNotifications implements ReminderNotifications {
         ? await android.requestNotificationsPermission()
         : await android.areNotificationsEnabled();
     if (notifications != true) return false;
+    final channels = await android.getNotificationChannels();
+    if (channels?.any(
+          (channel) =>
+              channel.id == 'journey_departures' &&
+              channel.importance == Importance.none,
+        ) ==
+        true) {
+      return false;
+    }
     if (await android.canScheduleExactNotifications() == true) return true;
     return request && await android.requestExactAlarmsPermission() == true;
   }
@@ -59,6 +68,13 @@ class AndroidReminderNotifications implements ReminderNotifications {
       ),
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
     );
+    final pending = await _plugin.pendingNotificationRequests();
+    if (reminder.reminderAt.isAfter(DateTime.now()) &&
+        !pending.any((request) => request.id == reminder.id)) {
+      throw const ReminderException(
+        'Android did not retain this reminder. Please try again.',
+      );
+    }
   }
 
   @override

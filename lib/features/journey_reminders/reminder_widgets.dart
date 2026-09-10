@@ -220,11 +220,6 @@ class _UpcomingJourneysState extends State<UpcomingJourneys>
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (reminders.isNotEmpty)
-            Text(
-              'Upcoming Journey',
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
           if (widget.controller.error != null)
             TextButton(
               onPressed: widget.controller.refresh,
@@ -232,21 +227,123 @@ class _UpcomingJourneysState extends State<UpcomingJourneys>
             ),
           for (final reminder in reminders)
             Card(
+              elevation: 0,
+              color: Theme.of(context).colorScheme.surfaceContainerLow,
+              margin: const EdgeInsets.symmetric(vertical: 6),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+                side: BorderSide(
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                ),
+              ),
               child: Padding(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(20),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    JourneyReminderSummary(
-                      journey: reminder.journey,
-                      reminderAt: reminder.reminderAt,
+                    Wrap(
+                      alignment: WrapAlignment.spaceBetween,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: 8,
+                      runSpacing: 4,
+                      children: [
+                        Text(
+                          'Upcoming Journey',
+                          style: Theme.of(context).textTheme.titleSmall,
+                        ),
+                        DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.primary.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 3,
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.notifications_none,
+                                  size: 10,
+                                  color: Theme.of(context).colorScheme.primary,
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  'REMINDER',
+                                  style: Theme.of(context).textTheme.labelSmall
+                                      ?.copyWith(
+                                        color: Theme.of(
+                                          context,
+                                        ).colorScheme.primary,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      reminder.journey.route,
+                      style: Theme.of(context).textTheme.headlineSmall
+                          ?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '${reminder.journey.origin} \u2192 ${reminder.journey.destination}',
+                      style: Theme.of(context).textTheme.bodyLarge,
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        for (final entry in {
+                          'Departure': reminder.journey.departure,
+                          'Reminder': reminder.reminderAt,
+                        }.entries)
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  entry.key,
+                                  style: Theme.of(context).textTheme.labelSmall
+                                      ?.copyWith(
+                                        color: Theme.of(
+                                          context,
+                                        ).colorScheme.onSurfaceVariant,
+                                      ),
+                                ),
+                                Text(
+                                  reminderDisplayTime(
+                                    entry.value,
+                                  ).split(', ').last,
+                                  style: Theme.of(
+                                    context,
+                                  ).textTheme.titleMedium,
+                                ),
+                                Text(
+                                  reminderDisplayTime(
+                                    entry.value,
+                                  ).split(', ').first,
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
+                              ],
+                            ),
+                          ),
+                      ],
                     ),
                     const SizedBox(height: 12),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        TextButton(
+                        FilledButton(
                           onPressed: () => Navigator.push(
                             context,
                             MaterialPageRoute<void>(
@@ -281,13 +378,16 @@ class _UpcomingJourneysState extends State<UpcomingJourneys>
                           ),
                           child: const Text('View Journey'),
                         ),
-                        TextButton(
-                          onPressed: () => cancelJourneyReminder(
-                            context,
-                            widget.controller,
-                            reminder,
+                        Align(
+                          alignment: Alignment.center,
+                          child: TextButton(
+                            onPressed: () => cancelJourneyReminder(
+                              context,
+                              widget.controller,
+                              reminder,
+                            ),
+                            child: const Text('Cancel Reminder'),
                           ),
-                          child: const Text('Cancel Reminder'),
                         ),
                       ],
                     ),

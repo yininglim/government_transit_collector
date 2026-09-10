@@ -275,6 +275,7 @@ class DepartureRecommendationPageState
       _searching || _restoringRecent || _loadingDestinations;
   final _scrollController = ScrollController();
 
+  bool _recentExpanded = false;
   List<RecentJourneySearch>? _recentSearches;
   final Set<int> _deletingRecentSearchIds = {};
   String? _historyError;
@@ -1386,6 +1387,7 @@ class DepartureRecommendationPageState
             clipBehavior: Clip.antiAlias,
             child: Column(
               children: _recentSearches!
+                  .take(_recentExpanded ? 10 : 3)
                   .map(
                     (search) => ListTile(
                       key: Key(
@@ -1436,6 +1438,11 @@ class DepartureRecommendationPageState
                   )
                   .toList(growable: false),
             ),
+          ),
+        if (_historyError == null && (_recentSearches?.length ?? 0) > 3)
+          TextButton(
+            onPressed: () => setState(() => _recentExpanded = !_recentExpanded),
+            child: Text(_recentExpanded ? 'Show Less' : 'View More'),
           ),
       ],
     );

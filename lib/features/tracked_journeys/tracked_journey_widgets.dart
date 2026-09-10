@@ -195,20 +195,125 @@ class _ActiveJourneySectionState extends State<ActiveJourneySection>
     return Card(
       key: const Key('active-journey'),
       elevation: 0,
-      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      color: Theme.of(context).colorScheme.primaryContainer,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(20),
+        side: BorderSide(
+          color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.2),
+        ),
+      ),
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              'YOUR ACTIVE JOURNEY',
-              style: Theme.of(context).textTheme.labelLarge,
+            Wrap(
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                Text(
+                  'Your Active Journey',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFDCFCE7),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.circle,
+                          size: 10,
+                          color: const Color(0xFF166534),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          'ACTIVE',
+                          style: Theme.of(context).textTheme.labelSmall
+                              ?.copyWith(
+                                color: const Color(0xFF166534),
+                                fontWeight: FontWeight.w700,
+                              ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 10),
-            TrackedJourneySummary(snapshot: journey.snapshot),
-            const SizedBox(height: 8),
-            const Text('● Journey tracking active'),
+            Text(
+              journey.snapshot.routeLabel,
+              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+                color: Theme.of(context).colorScheme.onPrimaryContainer,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '${journey.snapshot.originName} \u2192 ${journey.snapshot.destinationName}',
+              style: Theme.of(context).textTheme.bodyLarge,
+            ),
+            const SizedBox(height: 10),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Departure',
+                        style: Theme.of(context).textTheme.labelSmall,
+                      ),
+                      Text(
+                        formatServiceDaySeconds(
+                          journey.snapshot.recommendation.departureSeconds,
+                        ),
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Expected arrival',
+                        style: Theme.of(context).textTheme.labelSmall,
+                      ),
+                      Text(
+                        formatServiceDaySeconds(
+                          journey.snapshot.recommendation.arrivalSeconds,
+                        ),
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    journey.snapshot.recommendation.transferCount == 0
+                        ? 'Direct'
+                        : '1 transfer',
+                    style: Theme.of(context).textTheme.labelMedium,
+                  ),
+                ),
+              ],
+            ),
             if (journey.needsConfirmation((widget.now ?? DateTime.now)())) ...[
               const SizedBox(height: 12),
               Text(
@@ -232,8 +337,8 @@ class _ActiveJourneySectionState extends State<ActiveJourneySection>
                 ],
               ),
             ],
-            const SizedBox(height: 8),
-            FilledButton.tonal(
+            const SizedBox(height: 12),
+            FilledButton(
               onPressed: _busy
                   ? null
                   : () => Navigator.of(context).push(
@@ -252,9 +357,12 @@ class _ActiveJourneySectionState extends State<ActiveJourneySection>
                     ),
               child: const Text('Continue Tracking'),
             ),
-            TextButton(
-              onPressed: _busy ? null : () => _finish(false),
-              child: const Text('Cancel Tracking'),
+            Align(
+              alignment: Alignment.center,
+              child: TextButton(
+                onPressed: _busy ? null : () => _finish(false),
+                child: const Text('Cancel Tracking'),
+              ),
             ),
           ],
         ),

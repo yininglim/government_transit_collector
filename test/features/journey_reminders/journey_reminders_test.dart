@@ -96,6 +96,34 @@ void main() {
   });
   tearDown(() => controller.dispose());
 
+  test(
+    'refresh preserves due notifications and hides only departed journeys',
+    () async {
+      var clock = now;
+      final local = ReminderController(
+        repository,
+        notifications,
+        now: () => clock,
+      );
+      addTearDown(local.dispose);
+      await local.set(journey(), 10);
+      final record = local.upcoming.single;
+      expect(
+        record.reminderAt,
+        journey().departure.subtract(const Duration(minutes: 10)),
+      );
+      expect(reminderDisplayTime(record.reminderAt), '7/9/2030, 3:45 PM');
+      clock = record.reminderAt.add(const Duration(seconds: 1));
+      await local.refresh();
+      expect(notifications.scheduled, contains(record.id));
+      expect(local.upcoming.single.id, record.id);
+      clock = record.journey.departure;
+      await local.refresh();
+      expect(local.upcoming, isEmpty);
+      expect(repository.rows.single.id, record.id);
+    },
+  );
+
   test('GTFS after-midnight seconds preserve original service date', () {
     const overnight = DirectJourneyRecommendation(
       tripId: 'night',
