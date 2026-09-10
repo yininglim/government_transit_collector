@@ -52,7 +52,6 @@ class SupabaseBusFeedbackRepository implements BusFeedbackRepository {
           'Please select a valid scheduled departure.',
         );
       }
-      // Service dates are Malaysia calendar dates; GTFS seconds can exceed 24h.
       final date = feedback.serviceDate!;
       final departure = DateTime.utc(date.year, date.month, date.day)
           .subtract(const Duration(hours: 8))

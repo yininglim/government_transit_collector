@@ -59,8 +59,6 @@ class ReminderController extends ChangeNotifier {
         if (owner != repository.userId) return;
         final previous = _records;
         _records = records.where((r) => r.owner == owner).toList();
-        // Preserve due/delivered notifications during ordinary page/resume refresh.
-        // Only cancel future reminders removed from persistence.
         final retainedIds = _records.map((r) => r.id).toSet();
         for (final record in previous) {
           if (record.reminderAt.isAfter(now()) &&
@@ -116,7 +114,6 @@ class ReminderController extends ChangeNotifier {
         }
         await notifications.schedule(record);
       } on Object {
-        // Cancel first. If persistence fails, retain the record for retry/cancel.
         await notifications.cancel(record.id);
         await repository.delete(record.id);
         _records.removeWhere((r) => r.id == record.id);

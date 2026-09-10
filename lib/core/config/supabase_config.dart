@@ -30,8 +30,6 @@ abstract final class SupabaseConfig {
       publishableKey: publishableKey,
       authOptions: const FlutterAuthClientOptions(
         authFlowType: AuthFlowType.pkce,
-        // AuthRepository validates the configured callback and blocks role
-        // routing before handing it to Supabase's session exchange.
         detectSessionInUri: false,
       ),
     );

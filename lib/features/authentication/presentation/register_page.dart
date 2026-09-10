@@ -47,9 +47,6 @@ class _RegisterPageState extends State<RegisterPage> {
 
     setState(() => _loading = true);
     try {
-      // A previous failure cancelled the native context. Reattach the populated
-      // group even when retrying unchanged credentials, and keep it attached
-      // until the server outcome is known. Disabling fields closes this client.
       _emailFocusNode.requestFocus();
       await WidgetsBinding.instance.endOfFrame;
       if (!mounted) return;
@@ -59,8 +56,6 @@ class _RegisterPageState extends State<RegisterPage> {
         password: _passwordController.text,
       );
       if (!mounted) return;
-      // Only a successful signup may offer to save these credentials. Commit
-      // before clearing the passwords or replacing the registration form.
       TextInput.finishAutofillContext(shouldSave: true);
       FocusManager.instance.primaryFocus?.unfocus();
       if (result.requiresEmailConfirmation) {
@@ -93,7 +88,6 @@ class _RegisterPageState extends State<RegisterPage> {
   }
 
   void _cancelRegistrationAutofill() {
-    // Cancel before focus loss can make Android infer that the form completed.
     TextInput.finishAutofillContext(shouldSave: false);
     FocusManager.instance.primaryFocus?.unfocus();
   }
@@ -248,7 +242,6 @@ class _RegisterPageState extends State<RegisterPage> {
                             _passwordController.text,
                           ),
                           onFieldSubmitted: (_) => _register(),
-                          // Do not detach autofill on IME Done before signup.
                           onEditingComplete: () {},
                         ),
                         const SizedBox(height: 24),

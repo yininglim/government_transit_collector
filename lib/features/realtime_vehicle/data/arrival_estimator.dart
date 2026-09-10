@@ -2,8 +2,6 @@ import 'dart:math' as math;
 
 import 'package:government_transit_collector/features/realtime_vehicle/data/trip_progress_models.dart';
 
-/// Urban buses reporting faster than 90 km/h are treated as GPS/projection
-/// outliers rather than useful ETA evidence.
 const defaultMaximumUrbanBusSpeedMetersPerSecond = 25.0;
 const defaultMinimumMovementMeters = 2.0;
 const defaultMaximumEtaChangePerObservation = Duration(minutes: 2);
@@ -47,8 +45,6 @@ class ArrivalEstimate {
       source == ArrivalEstimateSource.realtimeAdjusted;
 }
 
-/// Keeps only genuine feed observations for one exact vehicle/trip identity.
-/// Animated marker frames never pass through this class.
 class RealtimeMovementHistory {
   RealtimeMovementHistory({this.maximumSamples = 5});
 
@@ -76,8 +72,6 @@ class RealtimeMovementHistory {
   void clear() => _samples.clear();
 }
 
-/// Local, approximate ETA calculation. data.gov.my supplies vehicle positions,
-/// not an authoritative arrival prediction.
 class ArrivalEstimator {
   const ArrivalEstimator({
     this.maximumSpeedMetersPerSecond =
@@ -142,8 +136,6 @@ class ArrivalEstimator {
     );
     final realtimeSeconds = remainingMeters / speed;
     final scheduleSeconds = scheduledRemaining.inSeconds.toDouble();
-    // Keep useful realtime movement dominant, but bound it against the GTFS
-    // baseline so one short observation cannot create false precision.
     final hybridSeconds = scheduleSeconds > 0
         ? (0.6 *
                   realtimeSeconds.clamp(

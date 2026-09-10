@@ -55,7 +55,6 @@ class _AuthGateState extends State<AuthGate> {
 
   void _repositoryChanged() {
     if (!mounted) return;
-    // Recovery must replace any pushed signup/forgot-password/home subpage.
     if (widget.repository.handlingCallback ||
         widget.repository.recoveryRequired) {
       Navigator.of(context).popUntil((route) => route.isFirst);
@@ -77,7 +76,6 @@ class _AuthGateState extends State<AuthGate> {
     }
     if (mounted) {
       setState(() {
-        // A token refresh for the same user must not dispose the passenger tabs.
         _loading =
             _profile == null ||
             _profile!.userId != widget.repository.currentSession?.user.id;

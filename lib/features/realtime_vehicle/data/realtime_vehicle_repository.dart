@@ -23,7 +23,6 @@ class DataGovMyRealtimeVehicleRepository implements RealtimeVehicleRepository {
   final Duration requestTimeout;
   bool _isClosed = false;
 
-  /// Releases the repository's persistent HTTP connection exactly once.
   void close() {
     if (_isClosed) return;
     _isClosed = true;

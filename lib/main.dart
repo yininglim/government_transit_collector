@@ -9,7 +9,6 @@ Future<void> main() async {
   await SupabaseConfig.initialize();
   final authRepository = AuthRepository();
   await authRepository.initializeDeepLinks();
-  // Observe account changes for reminder ownership; never requests permission.
   sharedReminderController;
   runApp(App(authRepository: authRepository));
 }

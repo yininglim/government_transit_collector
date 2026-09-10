@@ -124,9 +124,6 @@ class _RealtimeJourneyTrackerPageState extends State<RealtimeJourneyTrackerPage>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      // Android may emit inactive/resumed while recreating its surface for an
-      // orientation change. Resuming the one polling timer must not masquerade
-      // as a new successful check merely because the layout rotated.
       _controller.startPolling(fetchImmediately: false);
     } else if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused ||

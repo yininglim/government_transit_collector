@@ -126,7 +126,6 @@ void main() {
 
     test('failed refresh preserves the prior reducer result', () {
       final prior = detectTransfer(firstVehicle: true);
-      // A failed refresh does not invoke the reducer in the tracker.
       final afterFailure = prior;
       expect(afterFailure.stage, JourneyStage.trackingFirstLeg);
       expect(afterFailure.activeLegIndex, 0);

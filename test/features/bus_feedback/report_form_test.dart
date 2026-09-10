@@ -349,10 +349,8 @@ void main() {
     field.onChanged!('a');
     await tester.pump();
     expect(find.byType(LinearProgressIndicator), findsOneWidget);
-    // Change the route while its stop's request is still pending.
     final pending = schedule.pending!;
     schedule.pending = null;
-    // Complete after navigating to the route picker, which does not wait for it.
     await tester.ensureVisible(find.text('J30 - Route'));
     await tester.pump(const Duration(milliseconds: 300));
     await tester.tap(find.text('J30 - Route'));

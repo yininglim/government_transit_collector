@@ -502,7 +502,6 @@ void main() {
         final route = tester.getTopLeft(
           find.byKey(Key('view-route-${recommendation.departureSeconds}')),
         );
-        // Narrow cards may stack actions; both must remain reachable.
         expect(route.dy, greaterThanOrEqualTo(report.dy));
         await tester.ensureVisible(find.text('View Route'));
         await tester.pumpAndSettle();

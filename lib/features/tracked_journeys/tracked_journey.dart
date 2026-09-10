@@ -4,7 +4,6 @@ import 'package:government_transit_collector/features/departure_recommendation/d
 import 'package:government_transit_collector/features/realtime_vehicle/data/selected_journey_tracking.dart';
 import 'package:timezone/timezone.dart' as timezone;
 
-/// Immutable GTFS snapshot; service seconds preserve departures after midnight.
 class TrackedJourneySnapshot {
   const TrackedJourneySnapshot({
     required this.recommendation,

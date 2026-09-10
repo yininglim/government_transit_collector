@@ -51,8 +51,6 @@ class SupabaseNearbyStopRepository implements NearbyStopRepository {
         'Invalid location or search radius.',
       );
     }
-    // A latitude band is a conservative spherical bound, including at poles and
-    // across the date line. Page the complete band before distance filtering.
     final delta = radiusMeters / earthRadiusMeters * 180 / math.pi;
     final minLat = math.max(-90.0, location.latitude - delta);
     final maxLat = math.min(90.0, location.latitude + delta);

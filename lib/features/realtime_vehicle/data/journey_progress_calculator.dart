@@ -175,9 +175,6 @@ class JourneyProgressCalculator {
         minimumProgressMeters: minimumProgress,
       );
       if (projection == null) continue;
-      // GTFS stop_sequence is authoritative at loops/self-crossings. Moving
-      // the lower bound slightly forward prevents a later repeated coordinate
-      // from snapping back to the same earlier shape occurrence.
       minimumProgress = projection.progressMeters + 0.01;
       mapped.add(
         StopRouteProgress(

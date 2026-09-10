@@ -67,7 +67,6 @@ class _AnimatedRealtimeVehicleLayerState
       final latest = _Coordinate(marker.latitude, marker.longitude);
       final previous = _displayed[marker.identity];
       if (previous == null) {
-        // A newly observed vehicle starts at its first real feed coordinate.
         _displayed[marker.identity] = latest;
       } else if (previous != latest) {
         _transitions[marker.identity] = _CoordinateTransition(
@@ -93,7 +92,6 @@ class _AnimatedRealtimeVehicleLayerState
     if (status != AnimationStatus.completed || !mounted) return;
     setState(() {
       for (final entry in _transitions.entries) {
-        // Always finish exactly at the latest data.gov.my coordinate.
         _displayed[entry.key] = entry.value.to;
       }
       _transitions.clear();

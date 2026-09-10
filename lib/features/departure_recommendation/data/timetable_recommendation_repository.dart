@@ -16,7 +16,6 @@ String _journeyIdentity(JourneyRecommendation journey) => switch (journey) {
     'transfer|${j.firstTripId}|${j.secondTripId}|${j.transferStopId}|${j.originStopSequence}|${j.destinationStopSequence}',
 };
 
-/// Elapsed Malaysia service-day seconds, including overnight GTFS services.
 int minimumCurrentDepartureSeconds(
   DateTime travelDate, {
   DateTime Function()? now,
@@ -32,7 +31,6 @@ int minimumCurrentDepartureSeconds(
   return (elapsed / Duration.microsecondsPerSecond).ceil();
 }
 
-/// Keep the ranked winner, then prefer actual distinct route combinations.
 List<JourneyRecommendation> selectJourneyAlternatives(
   List<JourneyRecommendation> ranked, {
   required int limit,

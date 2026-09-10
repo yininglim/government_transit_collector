@@ -99,8 +99,6 @@ class SupabaseFeedbackReferenceRepository
         normalized,
       );
 
-      // Keep search text in a single filter value, never in raw OR syntax.
-      // Union matching IDs, then let the existing query order the results.
       final matchingIds = <String>{};
       if (normalized.isNotEmpty) {
         for (final column in [

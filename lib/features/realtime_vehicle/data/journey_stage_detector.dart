@@ -23,8 +23,6 @@ class JourneyStageResult {
   final int activeLegIndex;
 }
 
-/// Advances a selected journey using exact-trip availability and Step 4's
-/// already-stabilized stop progress. The returned stage never regresses.
 JourneyStageResult detectJourneyStage({
   required SelectedJourneyTracking journey,
   required JourneyStageResult previous,

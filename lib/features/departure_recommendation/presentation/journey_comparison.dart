@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import '../data/timetable_recommendation_repository.dart';
 import '../../bus_feedback/data/bus_feedback.dart';
 
-/// Counts only reports visible through the existing passenger repository.
 Map<String, int> recentJourneyIssues(
   List<BusFeedback> reports,
   JourneyRecommendation journey,

@@ -1,8 +1,6 @@
 import 'package:government_transit_collector/features/realtime_vehicle/data/gtfs_realtime_decoder.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/realtime_history_collector.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/realtime_vehicle_repository.dart';
-// The pure-Dart client is supplied transitively by supabase_flutter. Importing
-// it directly keeps this command-line collector independent of dart:ui.
 // ignore: depend_on_referenced_packages
 import 'package:supabase/supabase.dart';
 

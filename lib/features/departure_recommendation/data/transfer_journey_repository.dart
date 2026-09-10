@@ -94,8 +94,6 @@ abstract interface class TransferJourneyRepository {
 bool _canTransfer(TransferTripEndpoint first, TransferTripEndpoint second) =>
     first.tripId != second.tripId && first.routeId != second.routeId;
 
-// Structural reachability uses the same ordered legs and same-stop, different-
-// route transfer rule as the planner. Timetable feasibility is checked on search.
 List<DepartureStop> buildReachableDestinations({
   required String originStopId,
   required List<TransferTripEndpoint> originTrips,

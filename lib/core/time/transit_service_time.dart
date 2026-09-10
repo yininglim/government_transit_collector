@@ -14,7 +14,6 @@ timezone.Location get transitServiceLocation {
   );
 }
 
-/// Converts an absolute instant to the wall-clock date and time used by GTFS.
 timezone.TZDateTime transitServiceDateTime(DateTime instant) =>
     timezone.TZDateTime.from(instant.toUtc(), transitServiceLocation);
 

@@ -23,7 +23,6 @@ import 'package:government_transit_collector/features/realtime_vehicle/data/stat
 import 'package:government_transit_collector/features/realtime_vehicle/presentation/realtime_data_check_page.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/presentation/realtime_journey_tracker_page.dart';
 
-// Malaysia uses UTC+8; convert the instant independently of device timezone.
 String malaysiaGreeting(DateTime instant) {
   final hour = instant.toUtc().add(const Duration(hours: 8)).hour;
   if (hour >= 5 && hour < 12) return 'Good Morning';
@@ -491,8 +490,6 @@ class _PassengerHomePageState extends State<PassengerHomePage>
   );
 }
 
-/// The header occupies layout space, which is returned to the page as it
-/// collapses. Page scroll controllers and nested navigation stay untouched.
 class _ScrollingPassengerHeader extends StatefulWidget {
   const _ScrollingPassengerHeader({required this.header, required this.child});
   final PreferredSizeWidget header;
@@ -508,8 +505,6 @@ class _ScrollingPassengerHeaderState extends State<_ScrollingPassengerHeader> {
 
   bool _scroll(ScrollNotification notification) {
     if (notification.metrics.axis != Axis.vertical) return false;
-    // Only user drags change the header, not layout corrections caused by
-    // resizing the content or programmatic scrolling to a form control.
     final delta = switch (notification) {
       ScrollUpdateNotification n when n.dragDetails != null =>
         n.scrollDelta ?? 0,
@@ -551,7 +546,6 @@ class _ScrollingPassengerHeaderState extends State<_ScrollingPassengerHeader> {
   }
 }
 
-// Short pages still accept a drag so their shared header can collapse/reopen.
 class _PassengerScrollBehavior extends MaterialScrollBehavior {
   const _PassengerScrollBehavior();
 

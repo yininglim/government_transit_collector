@@ -1,6 +1,5 @@
 import 'dart:convert';
 
-/// Keeps historical plain strings and multiple selections in the text column.
 List<String> decodeFeedbackIssueTypes(String value) {
   try {
     final decoded = jsonDecode(value);
@@ -10,7 +9,6 @@ List<String> decodeFeedbackIssueTypes(String value) {
       );
     }
   } on FormatException {
-    // Historical issue labels are plain text.
   }
   return value.trim().isEmpty ? const [] : [value];
 }

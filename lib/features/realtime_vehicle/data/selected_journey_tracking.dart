@@ -135,7 +135,6 @@ class SelectedJourneyTracking {
   final DateTime scheduledArrival;
   final List<SelectedJourneyLeg> legs;
 
-  /// Retains the exact timetable result used by the existing journey-map API.
   final JourneyRecommendation recommendation;
 
   bool get isTransfer => type == SelectedJourneyType.transfer;

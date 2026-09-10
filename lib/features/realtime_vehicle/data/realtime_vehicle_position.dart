@@ -11,8 +11,6 @@ class RealtimeVehiclePosition {
 
   final String? entityId;
 
-  /// This model is JSON-serializable for application storage/interchange.
-  /// The data.gov.my response itself is protobuf and is never JSON-decoded.
   factory RealtimeVehiclePosition.fromJson(Map<String, dynamic> json) {
     return RealtimeVehiclePosition(
       entityId: json['entity_id'] as String?,

@@ -283,7 +283,6 @@ void main() {
           );
           await tester.pumpAndSettle();
           expect(find.text('My Reports'), findsOneWidget);
-          // A child page has no main-tab identity and must retain Reports.
           final reportsContext = tester.element(find.text('My Reports'));
           Navigator.of(reportsContext).push(
             MaterialPageRoute<void>(

@@ -23,7 +23,6 @@ void main() {
         );
         addTearDown(repository.dispose);
         addTearDown(backend.client.dispose);
-        // Signed-out requests reveal no provider, even for Google-only users.
         await repository.sendPasswordReset('owner@example.test');
         expect(backend.requests.single.url.path, '/auth/v1/recover');
         await repository.handleAuthCallback(
@@ -95,7 +94,6 @@ void main() {
             ),
           );
           expect(backend.requests, isEmpty);
-          // This session must not be used to infer another email's provider.
           backend.recoveryErrorCode = 'user_not_found';
           await repository.sendPasswordReset('unknown@example.test');
         } else {

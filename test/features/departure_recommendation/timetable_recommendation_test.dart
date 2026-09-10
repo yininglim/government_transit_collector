@@ -237,7 +237,6 @@ void main() {
               time('second', 'destination', 8, 11 * 3600),
             ],
           );
-      // 02:00 UTC is 10:00 Malaysia, regardless of the device timezone.
       expect(search(DateTime.utc(2026, 8, 17, 2)), hasLength(2));
       expect(search(DateTime.utc(2026, 8, 17, 2, 0, 0, 1)), isEmpty);
       expect(

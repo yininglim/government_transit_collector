@@ -36,7 +36,6 @@ void main() {
         return jsonResponse(null, status: 201);
       });
       addTearDown(client.dispose);
-      // September 7 service at 25:00 is September 8, 01:00 Malaysia.
       final departure = DateTime.utc(2026, 9, 7, 17);
       var now = departure.subtract(const Duration(microseconds: 1));
       final repository = SupabaseBusFeedbackRepository(

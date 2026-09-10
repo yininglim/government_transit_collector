@@ -102,8 +102,6 @@ class SupabaseFeedbackScheduleRepository implements FeedbackScheduleRepository {
     try {
       final trips = await _trips(routeId, tripId);
       final times = await _times(trips);
-      // Keep each trip pattern's sequence, then append unseen stops from the
-      // next pattern. A single global sequence cannot describe both directions.
       times.sort((a, b) {
         final trip = (a['trip_id'] as String).compareTo(b['trip_id'] as String);
         return trip != 0

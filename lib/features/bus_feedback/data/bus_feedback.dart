@@ -34,8 +34,6 @@ class BusFeedback {
   final String? routeLabel;
   final String? stopName;
 
-  // The deployed schema calls the report description `comment`. Preserve
-  // that mapping for the shared feedback/admin module; this is not a thread.
   String get description => comment;
 
   String? get serviceDateKey => serviceDate == null

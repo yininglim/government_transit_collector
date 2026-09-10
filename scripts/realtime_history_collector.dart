@@ -4,8 +4,6 @@ import 'dart:io';
 import 'package:government_transit_collector/features/realtime_vehicle/data/realtime_history_collector.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/realtime_vehicle_repository.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/supabase_realtime_history_storage.dart';
-// The pure-Dart client is supplied transitively by supabase_flutter. Importing
-// it directly keeps this command-line collector independent of dart:ui.
 // ignore: depend_on_referenced_packages
 import 'package:supabase/supabase.dart';
 
@@ -57,9 +55,6 @@ Future<void> main(List<String> arguments) async {
   Future<void>? signalCancellation;
   signalSubscription = ProcessSignal.sigint.watch().listen((_) {
     if (!stopController.isStopped) {
-      // On Windows, unregister the console signal handler immediately. Keeping
-      // the signal stream subscribed while awaiting shutdown can leave Dart's
-      // Ctrl+C handler installed and PowerShell waiting on the process.
       signalCancellation ??= signalSubscription.cancel();
       stdout.writeln('\nStopping collector...');
       collector.requestStop();

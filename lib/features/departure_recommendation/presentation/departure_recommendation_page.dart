@@ -383,7 +383,6 @@ class DepartureRecommendationPageState
           ),
         );
       }
-      // Preserve access to the existing tracker even during a storage outage.
       return true;
     } finally {
       _startingJourney = false;
@@ -636,7 +635,6 @@ class DepartureRecommendationPageState
     String? directError;
     String? transferError;
 
-    // Attach both error handlers immediately while retaining partial results.
     await Future.wait([
       () async {
         try {

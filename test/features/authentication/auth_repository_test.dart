@@ -10,7 +10,6 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late AuthBackend backend;
   late AuthRepository repository;
-  // Deliberate test fixture, not production redirect configuration.
   const redirect = 'test-auth://callback';
   setUp(() {
     backend = AuthBackend();
@@ -157,7 +156,7 @@ void main() {
       expect(
         jsonDecode(rpc.body),
         isNull,
-      ); // No caller-selected identity or role.
+      );
       await repository.loadCurrentProfile();
       expect(
         backend.requests.where((r) => r.url.path.contains('/rpc/')),

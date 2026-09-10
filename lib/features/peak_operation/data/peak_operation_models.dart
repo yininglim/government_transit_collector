@@ -65,8 +65,6 @@ class RouteActivitySummary {
   final int tripOccurrences;
 }
 
-/// Operational-activity evidence only. It intentionally contains no passenger
-/// demand or passenger-volume fields.
 class PeakOperationSummary {
   const PeakOperationSummary({
     required this.routeId,

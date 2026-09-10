@@ -131,8 +131,6 @@ class AuthRepository extends ChangeNotifier {
 
   Future<void> initializeDeepLinks() async {
     _preferences = await SharedPreferences.getInstance();
-    // An interrupted recovery stays isolated after a process restart. A fresh
-    // verified link is required; a persisted normal session cannot bypass it.
     _recovery = _preferences!.getBool(_recoveryKey) ?? false;
     _expectRecovery = _preferences!.getBool(_pendingKey) ?? false;
     final links = AppLinks();
@@ -171,10 +169,7 @@ class AuthRepository extends ChangeNotifier {
     callbackMessage = null;
     notifyListeners();
     try {
-      // Persist the routing barrier BEFORE Supabase can persist a session.
       await _preferences?.setBool(_recoveryKey, true);
-      // This app initiates PKCE flows. Never accept an implicit token callback
-      // whose caller-controlled type could turn recovery into a normal login.
       if (uri.queryParameters['code']?.isNotEmpty != true || uri.hasFragment) {
         throw const AuthFlowException('Invalid authentication callback.');
       }
@@ -195,15 +190,12 @@ class AuthRepository extends ChangeNotifier {
             (uri.hasFragment &&
                 Uri.splitQueryString(uri.fragment)['error'] == 'access_denied');
       } on FormatException {
-        // Malformed callback details must never be shown to the user.
       }
       callbackMessage = _recovery
           ? invalidRecoveryMessage
           : cancelled
           ? 'Google sign-in was cancelled.'
           : 'Unable to sign in with Google. Please try again.';
-      // Never leave an old or partially exchanged session available after a
-      // failed callback. Keep the barrier if local cleanup itself fails.
       try {
         await _client.auth.signOut(scope: SignOutScope.local);
       } on Object {
@@ -252,8 +244,6 @@ class AuthRepository extends ChangeNotifier {
   Future<void> sendPasswordReset(String email) async {
     final validation = AuthValidation.email(email);
     if (validation != null) throw AuthFlowException(validation);
-    // Only identify a provider for the authenticated user's own email. Never
-    // look up identities for an arbitrary address on the signed-out form.
     if (_client.auth.currentUser?.email?.toLowerCase() ==
             email.trim().toLowerCase() &&
         hasGoogleIdentity &&
@@ -261,7 +251,6 @@ class AuthRepository extends ChangeNotifier {
       throw const AuthFlowException(googleOnlyResetMessage);
     }
     final redirect = passwordRecoveryRedirectUrl;
-    // Keep the resend limit when the form closes or is reopened.
     final now = DateTime.now();
     if (_resetEmailRetryAt?.isAfter(now) == true) {
       throw const AuthFlowException(
@@ -277,7 +266,6 @@ class AuthRepository extends ChangeNotifier {
         redirectTo: redirect,
       );
     } on AuthException catch (error) {
-      // Recovery must not reveal account existence.
       if (error.code == 'user_not_found') return;
       if (_isRateLimit(error)) {
         throw const AuthFlowException(
@@ -295,8 +283,6 @@ class AuthRepository extends ChangeNotifier {
   }
 
   Future<void> cancelGoogleSignIn() async {
-    // Browser dismissal has no reliable OAuth completion event. Let the user
-    // explicitly cancel, and invalidate the SDK's pending PKCE verifier.
     await cancelRecovery();
   }
 
@@ -384,8 +370,6 @@ class AuthRepository extends ChangeNotifier {
       ) ==
       true;
 
-  // Presentation/flow selection only: Supabase still verifies credentials and
-  // authorizes updates. Provider metadata describes identities, not this login.
   String? get currentAuthenticationMethod {
     try {
       final token = currentSession?.accessToken;
@@ -410,8 +394,6 @@ class AuthRepository extends ChangeNotifier {
           (a['timestamp'] as num?) ?? 0,
         );
         if (time != 0) return time;
-        // Ambiguous simultaneous methods use recovery rather than requesting
-        // a password in a potentially OAuth-authenticated session.
         return (a['method'] == 'password' ? 1 : 0).compareTo(
           b['method'] == 'password' ? 1 : 0,
         );
@@ -457,8 +439,6 @@ class AuthRepository extends ChangeNotifier {
     _changingPassword = true;
     try {
       try {
-        // Reauthenticate only the current Supabase user's email using the
-        // existing SDK. Profile identity, role and linked providers are untouched.
         final verified = await _client.auth.signInWithPassword(
           email: user.email!,
           password: currentPassword,
@@ -551,8 +531,6 @@ class AuthRepository extends ChangeNotifier {
           'Registration did not complete. Please try again.',
         );
       }
-      // Supabase may obfuscate an existing confirmed user instead of returning
-      // an error. No profile queries or writes are needed to handle this.
       if (response.session == null &&
           response.user!.identities?.isEmpty == true) {
         throw const AuthFlowException(existingAccountMessage);
@@ -621,8 +599,6 @@ class AuthRepository extends ChangeNotifier {
           .maybeSingle();
       if (data == null &&
           user.identities?.any((i) => i.provider == 'google') == true) {
-        // The RPC derives identity and metadata from auth.uid()/auth.users,
-        // inserts only if absent, and never updates an existing role.
         await _client.rpc('ensure_current_google_profile');
         data = await _client
             .from('profiles')
@@ -698,9 +674,6 @@ class AuthRepository extends ChangeNotifier {
   }
 }
 
-// Supabase Auth supports current_password for projects that require it on
-// updates. The installed Dart SDK's UserAttributes does not expose that field
-// yet; serialize it only into the supported authenticated Auth request.
 class _PasswordChangeAttributes extends UserAttributes {
   _PasswordChangeAttributes({
     required super.password,

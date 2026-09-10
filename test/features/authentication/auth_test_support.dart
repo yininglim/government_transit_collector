@@ -18,7 +18,6 @@ class MemoryAuthStorage extends GotrueAsyncStorage {
   }
 }
 
-// Synthetic fixtures only. No live credentials or auth requests.
 class AuthBackend {
   final requests = <http.Request>[];
   final storage = MemoryAuthStorage();

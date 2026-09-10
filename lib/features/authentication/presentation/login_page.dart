@@ -32,7 +32,6 @@ class _LoginPageState extends State<LoginPage> {
   @override
   void initState() {
     super.initState();
-    // Display a fresh callback failure once, then discard the retained copy.
     _message = widget.message;
     if (widget.repository.callbackMessage == _googleError) {
       widget.repository.callbackMessage = null;

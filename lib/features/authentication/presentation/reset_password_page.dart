@@ -30,7 +30,6 @@ class _ResetPasswordPageState extends State<ResetPasswordPage> {
     if (_loading || (!cancel && !_form.currentState!.validate())) return;
     FocusManager.instance.primaryFocus?.unfocus();
     setState(() => _loading = true);
-    // The gate can replace this page as soon as the session is cleared.
     final messenger = ScaffoldMessenger.of(context);
     try {
       if (cancel) {

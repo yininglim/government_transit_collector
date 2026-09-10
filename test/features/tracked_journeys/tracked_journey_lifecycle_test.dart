@@ -50,7 +50,6 @@ class MemoryJourneys extends TrackedJourneyRepository {
   @override
   Future<TrackedJourney?> active() async =>
       rows.where((r) => r.userId == userId && r.status == 'active').firstOrNull;
-  // Deliberately return mixed rows to verify the UI's ownership/status boundary too.
   @override
   Future<List<TrackedJourney>> completed() async => List.of(rows);
   @override

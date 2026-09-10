@@ -295,7 +295,6 @@ void main() {
         ]);
         expect(fields.where((field) => field.focusNode.hasFocus).length, 1);
         tester.testTextInput.log.clear();
-        // Android must retain the attached group while the network is pending.
         tester.testTextInput.enterText('changed@example.test');
         await tester.pump(const Duration(milliseconds: 300));
         expect(
