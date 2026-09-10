@@ -63,9 +63,16 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
     try {
       await widget.repository.sendPasswordReset(_requestedEmail!);
       if (!mounted) return;
+      if (widget.accountEmail == null) {
+        ScaffoldMessenger.of(context).clearSnackBars();
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text(AuthRepository.passwordResetSentMessage)),
       );
+      if (widget.accountEmail == null) {
+        await Future<void>.delayed(const Duration(seconds: 2));
+        if (!mounted || ModalRoute.of(context)?.isCurrent != true) return;
+      }
       Navigator.of(context).pop();
     } on Object catch (error) {
       if (!mounted) return;

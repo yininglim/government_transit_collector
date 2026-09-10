@@ -212,17 +212,8 @@ void main() {
         );
         await tester.pumpAndSettle();
         expect(finishes(tester), [true, false]);
-        expect(
-          find.text('Verify Your Email'),
-          confirmation ? findsOneWidget : findsNothing,
-        );
-        if (confirmation) {
-          expect(find.text('rider@example.test'), findsOneWidget);
-          await tester.pageBack();
-          await tester.pumpAndSettle();
-        } else {
-          expect(find.byType(RegisterPage), findsNothing);
-        }
+        expect(find.text('Verify Your Email'), findsNothing);
+        expect(find.byType(RegisterPage), findsNothing);
       },
     );
   }
@@ -265,9 +256,8 @@ void main() {
         ),
         isTrue,
       );
-      expect(find.text('Verify Your Email'), findsOneWidget);
-      await tester.pageBack();
-      await tester.pumpAndSettle();
+      expect(find.text('Verify Your Email'), findsNothing);
+      expect(find.byType(RegisterPage), findsNothing);
     },
   );
 

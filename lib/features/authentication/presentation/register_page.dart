@@ -27,7 +27,6 @@ class _RegisterPageState extends State<RegisterPage> {
   bool _obscurePassword = true;
   bool _obscureConfirmation = true;
   bool _loading = false;
-  String? _verificationEmail;
 
   @override
   void dispose() {
@@ -61,11 +60,20 @@ class _RegisterPageState extends State<RegisterPage> {
       FocusManager.instance.primaryFocus?.unfocus();
       if (result.requiresEmailConfirmation) {
         setState(() {
-          _verificationEmail = _emailController.text.trim();
           _passwordController.clear();
           _confirmPasswordController.clear();
-          _loading = false;
         });
+        ScaffoldMessenger.of(context).clearSnackBars();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Verification email sent. Please check your inbox before signing in.',
+            ),
+          ),
+        );
+        await Future<void>.delayed(const Duration(seconds: 2));
+        if (!mounted || ModalRoute.of(context)?.isCurrent != true) return;
+        Navigator.of(context).pop();
       } else {
         Navigator.of(context).pop();
       }
@@ -95,12 +103,6 @@ class _RegisterPageState extends State<RegisterPage> {
 
   @override
   Widget build(BuildContext context) {
-    if (_verificationEmail != null) {
-      return EmailVerificationPage(
-        repository: widget.repository,
-        email: _verificationEmail!,
-      );
-    }
     return Scaffold(
       appBar: readableAppBar(context, title: const Text('Create account')),
       body: SafeArea(

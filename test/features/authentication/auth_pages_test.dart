@@ -30,6 +30,8 @@ class PageAuth extends AuthRepository {
   }
 
   int registrationCalls = 0;
+  String? registrationError;
+  String? resetError;
   String? sentEmail;
   String? updatedPassword;
   String? googleError;
@@ -80,6 +82,7 @@ class PageAuth extends AuthRepository {
     required String password,
   }) async {
     registrationCalls++;
+    if (registrationError != null) throw AuthFlowException(registrationError!);
     return const RegistrationResult(requiresEmailConfirmation: true);
   }
 
@@ -88,6 +91,7 @@ class PageAuth extends AuthRepository {
     resetEmailCalls++;
     sentEmail = email;
     await pendingEmail;
+    if (resetError != null) throw AuthFlowException(resetError!);
   }
 
   @override
@@ -289,23 +293,21 @@ void main() {
     ].asMap().entries) {
       await tester.enterText(fields.at(entry.key), entry.value);
     }
-    await tap(tester, find.text('Register'));
+    await tester.ensureVisible(find.text('Register'));
+    await tester.tap(find.text('Register'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
     expect(repository.registrationCalls, 1);
-    expect(find.text('Verify Your Email'), findsOneWidget);
-    expect(find.text('rider@example.test'), findsOneWidget);
-    expect(
-      tester
-          .widget<FilledButton>(
-            find.widgetWithText(FilledButton, 'Resend Verification Email'),
-          )
-          .onPressed,
-      isNull,
-    );
-    await tester.pump(const Duration(seconds: 61));
-    await tap(tester, find.text('Resend Verification Email'));
-    expect(repository.verificationEmails, 1);
-    await tap(tester, find.text('Back to Sign In'));
+    expect(find.text('Verification email sent. Please check your inbox before signing in.'), findsOneWidget);
+    expect(find.byType(RegisterPage), findsOneWidget);
+    expect(find.byType(EmailVerificationPage), findsNothing);
+    expect(repository.loginCalls, 0);
+    expect(find.byType(PassengerHomePage), findsNothing);
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pumpAndSettle();
+    expect(find.byType(RegisterPage), findsNothing);
     expect(find.byType(LoginPage), findsOneWidget);
+    expect(repository.verificationEmails, 0);
   });
 
   testWidgets(
@@ -331,9 +333,72 @@ void main() {
         findsOneWidget,
       );
       expect(repository.updatedPassword, isNull);
+      expect(find.byType(ForgotPasswordPage), findsNothing);
+      expect(find.byType(LoginPage), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );
+
+  for (final signup in [true, false]) {
+    for (final fail in [true, false]) {
+      testWidgets('${signup ? "signup" : "reset"} ${fail ? "failure stays on page" : "manual Back prevents delayed navigation"}', (tester) async {
+        final repository = PageAuth();
+        const error = 'Unable to complete this request. Please try again.';
+        if (fail) {
+          if (signup) {
+            repository.registrationError = error;
+          } else {
+            repository.resetError = error;
+          }
+        }
+        await show(tester, LoginPage(repository: repository));
+        await tap(tester, find.text(signup ? "Don't have an account? Sign Up" : 'Forgot Password?'));
+        final inputs = signup
+            ? ['Rider', 'rider@example.test', 'Password123!', 'Password123!']
+            : ['rider@example.test'];
+        for (final entry in inputs.asMap().entries) {
+          await tester.enterText(find.byType(TextFormField).at(entry.key), entry.value);
+        }
+        final submit = find.text(signup ? 'Register' : 'Send Password Reset Email');
+        await tester.ensureVisible(submit);
+        await tester.tap(submit);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        if (fail) {
+          await tester.pump(const Duration(seconds: 3));
+          expect(find.text(error), findsOneWidget);
+          expect(find.byType(signup ? RegisterPage : ForgotPasswordPage), findsOneWidget);
+        } else {
+          expect(find.text(signup
+              ? 'Verification email sent. Please check your inbox before signing in.'
+              : AuthRepository.passwordResetSentMessage), findsOneWidget);
+          expect(find.byType(signup ? RegisterPage : ForgotPasswordPage), findsOneWidget);
+          await tester.pageBack();
+          await tester.pumpAndSettle();
+          await tester.pump(const Duration(seconds: 3));
+          await tester.pumpAndSettle();
+          expect(find.byType(LoginPage), findsOneWidget);
+        }
+        expect(tester.takeException(), isNull);
+      });
+    }
+  }
+
+  for (final googleOnly in [true, false]) {
+    testWidgets('signed-out reset confirmation stays neutral for googleOnly=$googleOnly', (tester) async {
+      final repository = PageAuth()
+        ..googleIdentity = googleOnly
+        ..emailPassword = !googleOnly;
+      await show(tester, LoginPage(repository: repository));
+      await tap(tester, find.text('Forgot Password?'));
+      await tester.enterText(find.byType(TextFormField), 'rider@example.test');
+      await tap(tester, find.text('Send Password Reset Email'));
+      expect(repository.resetEmailCalls, 1);
+      expect(find.text(AuthRepository.passwordResetSentMessage), findsOneWidget);
+      expect(find.byType(LoginPage), findsOneWidget);
+      expect(find.byType(ForgotPasswordPage), findsNothing);
+    });
+  }
 
   testWidgets(
     'Forgot Password opens dedicated page and Back returns to login',
