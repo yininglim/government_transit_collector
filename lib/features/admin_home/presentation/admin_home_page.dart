@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/ai_recommendation_analysis_session_store.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/presentation/ai_recommendation_dashboard_page.dart';
 import 'package:government_transit_collector/features/authentication/data/auth_repository.dart';
 import 'package:government_transit_collector/features/peak_operation/data/peak_operation_repository.dart';
@@ -15,6 +16,8 @@ class AdminHomePage extends StatefulWidget {
     this.routePerformanceRepository,
     this.peakOperationRepository,
     this.savedOperationalReportRepository,
+    this.aiRecommendationSessionStore,
+    this.aiRecommendationDashboardBuilder,
     super.key,
   });
 
@@ -23,6 +26,9 @@ class AdminHomePage extends StatefulWidget {
   final RoutePerformanceRepository? routePerformanceRepository;
   final PeakOperationRepository? peakOperationRepository;
   final SavedOperationalReportRepository? savedOperationalReportRepository;
+  final AiRecommendationAnalysisSessionStore? aiRecommendationSessionStore;
+  final Widget Function(AiRecommendationAnalysisSessionStore sessionStore)?
+  aiRecommendationDashboardBuilder;
 
   @override
   State<AdminHomePage> createState() => _AdminHomePageState();
@@ -30,12 +36,39 @@ class AdminHomePage extends StatefulWidget {
 
 class _AdminHomePageState extends State<AdminHomePage> {
   bool _signingOut = false;
+  late AiRecommendationAnalysisSessionStore _aiRecommendationSessionStore;
+
+  @override
+  void initState() {
+    super.initState();
+    final injected = widget.aiRecommendationSessionStore;
+    if (injected != null && injected.belongsTo(widget.profile.userId)) {
+      _aiRecommendationSessionStore = injected;
+    } else {
+      injected?.clear();
+      _aiRecommendationSessionStore = AiRecommendationAnalysisSessionStore(
+        adminUserId: widget.profile.userId,
+      );
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant AdminHomePage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!_aiRecommendationSessionStore.belongsTo(widget.profile.userId)) {
+      _aiRecommendationSessionStore.clear();
+      _aiRecommendationSessionStore = AiRecommendationAnalysisSessionStore(
+        adminUserId: widget.profile.userId,
+      );
+    }
+  }
 
   Future<void> _logout() async {
     if (_signingOut) return;
     setState(() => _signingOut = true);
     try {
       await widget.repository.logout();
+      _aiRecommendationSessionStore.clear();
     } on AuthFlowException catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -92,7 +125,13 @@ class _AdminHomePageState extends State<AdminHomePage> {
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => Navigator.of(context).push(
                   MaterialPageRoute<void>(
-                    builder: (_) => const AiRecommendationDashboardPage(),
+                    builder: (_) =>
+                        widget.aiRecommendationDashboardBuilder?.call(
+                          _aiRecommendationSessionStore,
+                        ) ??
+                        AiRecommendationDashboardPage(
+                          sessionStore: _aiRecommendationSessionStore,
+                        ),
                   ),
                 ),
               ),

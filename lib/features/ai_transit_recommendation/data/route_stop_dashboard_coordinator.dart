@@ -51,6 +51,8 @@ class RouteStopDashboardScreeningResult {
 class RouteStopDashboardSession {
   final candidates = <RouteStopDashboardCandidate>[];
   final excludedRoutes = <RouteStopDashboardExcludedRoute>[];
+  final savingRecommendationIds = <String>{};
+  final savedRecommendationIds = <String>{};
   RouteStopRecommendationResult? recommendationResult;
   DateTime? periodStartUtc;
   DateTime? periodEndUtc;
@@ -75,6 +77,8 @@ class RouteStopDashboardSession {
     periodEndUtc = endExclusiveUtc;
     candidates.clear();
     excludedRoutes.clear();
+    savingRecommendationIds.clear();
+    savedRecommendationIds.clear();
     recommendationResult = null;
     empty = false;
     setupFailure = false;
@@ -93,6 +97,8 @@ class RouteStopDashboardSession {
     periodEndUtc = null;
     candidates.clear();
     excludedRoutes.clear();
+    savingRecommendationIds.clear();
+    savedRecommendationIds.clear();
     recommendationResult = null;
     empty = false;
     setupFailure = false;

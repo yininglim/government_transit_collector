@@ -20,6 +20,7 @@ class CostEstimationReportPage extends StatefulWidget {
     this.now,
     this.preparationScheduler,
     this.busFrequencySession,
+    this.preserveRetainedSession = false,
     super.key,
   });
 
@@ -31,6 +32,7 @@ class CostEstimationReportPage extends StatefulWidget {
   final DateTime Function()? now;
   final Future<void> Function()? preparationScheduler;
   final BusFrequencyDashboardSession? busFrequencySession;
+  final bool preserveRetainedSession;
 
   @override
   State<CostEstimationReportPage> createState() =>
@@ -47,11 +49,21 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
   final _additionalDriversController = TextEditingController();
   final _additionalBusesFocusNode = FocusNode();
   final _additionalDriversFocusNode = FocusNode();
-  String? _additionalBusesError;
-  String? _additionalDriversError;
-  String? _selectedScenarioRouteId;
-  String? _costReportActionKey;
-  bool _resourceCostReady = false;
+
+  String? get _additionalBusesError => _session.additionalBusesError;
+  set _additionalBusesError(String? value) =>
+      _session.additionalBusesError = value;
+  String? get _additionalDriversError => _session.additionalDriversError;
+  set _additionalDriversError(String? value) =>
+      _session.additionalDriversError = value;
+  String? get _selectedScenarioRouteId => _session.selectedScenarioRouteId;
+  set _selectedScenarioRouteId(String? value) =>
+      _session.selectedScenarioRouteId = value;
+  String? get _costReportActionKey => _session.costReportActionKey;
+  set _costReportActionKey(String? value) =>
+      _session.costReportActionKey = value;
+  bool get _resourceCostReady => _session.resourceCostReady;
+  set _resourceCostReady(bool value) => _session.resourceCostReady = value;
 
   @override
   void dispose() {
@@ -80,6 +92,9 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
   @override
   void initState() {
     super.initState();
+    _session = widget.session ?? CostDashboardSession();
+    _additionalBusesController.text = _session.additionalBusesInput;
+    _additionalDriversController.text = _session.additionalDriversInput;
     _additionalBusesFocusNode.addListener(() {
       if (!_additionalBusesFocusNode.hasFocus) {
         _validateResourceField(
@@ -100,7 +115,6 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
         );
       }
     });
-    _session = widget.session ?? CostDashboardSession();
     _coordinator =
         widget.coordinator ??
         CostDashboardCoordinator(
@@ -109,7 +123,8 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
           recommendationRepository: widget.recommendationRepository,
         );
     final period = _newPeriod();
-    if (_session.periodStartUtc != null &&
+    if (!widget.preserveRetainedSession &&
+        _session.periodStartUtc != null &&
         !_session.matchesPeriod(
           period.startUtc,
           period.endUtc,
@@ -126,19 +141,17 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
   Future<void> _startAnalysis() async {
     if (_screening || _analysing || _retryingRouteId != null) return;
     final period = _newPeriod();
-    final prepared =
-        _session.screeningComplete &&
-        _session.matchesPeriod(
-          period.startUtc,
-          period.endUtc,
-          period.referenceDate,
-        );
-    if (prepared && _entries.isEmpty) {
-      setState(() => _empty = _candidates.isEmpty);
-      return;
-    }
     setState(() {
-      if (_entries.isNotEmpty) _session.clear();
+      _session.clear();
+      _selectedScenarioRouteId = null;
+      _costReportActionKey = null;
+      _resourceCostReady = false;
+      _additionalBusesController.clear();
+      _additionalDriversController.clear();
+      _session.additionalBusesInput = '';
+      _session.additionalDriversInput = '';
+      _additionalBusesError = null;
+      _additionalDriversError = null;
       _screening = true;
     });
     try {
@@ -487,8 +500,11 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
       _selectedScenarioRouteId = routeId;
       _resourceCostReady = false;
       _costReportActionKey = null;
+      _session.calculatedPlanningContext = null;
       _additionalBusesController.clear();
       _additionalDriversController.clear();
+      _session.additionalBusesInput = '';
+      _session.additionalDriversInput = '';
       _additionalBusesError = null;
       _additionalDriversError = null;
       _entries.clear();
@@ -513,6 +529,7 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
         recommendation.action ==
         BusFrequencyRecommendationAction.decreaseService;
     final reportReady = _isCostReportReady(recommendation);
+    final calculated = _session.calculatedPlanningContext;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -564,12 +581,11 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
                 ),
                 _detail(
                   'Estimated Bus Acquisition Cost',
-                  _resourceCost(
-                    _additionalBusesController.text,
-                    additionalDieselBusCostRm,
-                    label: 'Additional buses',
-                    maximum: maxAdditionalBusPlanningCount,
-                  ),
+                  calculated?.estimatedBusAcquisitionCostRm == null
+                      ? 'Unavailable'
+                      : displayMoney(
+                          calculated!.estimatedBusAcquisitionCostRm!,
+                        ),
                 ),
                 const SizedBox(height: 12),
                 Text(
@@ -578,13 +594,10 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
                 ),
                 _detail(
                   'Estimated Monthly Driver Cost',
-                  _resourceRange(
-                    _additionalDriversController.text,
-                    lowMonthlyDriverCostRm,
-                    highMonthlyDriverCostRm,
-                    label: 'Additional drivers',
-                    maximum: maxAdditionalDriverPlanningCount,
-                  ),
+                  calculated?.lowMonthlyDriverCostRm == null ||
+                          calculated?.highMonthlyDriverCostRm == null
+                      ? 'Unavailable'
+                      : '${displayMoney(calculated!.lowMonthlyDriverCostRm!)} \u2013 ${displayMoney(calculated!.highMonthlyDriverCostRm!)} / month',
                 ),
               ],
               const SizedBox(height: 12),
@@ -616,7 +629,10 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
     }
     return _resourceCostReady &&
         _costReportActionKey == recommendation.action.name &&
-        _selectedScenarioRouteId == recommendation.routeId;
+        _selectedScenarioRouteId == recommendation.routeId &&
+        _session.calculatedPlanningContext?.routeId == recommendation.routeId &&
+        _session.calculatedPlanningContext?.busFrequencyAction ==
+            recommendation.action.name;
   }
 
   void _calculateResourceCosts(
@@ -639,11 +655,27 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
       if (buses.error != null || drivers.error != null) {
         _resourceCostReady = false;
         _costReportActionKey = null;
+        _session.calculatedPlanningContext = null;
         return;
       }
       _selectedScenarioRouteId = selected.route.routeId;
       _resourceCostReady = true;
       _costReportActionKey = recommendation.action.name;
+      _session.calculatedPlanningContext = CostPlanningContext(
+        routeId: selected.route.routeId,
+        busFrequencyAction: recommendation.action.name,
+        additionalBuses: buses.value,
+        additionalDrivers: drivers.value,
+        estimatedBusAcquisitionCostRm: buses.value == null
+            ? null
+            : buses.value! * additionalDieselBusCostRm,
+        lowMonthlyDriverCostRm: drivers.value == null
+            ? null
+            : drivers.value! * lowMonthlyDriverCostRm,
+        highMonthlyDriverCostRm: drivers.value == null
+            ? null
+            : drivers.value! * highMonthlyDriverCostRm,
+      );
       _entries.clear();
       _nextCandidateIndex = 0;
     });
@@ -706,8 +738,11 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
       errorMaxLines: 3,
     ),
     onChanged: (_) => setState(() {
+      _session.additionalBusesInput = _additionalBusesController.text;
+      _session.additionalDriversInput = _additionalDriversController.text;
       _resourceCostReady = false;
       _costReportActionKey = null;
+      _session.calculatedPlanningContext = null;
       _entries.clear();
       _nextCandidateIndex = 0;
       if (controller == _additionalBusesController) {
@@ -735,37 +770,6 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
     });
   }
 
-  String _resourceCost(
-    String raw,
-    int unit, {
-    required String label,
-    required int maximum,
-  }) {
-    final count = parseNonNegativeResource(
-      raw,
-      label,
-      maximum: maximum,
-    ).value;
-    return count == null ? 'Unavailable' : displayMoney(count * unit);
-  }
-
-  String _resourceRange(
-    String raw,
-    int lowUnit,
-    int highUnit, {
-    required String label,
-    required int maximum,
-  }) {
-    final count = parseNonNegativeResource(
-      raw,
-      label,
-      maximum: maximum,
-    ).value;
-    return count == null
-        ? 'Unavailable'
-        : '${displayMoney(count * lowUnit)} \u2013 ${displayMoney(count * highUnit)} / month';
-  }
-
   bool get _canGenerateInsight =>
       !_screening && !_analysing && _hasValidScenarioForInsight;
 
@@ -780,6 +784,12 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
     final recommendation = _selectedFrequencyRecommendation;
     final candidate = _selectedCostCandidate;
     if (recommendation == null || candidate == null) return null;
+    final calculated = _session.calculatedPlanningContext;
+    if (calculated != null &&
+        calculated.routeId == candidate.route.routeId &&
+        calculated.busFrequencyAction == recommendation.action.name) {
+      return calculated;
+    }
     final buses = parseNonNegativeResource(
       _additionalBusesController.text,
       'Additional buses',

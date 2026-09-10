@@ -6,9 +6,14 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/district_route_stop_evidence_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/admin_feedback_repository.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/district_route_stop_evidence_repository.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/gemini_evidence_payloads.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/johor_bahru_boundary_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/operational_evidence_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_network_evidence_models.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/recommendation_management_models.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/recommendation_management_repository.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_recommendation_models.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_evidence_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_stop_dashboard_coordinator.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_stop_evidence_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_stop_recommendation_models.dart';
@@ -22,6 +27,92 @@ import 'package:government_transit_collector/features/route_performance/data/rou
 import 'package:government_transit_collector/features/route_performance/data/route_performance_repository.dart';
 
 void main() {
+  testWidgets('local preview recommendation cannot be saved', (tester) async {
+    final item = candidate('R1');
+    final session = screenedSession([item])
+      ..recommendationResult = recommendationResult(
+        action: RouteStopRecommendationAction.routeImprovement,
+      );
+    await pumpPage(
+      tester,
+      FakeDashboardCoordinator(candidates: [item]),
+      session,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Save Recommendation'), findsNothing);
+    expect(find.byKey(const Key('group-route-R1')), findsOneWidget);
+  });
+
+  testWidgets('saves one multi-action route recommendation as one record', (
+    tester,
+  ) async {
+    final item = candidate('R1');
+    final session = screenedSession([item]);
+    session.recommendationResult = RouteStopRecommendationResult(
+      status: RouteStopRecommendationStatus.available,
+      synthesis: const RouteStopRecommendationSynthesis(
+        overallSummary: 'Combined recommendation.',
+        recommendationGroups: [
+          RouteStopRecommendationGroup(
+            action: RouteStopRecommendationAction.routeImprovement,
+            summary: 'Improve route.',
+            rationale: [],
+            evidenceReferences: [],
+            limitations: [],
+            routeIds: ['R1'],
+            candidateAreas: [],
+          ),
+          RouteStopRecommendationGroup(
+            action: RouteStopRecommendationAction.stopImprovement,
+            summary: 'Improve stops.',
+            rationale: [],
+            evidenceReferences: [],
+            limitations: [],
+            routeIds: ['R1'],
+            candidateAreas: [],
+          ),
+        ],
+        needsMoreEvidence: null,
+        routeRecommendations: [
+          RouteStopRecommendationRecord(
+            routeId: 'R1',
+            actions: [
+              RouteStopRecommendationAction.routeImprovement,
+              RouteStopRecommendationAction.stopImprovement,
+            ],
+            conciseRationale: 'Improve the route and stops.',
+            routeOwnedEvidenceRefs: [],
+            candidateArea: null,
+            limitations: [],
+          ),
+        ],
+      ),
+      failure: null,
+      evidence: const [],
+      payload: const RouteStopGeminiEvidencePayload({}),
+    );
+    final management = RecordingRouteStopManagementRepository();
+    await pumpPage(
+      tester,
+      FakeDashboardCoordinator(candidates: [item]),
+      session,
+      managementRepository: management,
+    );
+    await tester.pumpAndSettle();
+    final save = find.byKey(
+      const Key('save-route-stop-routeImprovement-R1'),
+    );
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    expect(management.saveCalls, 1);
+    expect(management.savedActions, [
+      RouteStopRecommendationAction.routeImprovement,
+      RouteStopRecommendationAction.stopImprovement,
+    ]);
+    expect(find.text('Saved'), findsNWidgets(2));
+  });
   testWidgets('HTTP failure shows the sanitized production message', (
     tester,
   ) async {
@@ -909,20 +1000,23 @@ void main() {
       find.byKey(const Key('recommendedArea-marker-recommended-area')),
       findsNothing,
     );
+    expect(find.text('Save Recommendation'), findsNothing);
   });
 }
 
 Future<void> pumpPage(
   WidgetTester tester,
   RouteStopDashboardCoordinator coordinator,
-  RouteStopDashboardSession session,
-) => tester.pumpWidget(
+  RouteStopDashboardSession session, {
+  RecommendationManagementRepository? managementRepository,
+}) => tester.pumpWidget(
   MaterialApp(
     home: RouteBusStopRecommendationPage(
       session: session,
       coordinator: coordinator,
       now: () => DateTime(2026, 8, 28),
       baseMapEnabled: false,
+      managementRepository: managementRepository,
     ),
   ),
 );
@@ -1312,6 +1406,66 @@ class FakeRecommendationRepository
     );
     return groupedResult(evidenceCalls.last);
   }
+}
+
+class RecordingRouteStopManagementRepository
+    implements RecommendationManagementRepository {
+  int saveCalls = 0;
+  List<RouteStopRecommendationAction> savedActions = const [];
+
+  @override
+  Future<SavedRecommendation> saveRouteBusStopRecommendation({
+    required RouteStopRecommendationRecord recommendation,
+    required String routeDisplayLabel,
+    required DateTime periodStart,
+    required DateTime periodEnd,
+    required DistrictRouteStopEvidence evidence,
+  }) async {
+    saveCalls++;
+    savedActions = recommendation.actions;
+    return SavedRecommendation(
+      recommendationId: 'saved-route-stop',
+      feature: RecommendationManagementFeature.routeBusStop,
+      routeId: recommendation.routeId,
+      routeDisplayLabel: routeDisplayLabel,
+      actions: recommendation.actions.map((action) => action.name).toList(),
+      title: 'Route & stop recommendation — $routeDisplayLabel',
+      rationale: recommendation.conciseRationale,
+      limitations: recommendation.limitations,
+      evidenceReferences: recommendation.routeOwnedEvidenceRefs,
+      targetStopIds: recommendation.targetStopIds,
+      candidateArea: null,
+      status: RecommendationReviewStatus.pending,
+      adminNote: null,
+      createdAt: DateTime(2026, 8, 28),
+      updatedAt: null,
+      reviewedAt: null,
+    );
+  }
+
+  @override
+  Future<SavedRecommendation> saveBusFrequencyRecommendation({
+    required BusFrequencyRouteRecommendationRecord recommendation,
+    required String routeDisplayLabel,
+    required DateTime periodStart,
+    required DateTime periodEnd,
+    required BusFrequencyEvidence evidence,
+  }) => throw UnimplementedError();
+
+  @override
+  Future<List<SavedRecommendation>> loadSavedRecommendations() =>
+      throw UnimplementedError();
+
+  @override
+  Future<SavedRecommendation> updateRecommendation({
+    required SavedRecommendation recommendation,
+    required RecommendationReviewStatus status,
+    required String? adminNote,
+  }) => throw UnimplementedError();
+
+  @override
+  Future<void> deleteRecommendation(String recommendationId) =>
+      throw UnimplementedError();
 }
 
 class FakeDashboardCoordinator extends RouteStopDashboardCoordinator {

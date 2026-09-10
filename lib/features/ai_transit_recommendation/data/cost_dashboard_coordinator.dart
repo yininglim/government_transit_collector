@@ -53,8 +53,23 @@ class CostDashboardSession {
   int completedInBatch = 0;
   int batchTotal = 0;
   int nextCandidateIndex = 0;
+  String additionalBusesInput = '';
+  String additionalDriversInput = '';
+  String? additionalBusesError;
+  String? additionalDriversError;
+  String? selectedScenarioRouteId;
+  String? costReportActionKey;
+  bool resourceCostReady = false;
+  CostPlanningContext? calculatedPlanningContext;
   Future<void>? preparationFuture;
   int preparationVersion = 0;
+
+  bool get hasRetainedCompletedState =>
+      selectedScenarioRouteId != null &&
+      candidates.any(
+        (candidate) => candidate.route.routeId == selectedScenarioRouteId,
+      ) &&
+      (calculatedPlanningContext != null || entries.isNotEmpty);
 
   bool matchesPeriod(
     DateTime startUtc,
@@ -79,6 +94,14 @@ class CostDashboardSession {
     completedInBatch = 0;
     batchTotal = 0;
     nextCandidateIndex = 0;
+    additionalBusesInput = '';
+    additionalDriversInput = '';
+    additionalBusesError = null;
+    additionalDriversError = null;
+    selectedScenarioRouteId = null;
+    costReportActionKey = null;
+    resourceCostReady = false;
+    calculatedPlanningContext = null;
   }
 
   void clear() {
@@ -95,6 +118,14 @@ class CostDashboardSession {
     completedInBatch = 0;
     batchTotal = 0;
     nextCandidateIndex = 0;
+    additionalBusesInput = '';
+    additionalDriversInput = '';
+    additionalBusesError = null;
+    additionalDriversError = null;
+    selectedScenarioRouteId = null;
+    costReportActionKey = null;
+    resourceCostReady = false;
+    calculatedPlanningContext = null;
   }
 }
 
@@ -151,6 +182,14 @@ class CostDashboardCoordinator {
     session.completedInBatch = 0;
     session.batchTotal = 0;
     session.nextCandidateIndex = 0;
+    session.additionalBusesInput = '';
+    session.additionalDriversInput = '';
+    session.additionalBusesError = null;
+    session.additionalDriversError = null;
+    session.selectedScenarioRouteId = null;
+    session.costReportActionKey = null;
+    session.resourceCostReady = false;
+    session.calculatedPlanningContext = null;
     final future = () async {
       try {
         final candidates = await screenCandidates(

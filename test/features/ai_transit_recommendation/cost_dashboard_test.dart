@@ -2,6 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/ai_recommendation_analysis_session_store.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_dashboard_coordinator.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_recommendation_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/cost_dashboard_coordinator.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/cost_estimation_evidence_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/cost_recommendation_models.dart';
@@ -320,6 +323,132 @@ void main() {
     expect(session.referenceDate, isNull);
     expect(coordinator.analysisRouteIds, isEmpty);
   });
+
+  testWidgets('restores completed cost and AI insight from retained session', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(900, 2400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final sessionStore = AiRecommendationAnalysisSessionStore(
+      adminUserId: 'admin-a',
+    );
+    sessionStore.routeStop
+      ..screeningComplete = true
+      ..routesAnalysed = 5;
+    final costSession = sessionStore.cost
+      ..begin(periodStart, periodEnd, referenceDate)
+      ..screeningComplete = true
+      ..candidates.add(
+        CostDashboardCandidate(route: route('R1'), evidence: evidence('R1')),
+      )
+      ..selectedScenarioRouteId = 'R1'
+      ..additionalBusesInput = '2'
+      ..additionalDriversInput = '3'
+      ..resourceCostReady = true
+      ..costReportActionKey = 'increasePeakHourFrequency'
+      ..calculatedPlanningContext = const CostPlanningContext(
+        routeId: 'R1',
+        busFrequencyAction: 'increasePeakHourFrequency',
+        additionalBuses: 2,
+        additionalDrivers: 3,
+        estimatedBusAcquisitionCostRm: 1400000,
+        lowMonthlyDriverCostRm: 7500,
+        highMonthlyDriverCostRm: 10500,
+      )
+      ..entries.add(
+        CostDashboardEntry(
+          route: route('R1'),
+          result: result('R1', CostRecommendationAction.costEfficiencyReview),
+        ),
+      )
+      ..nextCandidateIndex = 1;
+    final frequencySession = sessionStore.busFrequency
+      ..recommendationResult = const BusFrequencyRecommendationResult(
+        status: BusFrequencyRecommendationStatus.available,
+        synthesis: BusFrequencyRecommendationSynthesis(
+          overallSummary: 'Retained frequency result',
+          routeRecommendations: [
+            BusFrequencyRouteRecommendationRecord(
+              routeId: 'R1',
+              action:
+                  BusFrequencyRecommendationAction.increasePeakHourFrequency,
+              conciseRationale: 'Increase service.',
+              evidenceRefs: ['route.R1.scheduled.summary'],
+              limitations: [],
+              source: BusFrequencyRecommendationSource.gemini,
+            ),
+          ],
+          recommendationGroups: [],
+          needsMoreEvidence: null,
+        ),
+        failure: null,
+        payload: null,
+      );
+    final coordinator = FakeDashboardCoordinator(candidates: candidates(1));
+    expect(costSession.hasRetainedCompletedState, isTrue);
+
+    Future<void> pumpRetainedPage() => tester.pumpWidget(
+      MaterialApp(
+        home: CostEstimationReportPage(
+          session: costSession,
+          coordinator: coordinator,
+          busFrequencySession: frequencySession,
+          preserveRetainedSession: true,
+          now: fixedNow,
+        ),
+      ),
+    );
+
+    await pumpRetainedPage();
+    await tester.pump();
+    expect(_resourceInput(tester, 'Additional Buses'), '2');
+    expect(_resourceInput(tester, 'Additional Drivers'), '3');
+    expect(find.text('Estimated Cost'), findsOneWidget);
+    expect(find.text('RM 1,400,000.00'), findsOneWidget);
+    expect(find.text('RM 7,500.00 \u2013 RM 10,500.00 / month'), findsOneWidget);
+    expect(find.byKey(const Key('route-result-R1')), findsOneWidget);
+    expect(find.text('Evidence-grounded fuel-cost result.'), findsOneWidget);
+
+    await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+    await tester.pump();
+    await pumpRetainedPage();
+    await tester.pump();
+
+    expect(costSession.selectedScenarioRouteId, 'R1');
+    expect(_resourceInput(tester, 'Additional Buses'), '2');
+    expect(_resourceInput(tester, 'Additional Drivers'), '3');
+    expect(find.text('Estimated Cost'), findsOneWidget);
+    expect(find.text('RM 1,400,000.00'), findsOneWidget);
+    expect(find.text('RM 7,500.00 \u2013 RM 10,500.00 / month'), findsOneWidget);
+    expect(find.byKey(const Key('route-result-R1')), findsOneWidget);
+    expect(find.text('Evidence-grounded fuel-cost result.'), findsOneWidget);
+    expect(coordinator.analysisRouteIds, isEmpty);
+
+    await tester.tap(find.byKey(const Key('analyse-routes')));
+    await tester.pumpAndSettle();
+
+    expect(costSession.entries, isEmpty);
+    expect(costSession.selectedScenarioRouteId, isNull);
+    expect(costSession.additionalBusesInput, isEmpty);
+    expect(costSession.additionalDriversInput, isEmpty);
+    expect(costSession.calculatedPlanningContext, isNull);
+    expect(frequencySession.recommendationResult, isNotNull);
+    expect(sessionStore.routeStop.screeningComplete, isTrue);
+    expect(sessionStore.routeStop.routesAnalysed, 5);
+  });
+}
+
+String _resourceInput(WidgetTester tester, String label) {
+  final field = tester.widget<TextField>(
+    find.byWidgetPredicate(
+      (widget) =>
+          widget is TextField &&
+          widget.decoration?.labelText?.startsWith(label) == true,
+    ),
+  );
+  return field.controller?.text ?? '';
 }
 
 Future<void> pumpDashboard(

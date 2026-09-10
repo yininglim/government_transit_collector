@@ -7,7 +7,11 @@ import 'package:government_transit_collector/features/ai_transit_recommendation/
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_evidence_repository.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_recommendation_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_recommendation_repository.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/district_route_stop_evidence_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/operational_evidence_models.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/recommendation_management_models.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/recommendation_management_repository.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_stop_recommendation_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/scheduled_service_evidence_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/presentation/bus_frequency_recommendation_page.dart';
 import 'package:government_transit_collector/features/peak_operation/data/peak_operation_models.dart';
@@ -365,6 +369,33 @@ void main() {
     expect(coordinator.analysisCalls, calls);
   });
 
+  testWidgets('saves a recommendation once and retains Saved through filters', (
+    tester,
+  ) async {
+    final gate = Completer<void>();
+    final management = RecordingManagementRepository(gate: gate);
+    final coordinator = FakeCoordinator(candidates(1));
+    await pumpPage(tester, coordinator, managementRepository: management);
+    await tapGenerate(tester);
+    await tester.pumpAndSettle();
+    final save = find.byKey(const Key('save-frequency-recommendation-R1'));
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pump();
+    expect(management.busFrequencySaveCalls, 1);
+    expect(tester.widget<OutlinedButton>(save).onPressed, isNull);
+    gate.complete();
+    await tester.pumpAndSettle();
+    expect(find.text('Saved'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('action-filter-maintain')));
+    await tester.pump();
+    expect(find.text('Saved'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('action-filter-all')));
+    await tester.pump();
+    expect(find.text('Saved'), findsOneWidget);
+  });
+
   testWidgets('limited routes remain separate and absent from grouped result', (
     tester,
   ) async {
@@ -486,6 +517,7 @@ void main() {
     expect(find.byKey(const Key('post-gemini-needs-evidence')), findsNothing);
     expect(find.byKey(const Key('group-route-R2')), findsNothing);
     expect(find.text('Needs More Evidence'), findsNothing);
+    expect(find.text('Save Recommendation'), findsOneWidget);
   });
 
   testWidgets('only insufficient evidence renders the actionable empty state', (
@@ -530,6 +562,7 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Needs More Evidence'), findsNothing);
+    expect(find.text('Save Recommendation'), findsNothing);
   });
 
   testWidgets('narrow portrait with long summary and route wraps safely', (
@@ -602,6 +635,7 @@ Future<void> pumpPage(
   WidgetTester tester,
   BusFrequencyDashboardCoordinator coordinator, {
   BusFrequencyDashboardSession? session,
+  RecommendationManagementRepository? managementRepository,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -609,6 +643,7 @@ Future<void> pumpPage(
         coordinator: coordinator,
         session: session,
         now: () => DateTime.utc(2026, 8, 31, 4),
+        managementRepository: managementRepository,
       ),
     ),
   );
@@ -939,3 +974,68 @@ class FakeCoordinator extends BusFrequencyDashboardCoordinator {
     endExclusiveUtc: endExclusiveUtc,
   );
 }
+
+class RecordingManagementRepository
+    implements RecommendationManagementRepository {
+  RecordingManagementRepository({this.gate});
+
+  final Completer<void>? gate;
+  int busFrequencySaveCalls = 0;
+
+  @override
+  Future<SavedRecommendation> saveBusFrequencyRecommendation({
+    required BusFrequencyRouteRecommendationRecord recommendation,
+    required String routeDisplayLabel,
+    required DateTime periodStart,
+    required DateTime periodEnd,
+    required BusFrequencyEvidence evidence,
+  }) async {
+    busFrequencySaveCalls++;
+    if (gate != null) await gate!.future;
+    return _savedRecommendation(recommendation.routeId, routeDisplayLabel);
+  }
+
+  @override
+  Future<SavedRecommendation> saveRouteBusStopRecommendation({
+    required RouteStopRecommendationRecord recommendation,
+    required String routeDisplayLabel,
+    required DateTime periodStart,
+    required DateTime periodEnd,
+    required DistrictRouteStopEvidence evidence,
+  }) => throw UnimplementedError();
+
+  @override
+  Future<List<SavedRecommendation>> loadSavedRecommendations() async =>
+      const [];
+
+  @override
+  Future<SavedRecommendation> updateRecommendation({
+    required SavedRecommendation recommendation,
+    required RecommendationReviewStatus status,
+    required String? adminNote,
+  }) => throw UnimplementedError();
+
+  @override
+  Future<void> deleteRecommendation(String recommendationId) =>
+      throw UnimplementedError();
+}
+
+SavedRecommendation _savedRecommendation(String routeId, String routeLabel) =>
+    SavedRecommendation(
+      recommendationId: 'saved-$routeId',
+      feature: RecommendationManagementFeature.busFrequency,
+      routeId: routeId,
+      routeDisplayLabel: routeLabel,
+      actions: const ['maintainService'],
+      title: 'Maintain service — $routeLabel',
+      rationale: 'Validated rationale.',
+      limitations: const [],
+      evidenceReferences: const [],
+      targetStopIds: const [],
+      candidateArea: null,
+      status: RecommendationReviewStatus.pending,
+      adminNote: null,
+      createdAt: DateTime(2026, 9, 10),
+      updatedAt: null,
+      reviewedAt: null,
+    );
