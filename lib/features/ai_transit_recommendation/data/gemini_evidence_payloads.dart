@@ -218,6 +218,17 @@ class BusFrequencyGeminiPayloadBuilder {
 class RouteStopGeminiPayloadBuilder {
   const RouteStopGeminiPayloadBuilder();
 
+  static const orderedStopFieldOrder = <String>[
+    'stop_id',
+    'stop_sequence',
+    'arrival_seconds_min',
+    'arrival_seconds_max',
+    'arrival_missing_count',
+    'departure_seconds_min',
+    'departure_seconds_max',
+    'departure_missing_count',
+  ];
+
   RouteStopGeminiEvidencePayload buildFeature(
     List<DistrictRouteStopEvidence> evidence,
   ) {
@@ -228,6 +239,7 @@ class RouteStopGeminiPayloadBuilder {
     }
     final routeIds = <String>{};
     final routes = <Map<String, dynamic>>[];
+    final sharedStopCatalog = <String, Map<String, dynamic>>{};
     for (final item in evidence) {
       final routeId = item.routeStopEvidence.routeId.trim();
       if (routeId.isEmpty || !routeIds.add(routeId)) {
@@ -236,9 +248,33 @@ class RouteStopGeminiPayloadBuilder {
         );
       }
       final single = build(item).toJson();
+      single.remove('ordered_stop_field_order');
+      final network = single['network'] as Map<String, dynamic>;
+      final localCatalog = network.remove('stop_catalog') as List<dynamic>;
+      final servedStopIds = <String>[];
+      for (final rawStop in localCatalog) {
+        final stop = rawStop as Map<String, dynamic>;
+        final stopId = stop['stop_id'] as String;
+        servedStopIds.add(stopId);
+        final metadata = <String, dynamic>{
+          'stop_name': stop['stop_name'],
+          'latitude': stop['latitude'],
+          'longitude': stop['longitude'],
+          'district_membership': stop['district_membership'],
+        };
+        final existing = sharedStopCatalog[stopId];
+        if (existing != null && !_sameStopCatalogEntry(existing, metadata)) {
+          throw RouteStopGeminiPayloadBuildException(
+            'Conflicting deterministic metadata for stop $stopId.',
+          );
+        }
+        sharedStopCatalog[stopId] = metadata;
+      }
+      network['served_stop_ids'] = servedStopIds;
       final namespace = 'route.${Uri.encodeComponent(routeId)}.';
       routes.add(_namespaceRouteStopPayload(single, namespace));
     }
+    final sortedStopIds = sharedStopCatalog.keys.toList()..sort();
     return RouteStopGeminiEvidencePayload({
       'payload_type': 'route_stop_feature_evidence',
       'analysis_period': _period(
@@ -246,6 +282,10 @@ class RouteStopGeminiPayloadBuilder {
         evidence.first.routeStopEvidence.periodEnd,
       ),
       'eligible_route_ids': routeIds.toList(growable: false),
+      'ordered_stop_field_order': orderedStopFieldOrder,
+      'shared_stop_catalog': {
+        for (final stopId in sortedStopIds) stopId: sharedStopCatalog[stopId],
+      },
       'routes': routes,
     });
   }
@@ -403,6 +443,7 @@ class RouteStopGeminiPayloadBuilder {
 
     return RouteStopGeminiEvidencePayload({
       'payload_type': 'route_stop_evidence',
+      'ordered_stop_field_order': orderedStopFieldOrder,
       'route': _route(source.network.route),
       'analysis_period': _period(source.periodStart, source.periodEnd),
       'district_boundary': {
@@ -477,6 +518,12 @@ Map<String, dynamic> _namespaceRouteStopPayload(
           return MapEntry(key, '$namespace$item');
         }
         if (key == 'evidence_references' && item is List<dynamic>) {
+          return MapEntry(
+            key,
+            item.map((reference) => '$namespace$reference').toList(),
+          );
+        }
+        if (key == 'evidence_refs' && item is List<dynamic>) {
           return MapEntry(
             key,
             item.map((reference) => '$namespace$reference').toList(),
@@ -583,20 +630,16 @@ class _StopScheduleSummary {
     }
   }
 
-  Map<String, dynamic> toJson() => {
-    'stop_id': stopId,
-    'stop_sequence': stopSequence,
-    'arrival_seconds_min_max_missing': [
-      _minimumArrivalSeconds,
-      _maximumArrivalSeconds,
-      _missingArrivalCount,
-    ],
-    'departure_seconds_min_max_missing': [
-      _minimumDepartureSeconds,
-      _maximumDepartureSeconds,
-      _missingDepartureCount,
-    ],
-  };
+  List<dynamic> toJson() => [
+    stopId,
+    stopSequence,
+    _minimumArrivalSeconds,
+    _maximumArrivalSeconds,
+    _missingArrivalCount,
+    _minimumDepartureSeconds,
+    _maximumDepartureSeconds,
+    _missingDepartureCount,
+  ];
 }
 
 int _minimum(int? current, int value) =>

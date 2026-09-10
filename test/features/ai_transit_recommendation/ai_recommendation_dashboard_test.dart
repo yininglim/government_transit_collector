@@ -13,6 +13,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: AiRecommendationDashboardPage(
+          preloadRouteStops: false,
           busFrequencyPageBuilder: (session) {
             busSessions.add(session);
             return const Scaffold(body: Text('Bus Session'));
@@ -49,6 +50,7 @@ void main() {
       MaterialApp(
         key: UniqueKey(),
         home: AiRecommendationDashboardPage(
+          preloadRouteStops: false,
           busFrequencyPageBuilder: (session) {
             busSessions.add(session);
             return const Scaffold(body: Text('Bus Session'));

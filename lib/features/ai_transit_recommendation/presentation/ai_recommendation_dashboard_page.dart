@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_dashboard_coordinator.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/cost_dashboard_coordinator.dart';
@@ -11,6 +13,9 @@ class AiRecommendationDashboardPage extends StatefulWidget {
     this.busFrequencyPageBuilder,
     this.routeStopPageBuilder,
     this.costPageBuilder,
+    this.routeStopCoordinator,
+    this.now,
+    this.preloadRouteStops = true,
     super.key,
   });
 
@@ -19,6 +24,9 @@ class AiRecommendationDashboardPage extends StatefulWidget {
   final Widget Function(RouteStopDashboardSession session)?
   routeStopPageBuilder;
   final Widget Function(CostDashboardSession session)? costPageBuilder;
+  final RouteStopDashboardCoordinator? routeStopCoordinator;
+  final DateTime Function()? now;
+  final bool preloadRouteStops;
 
   @override
   State<AiRecommendationDashboardPage> createState() =>
@@ -30,6 +38,26 @@ class _AiRecommendationDashboardPageState
   final _busFrequencySession = BusFrequencyDashboardSession();
   final _routeStopSession = RouteStopDashboardSession();
   final _costSession = CostDashboardSession();
+  RouteStopDashboardCoordinator? _routeStopCoordinator;
+
+  RouteStopDashboardCoordinator get _routeCoordinator =>
+      _routeStopCoordinator ??= RouteStopDashboardCoordinator();
+
+  @override
+  void initState() {
+    super.initState();
+    _routeStopCoordinator = widget.routeStopCoordinator;
+    if (widget.preloadRouteStops) {
+      final period = routeStopAnalysisPeriod(now: widget.now);
+      unawaited(
+        _routeCoordinator.prepareSession(
+          session: _routeStopSession,
+          startUtc: period.startUtc,
+          endExclusiveUtc: period.endUtc,
+        ),
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -72,6 +100,8 @@ class _AiRecommendationDashboardPageState
                       widget.routeStopPageBuilder?.call(_routeStopSession) ??
                       RouteBusStopRecommendationPage(
                         session: _routeStopSession,
+                        coordinator: _routeCoordinator,
+                        now: widget.now,
                       ),
                 ),
               ),

@@ -5,6 +5,8 @@ import 'package:government_transit_collector/features/ai_transit_recommendation/
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_network_evidence_repository.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_stop_evidence_models.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/route_geometry.dart';
+import 'package:government_transit_collector/features/route_performance/data/route_performance_models.dart';
+import 'package:government_transit_collector/features/route_performance/data/route_performance_repository.dart';
 
 abstract interface class RouteStopEvidenceRepository {
   Future<RouteStopEvidence> loadEvidence({
@@ -16,16 +18,38 @@ abstract interface class RouteStopEvidenceRepository {
 
 class DefaultRouteStopEvidenceRepository
     implements RouteStopEvidenceRepository {
-  DefaultRouteStopEvidenceRepository({
+  factory DefaultRouteStopEvidenceRepository({
     RouteNetworkEvidenceRepository? routeNetworkRepository,
     OperationalEvidenceRepository? operationalRepository,
     AdminFeedbackRepository? feedbackRepository,
-  }) : _routeNetworkRepository =
-           routeNetworkRepository ?? DefaultRouteNetworkEvidenceRepository(),
-       _operationalRepository =
-           operationalRepository ?? DefaultOperationalEvidenceRepository(),
-       _feedbackRepository =
-           feedbackRepository ?? DefaultAdminFeedbackRepository();
+    RoutePerformanceRepository? routeRepository,
+  }) {
+    final sharedRouteRepository =
+        routeRepository ??
+        _SharedRoutePerformanceRepository(DefaultRoutePerformanceRepository());
+    return DefaultRouteStopEvidenceRepository._(
+      routeNetworkRepository:
+          routeNetworkRepository ??
+          DefaultRouteNetworkEvidenceRepository(
+            routeRepository: sharedRouteRepository,
+          ),
+      operationalRepository:
+          operationalRepository ??
+          DefaultOperationalEvidenceRepository(
+            routePerformanceRepository: sharedRouteRepository,
+          ),
+      feedbackRepository: feedbackRepository ?? DefaultAdminFeedbackRepository(),
+    );
+
+  }
+
+  DefaultRouteStopEvidenceRepository._({
+    required RouteNetworkEvidenceRepository routeNetworkRepository,
+    required OperationalEvidenceRepository operationalRepository,
+    required AdminFeedbackRepository feedbackRepository,
+  }) : _routeNetworkRepository = routeNetworkRepository,
+       _operationalRepository = operationalRepository,
+       _feedbackRepository = feedbackRepository;
 
   final RouteNetworkEvidenceRepository _routeNetworkRepository;
   final OperationalEvidenceRepository _operationalRepository;
@@ -121,6 +145,40 @@ class DefaultRouteStopEvidenceRepository
       consecutiveStops: spacing,
     );
   }
+}
+
+class _SharedRoutePerformanceRepository implements RoutePerformanceRepository {
+  _SharedRoutePerformanceRepository(this._delegate);
+
+  final RoutePerformanceRepository _delegate;
+  Future<List<RoutePerformanceRoute>>? _routesFuture;
+
+  @override
+  Future<List<RoutePerformanceRoute>> loadRoutes() {
+    final existing = _routesFuture;
+    if (existing != null) return existing;
+    final future = _delegate.loadRoutes();
+    _routesFuture = future;
+    future.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace __) {
+        if (identical(_routesFuture, future)) _routesFuture = null;
+      },
+    );
+    return future;
+  }
+
+  @override
+  Future<RoutePerformanceData> loadRoutePerformance({
+    required String routeId,
+    required DateTime startUtc,
+    required DateTime endExclusiveUtc,
+  }) =>
+      _delegate.loadRoutePerformance(
+        routeId: routeId,
+        startUtc: startUtc,
+        endExclusiveUtc: endExclusiveUtc,
+      );
 }
 
 class RouteStopEvidenceReadException implements Exception {

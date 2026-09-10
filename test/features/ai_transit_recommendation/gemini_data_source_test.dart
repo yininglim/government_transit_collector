@@ -244,6 +244,22 @@ void main() {
     expect(requestCount, 1);
   });
 
+  test('retains sanitized provider error details for HTTP failures', () async {
+    final source = _source(
+      (_) async => http.Response(
+        jsonEncode({
+          'error': {'code': 400, 'message': 'Schema rejected.'},
+        }),
+        400,
+      ),
+    );
+    final error = await _captureFailure(source, request);
+    expect(error.failure, GeminiTransportFailure.http);
+    expect(error.statusCode, 400);
+    expect(error.providerErrorCode, '400');
+    expect(error.providerErrorMessage, 'Schema rejected.');
+  });
+
   for (final statusCode in [401, 403]) {
     test('maps HTTP $statusCode to authentication failure', () async {
       final source = _source((_) async => http.Response('failure', statusCode));

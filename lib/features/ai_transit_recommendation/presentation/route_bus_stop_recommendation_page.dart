@@ -1,14 +1,16 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
-import 'package:government_transit_collector/core/time/transit_service_time.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/district_route_stop_evidence_repository.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/district_route_stop_evidence_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_stop_dashboard_coordinator.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_network_evidence_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_stop_recommendation_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_stop_recommendation_repository.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/presentation/route_stop_network_map.dart';
 import 'package:government_transit_collector/features/journey_map/data/journey_map_models.dart';
+import 'package:government_transit_collector/features/journey_map/data/shape_segment.dart';
 import 'package:government_transit_collector/features/route_performance/data/route_performance_repository.dart';
-import 'package:timezone/timezone.dart' as timezone;
 
 class RouteBusStopRecommendationPage extends StatefulWidget {
   const RouteBusStopRecommendationPage({
@@ -18,6 +20,7 @@ class RouteBusStopRecommendationPage extends StatefulWidget {
     this.evidenceRepository,
     this.routeRepository,
     this.now,
+    this.baseMapEnabled = true,
     super.key,
   });
 
@@ -27,6 +30,7 @@ class RouteBusStopRecommendationPage extends StatefulWidget {
   final DistrictRouteStopEvidenceRepository? evidenceRepository;
   final RoutePerformanceRepository? routeRepository;
   final DateTime Function()? now;
+  final bool baseMapEnabled;
 
   @override
   State<RouteBusStopRecommendationPage> createState() =>
@@ -37,6 +41,7 @@ class _RouteBusStopRecommendationPageState
     extends State<RouteBusStopRecommendationPage> {
   late final RouteStopDashboardCoordinator _coordinator;
   late final RouteStopDashboardSession _session;
+  final _mapSectionKey = GlobalKey();
   bool _screening = false;
   bool _analysing = false;
   bool _retrying = false;
@@ -48,9 +53,7 @@ class _RouteBusStopRecommendationPageState
   DateTime? get _periodStartUtc => _session.periodStartUtc;
   DateTime? get _periodEndUtc => _session.periodEndUtc;
   bool get _empty => _session.empty;
-  set _empty(bool value) => _session.empty = value;
   bool get _setupFailure => _session.setupFailure;
-  set _setupFailure(bool value) => _session.setupFailure = value;
 
   @override
   void initState() {
@@ -76,48 +79,25 @@ class _RouteBusStopRecommendationPageState
   }
 
   ({DateTime startUtc, DateTime endUtc}) _newPeriod() {
-    final now = currentTransitServiceDateTime(now: widget.now);
-    final today = timezone.TZDateTime(
-      transitServiceLocation,
-      now.year,
-      now.month,
-      now.day,
-    );
-    return (
-      startUtc: today.subtract(const Duration(days: 29)).toUtc(),
-      endUtc: today.add(const Duration(days: 1)).toUtc(),
-    );
+    return routeStopAnalysisPeriod(now: widget.now);
   }
 
   Future<void> _prepareEvidence() async {
     if (_screening || _analysing || _retrying) return;
     final period = _newPeriod();
-    setState(() {
-      _session.begin(period.startUtc, period.endUtc);
-      _screening = true;
-    });
-    try {
-      final result = await _coordinator.screenRoutes(
-        startUtc: period.startUtc,
-        endExclusiveUtc: period.endUtc,
-      );
-      if (!mounted) return;
-      setState(() {
-        _candidates.addAll(result.candidates);
-        _excludedRoutes.addAll(result.excludedRoutes);
-        _session.routesAnalysed = result.routesAnalysed;
-        _session.screeningComplete = true;
-        _session.selectedRouteId = result.candidates.firstOrNull?.route.routeId;
-        _screening = false;
-        _empty = result.candidates.isEmpty;
-      });
-    } on Object {
-      if (!mounted) return;
-      setState(() {
-        _screening = false;
-        _setupFailure = true;
-      });
-    }
+    setState(() => _screening = true);
+    await _coordinator.prepareSession(
+      session: _session,
+      startUtc: period.startUtc,
+      endExclusiveUtc: period.endUtc,
+    );
+    if (!mounted) return;
+    setState(() => _screening = false);
+  }
+
+  Future<void> _startNewAnalysis() async {
+    _session.clear();
+    await _prepareEvidence();
   }
 
   Future<void> _generateRecommendations() async {
@@ -184,6 +164,25 @@ class _RouteBusStopRecommendationPageState
               _header(),
               const SizedBox(height: 16),
               _analysisCard(),
+              if (!_session.screeningComplete && !_setupFailure) ...[
+                const SizedBox(height: 16),
+                Card(
+                  key: const Key('route-map-loading-shell'),
+                  child: SizedBox(
+                    height: 280,
+                    child: Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: const [
+                          CircularProgressIndicator(),
+                          SizedBox(height: 12),
+                          Text('Preparing existing route network…'),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
               if (_session.screeningComplete) ...[
                 const SizedBox(height: 16),
                 _evidenceOverview(),
@@ -290,7 +289,7 @@ class _RouteBusStopRecommendationPageState
             key: const Key('analyse-routes'),
             onPressed: _screening || _analysing || _retrying
                 ? null
-                : _prepareEvidence,
+                : _startNewAnalysis,
             icon: const Icon(Icons.refresh),
             label: const Text('Start New Analysis'),
           ),
@@ -445,6 +444,7 @@ class _RouteBusStopRecommendationPageState
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            SizedBox(key: _mapSectionKey),
             Text(
               'Existing Route Network',
               style: Theme.of(context).textTheme.titleLarge,
@@ -470,7 +470,12 @@ class _RouteBusStopRecommendationPageState
               ],
               onChanged: (routeId) {
                 if (routeId == null) return;
-                setState(() => _session.selectedRouteId = routeId);
+                setState(() {
+                  _session.selectedRouteId = routeId;
+                  _session.selectedRecommendationAction = null;
+                  _session.selectedCandidateArea = null;
+                  _session.selectedTargetStopIds = const [];
+                });
               },
             ),
             const SizedBox(height: 12),
@@ -488,8 +493,16 @@ class _RouteBusStopRecommendationPageState
                     'existing-network-map-${selected.route.routeId}',
                   ),
                   evidence: selected.evidence,
+                  recommendationAction: _session.selectedRecommendationAction,
+                  candidateArea: _session.selectedCandidateArea,
+                  targetStopIds: _session.selectedTargetStopIds,
+                  baseMapEnabled: widget.baseMapEnabled,
                 ),
               ),
+              if (_session.selectedRecommendationAction case final action?) ...[
+                const SizedBox(height: 10),
+                _mapRecommendationContext(action),
+              ],
               if (!_selectedHasShape(selected))
                 const Padding(
                   padding: EdgeInsets.only(top: 8),
@@ -762,7 +775,7 @@ class _RouteBusStopRecommendationPageState
     return Card(
       key: const Key('route-stop-grouped-result'),
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 20, 16, 16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -772,21 +785,15 @@ class _RouteBusStopRecommendationPageState
             ),
             const SizedBox(height: 8),
             Text(synthesis.overallSummary),
-            for (final group in synthesis.recommendationGroups) ...[
+            for (final group in _visibleRecommendationGroups(synthesis)) ...[
               const SizedBox(height: 16),
               _actionGroup(group),
             ],
-            if (synthesis.needsMoreEvidence case final group?) ...[
-              const Divider(height: 28),
-              ExpansionTile(
-                key: const Key('needs-more-evidence'),
-                tilePadding: EdgeInsets.zero,
-                title: const Text('Needs More Evidence'),
-                subtitle: Text('${group.routeIds.length} Routes'),
-                children: [
-                  for (final routeId in group.routeIds)
-                    ListTile(title: Text(_routeName(routeId))),
-                ],
+            if (_visibleRecommendationGroups(synthesis).isEmpty) ...[
+              const SizedBox(height: 16),
+              const Text(
+                'No actionable recommendations are available with the current evidence.',
+                key: Key('no-actionable-recommendations'),
               ),
             ],
           ],
@@ -795,8 +802,29 @@ class _RouteBusStopRecommendationPageState
     );
   }
 
+  List<RouteStopRecommendationGroup> _visibleRecommendationGroups(
+    RouteStopRecommendationSynthesis synthesis,
+  ) {
+    final groups = synthesis.recommendationGroups
+        .where(
+          (group) =>
+              group.action !=
+              RouteStopRecommendationAction.insufficientEvidence,
+        )
+        .toList();
+    groups.sort(
+      (left, right) => left.action.index.compareTo(right.action.index),
+    );
+    return groups;
+  }
+
   Widget _actionGroup(RouteStopRecommendationGroup group) => Card.outlined(
     key: Key('action-group-${group.action.name}'),
+    color:
+        group.action ==
+            RouteStopRecommendationAction.maintainCurrentConfiguration
+        ? Theme.of(context).colorScheme.surfaceContainerLowest
+        : null,
     child: Padding(
       padding: const EdgeInsets.all(12),
       child: Column(
@@ -812,15 +840,259 @@ class _RouteBusStopRecommendationPageState
           Text(group.summary),
           const SizedBox(height: 10),
           for (final routeId in group.routeIds)
-            Padding(
-              key: Key('group-route-$routeId'),
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: Text(_routeName(routeId)),
-            ),
+            _recommendationRoute(group, routeId),
         ],
       ),
     ),
   );
+
+  Widget _recommendationRoute(
+    RouteStopRecommendationGroup group,
+    String routeId,
+  ) {
+    final candidate = _candidate(routeId);
+    final record = _recommendationRecord(routeId);
+    final rationale = record?.conciseRationale;
+    final targetStopNames = group.action ==
+            RouteStopRecommendationAction.stopImprovement
+        ? _targetStopNames(candidate, record?.targetStopIds ?? const [])
+        : const <String>[];
+    return Container(
+      key: Key('group-route-$routeId'),
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: Color(0xFFE0E0E0))),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            _routeName(routeId),
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+          if (targetStopNames.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text('Target Stops', style: Theme.of(context).textTheme.labelLarge),
+            const SizedBox(height: 2),
+            for (final name in targetStopNames) Text(name),
+          ],
+          if (rationale != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              'AI Rationale',
+              style: Theme.of(context).textTheme.labelLarge,
+            ),
+            const SizedBox(height: 2),
+            Text(rationale),
+          ],
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 8,
+            runSpacing: 4,
+            children: [
+              TextButton(
+                key: Key('view-recommendation-evidence-$routeId'),
+                onPressed: candidate == null
+                    ? null
+                    : () => _showDeterministicEvidence(candidate),
+                child: const Text('View Evidence'),
+              ),
+              OutlinedButton.icon(
+                key: Key('show-on-map-$routeId'),
+                onPressed: candidate == null
+                    ? null
+                    : () => _showOnMap(group, routeId),
+                icon: const Icon(Icons.map_outlined),
+                label: const Text('Show on Map'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  RouteStopDashboardCandidate? _candidate(String routeId) => _candidates
+      .where((candidate) => candidate.route.routeId == routeId)
+      .firstOrNull;
+
+  RouteStopRecommendationRecord? _recommendationRecord(String routeId) =>
+      _result?.synthesis?.routeRecommendations
+          .where((record) => record.routeId == routeId)
+          .firstOrNull;
+
+  List<String> _targetStopNames(
+    RouteStopDashboardCandidate? candidate,
+    List<String> targetStopIds,
+  ) {
+    if (candidate == null || targetStopIds.isEmpty) return const [];
+    final namesById = <String, String>{};
+    for (final stop in candidate.evidence.routeStopEvidence.network.trips
+        .expand((trip) => trip.stops)) {
+      final name = stop.stopName?.trim();
+      if (targetStopIds.contains(stop.stopId) &&
+          name != null &&
+          name.isNotEmpty) {
+        namesById.putIfAbsent(stop.stopId, () => name);
+      }
+    }
+    return [
+      for (final stopId in targetStopIds)
+        if (namesById[stopId] case final name?) name,
+    ];
+  }
+
+  void _showOnMap(RouteStopRecommendationGroup group, String routeId) {
+    final record = _recommendationRecord(routeId);
+    final candidateArea = record?.actions.contains(
+              RouteStopRecommendationAction.additionalStopCoverage,
+            ) ==
+            true
+        ? record?.candidateArea
+        : null;
+    setState(() {
+      _session.selectedRouteId = routeId;
+      _session.selectedRecommendationAction = group.action;
+      _session.selectedCandidateArea = candidateArea;
+      _session.selectedTargetStopIds = record?.actions.contains(
+                RouteStopRecommendationAction.stopImprovement,
+              ) ==
+              true
+          ? record!.targetStopIds
+          : const [];
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final mapContext = _mapSectionKey.currentContext;
+      if (mapContext != null) {
+        Scrollable.ensureVisible(
+          mapContext,
+          duration: const Duration(milliseconds: 250),
+          alignment: .05,
+        );
+      }
+    });
+  }
+
+  Widget _mapRecommendationContext(RouteStopRecommendationAction action) {
+    final area = _session.selectedCandidateArea;
+    final targetStopNames = _targetStopNames(
+      _selectedCandidate,
+      _session.selectedTargetStopIds,
+    );
+    final rationale = _session.selectedRouteId == null
+        ? null
+        : _recommendationRecord(_session.selectedRouteId!)?.conciseRationale;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.secondaryContainer,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              _selectedCandidate?.route.displayName ?? 'Selected Route',
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Recommendation',
+              style: Theme.of(context).textTheme.labelLarge,
+            ),
+            Text(_actionLabel(action)),
+            if (action == RouteStopRecommendationAction.stopImprovement &&
+                targetStopNames.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Target Stops',
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+              for (final name in targetStopNames) Text(name),
+            ],
+            if (action == RouteStopRecommendationAction.stopImprovement &&
+                area != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Also Recommended',
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+              const Text('Additional Stop Coverage'),
+              const SizedBox(height: 8),
+              Text(
+                'Suggested Area',
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+              Text('Between ${area.fromStopName} and ${area.toStopName}'),
+              if (!_candidateAreaHasUsableShape(_selectedCandidate!, area))
+                const Text(
+                  'An exact map marker is unavailable; the validated boundary stops are highlighted.',
+                ),
+            ],
+            if (action ==
+                    RouteStopRecommendationAction.additionalStopCoverage &&
+                area != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Suggested Area',
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+              Text('Between ${area.fromStopName} and ${area.toStopName}'),
+              if (!_candidateAreaHasUsableShape(_selectedCandidate!, area))
+                const Text(
+                  'An exact map marker is unavailable; the validated boundary stops are highlighted.',
+                ),
+            ],
+            if (action ==
+                    RouteStopRecommendationAction.additionalStopCoverage &&
+                targetStopNames.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Also Recommended',
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+              const Text('Stop Improvement'),
+              const SizedBox(height: 8),
+              Text(
+                'Target Stops',
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+              for (final name in targetStopNames) Text(name),
+            ],
+            if (action != RouteStopRecommendationAction.stopImprovement &&
+                action !=
+                    RouteStopRecommendationAction.additionalStopCoverage &&
+                area != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Suggested Area',
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+              Text('Between ${area.fromStopName} and ${area.toStopName}'),
+              if (!_candidateAreaHasUsableShape(_selectedCandidate!, area))
+                const Text(
+                  'An exact map marker is unavailable; the validated boundary stops are highlighted.',
+                ),
+            ],
+            if (rationale != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                'AI Rationale',
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+              Text(rationale),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  bool _candidateAreaHasUsableShape(
+    RouteStopDashboardCandidate candidate,
+    RouteStopCandidateArea area,
+  ) => _candidateShapeSegment(candidate.evidence, area) != null;
 
   String _routeName(String routeId) =>
       _candidates
@@ -845,156 +1117,156 @@ class _RouteBusStopRecommendationPageState
 }
 
 class _ExistingNetworkMap extends StatelessWidget {
-  const _ExistingNetworkMap({required this.evidence, super.key});
+  const _ExistingNetworkMap({
+    required this.evidence,
+    required this.recommendationAction,
+    required this.candidateArea,
+    required this.targetStopIds,
+    required this.baseMapEnabled,
+    super.key,
+  });
 
   final DistrictRouteStopEvidence evidence;
+  final RouteStopRecommendationAction? recommendationAction;
+  final RouteStopCandidateArea? candidateArea;
+  final List<String> targetStopIds;
+  final bool baseMapEnabled;
 
   @override
   Widget build(BuildContext context) {
+    final area = candidateArea;
     final trips = evidence.routeStopEvidence.network.trips;
-    final shapeLines = [
+    final routeLines = [
       for (final trip in trips)
         trip.shapePoints
             .where((point) => _usableCoordinate(point.coordinate))
             .toList()
           ..sort((first, second) => first.sequence.compareTo(second.sequence)),
-    ];
+    ].map((line) => line.map((point) => point.coordinate).toList()).toList();
     final uniqueStops = <String, AiRouteStopEvidence>{};
     for (final stop in trips.expand((trip) => trip.stops)) {
       if (_usableCoordinate(stop.coordinate)) {
         uniqueStops.putIfAbsent(stop.stopId, () => stop);
       }
     }
-    final coordinates = <MapCoordinate>[
-      for (final line in shapeLines)
-        for (final point in line) point.coordinate,
-      for (final stop in uniqueStops.values) stop.coordinate!,
-    ];
-    if (coordinates.isEmpty) {
-      return const DecoratedBox(
-        key: Key('existing-network-map'),
-        decoration: BoxDecoration(color: Color(0xFFF1F3F4)),
-        child: Center(
-          child: Padding(
-            padding: EdgeInsets.all(16),
-            child: Text('No existing route or stop coordinates are available.'),
-          ),
+    final candidateSegment = area == null
+        ? null
+        : _candidateShapeSegment(evidence, area);
+    final candidateMidpoint = candidateSegment == null
+        ? null
+        : _midpointAlong(candidateSegment);
+    final markers = <RouteStopMapMarker>[
+      for (final stop in uniqueStops.values)
+        RouteStopMapMarker(
+          id: stop.stopId,
+          label: stop.stopName?.trim().isNotEmpty == true
+              ? stop.stopName!
+              : stop.stopId,
+          coordinate: stop.coordinate!,
+          isTargetStop: targetStopIds.contains(stop.stopId),
+          role: _isCandidateBoundary(stop.stopId, area)
+              ? RouteStopMapMarkerRole.candidateBoundary
+              : targetStopIds.contains(stop.stopId)
+              ? RouteStopMapMarkerRole.stopToImprove
+              : RouteStopMapMarkerRole.existingStop,
         ),
+      if (candidateMidpoint != null)
+        RouteStopMapMarker(
+          id: 'recommended-area',
+          label: 'Recommended Stop Area',
+          coordinate: candidateMidpoint,
+          role: RouteStopMapMarkerRole.recommendedArea,
+        ),
+    ];
+    return RouteStopNetworkMap(
+      key: ValueKey(
+        'route-stop-network-map-${evidence.routeStopEvidence.routeId}-${recommendationAction?.name}-${area?.fromStopId}',
+      ),
+      routeLines: routeLines,
+      markers: markers,
+      candidateSegment: candidateSegment,
+      showCandidateLegend: area != null,
+      showTargetLegend: targetStopIds.isNotEmpty,
+      initialFocus: switch (recommendationAction) {
+        RouteStopRecommendationAction.stopImprovement =>
+          RouteStopMapInitialFocus.stopImprovement,
+        RouteStopRecommendationAction.additionalStopCoverage =>
+          RouteStopMapInitialFocus.additionalCoverage,
+        _ => RouteStopMapInitialFocus.allHighlights,
+      },
+      recommendationAreaDescription: area == null
+          ? null
+          : 'Between ${area.fromStopName} and ${area.toStopName}',
+      baseMapEnabled: baseMapEnabled,
+    );
+  }
+}
+
+bool _isCandidateBoundary(
+  String stopId,
+  RouteStopCandidateArea? candidateArea,
+) =>
+    candidateArea != null &&
+    (stopId == candidateArea.fromStopId || stopId == candidateArea.toStopId);
+
+List<MapCoordinate>? _candidateShapeSegment(
+  DistrictRouteStopEvidence evidence,
+  RouteStopCandidateArea area,
+) {
+  for (final trip in evidence.routeStopEvidence.network.trips) {
+    final orderedStops = [...trip.stops]
+      ..sort((left, right) => left.stopSequence.compareTo(right.stopSequence));
+    for (var index = 0; index + 1 < orderedStops.length; index++) {
+      final from = orderedStops[index];
+      final to = orderedStops[index + 1];
+      if (from.stopId != area.fromStopId || to.stopId != area.toStopId) {
+        continue;
+      }
+      if (!_usableCoordinate(from.coordinate) ||
+          !_usableCoordinate(to.coordinate) ||
+          trip.shapePoints.length < 2) {
+        return null;
+      }
+      final segment = segmentShape(
+        shapePoints: trip.shapePoints,
+        boarding: from.coordinate!,
+        alighting: to.coordinate!,
+      );
+      if (segment.usedFullShapeFallback || segment.points.length < 2) {
+        return null;
+      }
+      return segment.points;
+    }
+  }
+  return null;
+}
+
+MapCoordinate _midpointAlong(List<MapCoordinate> points) {
+  final lengths = <double>[];
+  var total = 0.0;
+  for (var index = 1; index < points.length; index++) {
+    final latitude = points[index].latitude - points[index - 1].latitude;
+    final longitude = points[index].longitude - points[index - 1].longitude;
+    final length = math.sqrt(latitude * latitude + longitude * longitude);
+    lengths.add(length);
+    total += length;
+  }
+  final target = total / 2;
+  var travelled = 0.0;
+  for (var index = 0; index < lengths.length; index++) {
+    final length = lengths[index];
+    if (travelled + length >= target) {
+      final ratio = length == 0 ? 0.0 : (target - travelled) / length;
+      final from = points[index];
+      final to = points[index + 1];
+      return MapCoordinate(
+        from.latitude + (to.latitude - from.latitude) * ratio,
+        from.longitude + (to.longitude - from.longitude) * ratio,
       );
     }
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final projection = _MapProjection(coordinates, constraints.biggest);
-        return ClipRect(
-          child: InteractiveViewer(
-            key: const Key('existing-network-map'),
-            minScale: 1,
-            maxScale: 5,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                const ColoredBox(color: Color(0xFFF1F3F4)),
-                if (shapeLines.any((line) => line.length >= 2))
-                  CustomPaint(
-                    key: const Key('existing-route-shape'),
-                    painter: _ExistingNetworkPainter(
-                      lines: [
-                        for (final line in shapeLines)
-                          [
-                            for (final point in line)
-                              projection.offset(point.coordinate),
-                          ],
-                      ],
-                    ),
-                  ),
-                for (final stop in uniqueStops.values)
-                  Positioned(
-                    key: Key('existing-stop-marker-${stop.stopId}'),
-                    left: projection.offset(stop.coordinate!).dx - 14,
-                    top: projection.offset(stop.coordinate!).dy - 14,
-                    child: Tooltip(
-                      message: stop.stopName?.trim().isNotEmpty == true
-                          ? stop.stopName!
-                          : stop.stopId,
-                      child: Icon(
-                        Icons.location_on,
-                        size: 28,
-                        color: Theme.of(context).colorScheme.primary,
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
+    travelled += length;
   }
-}
-
-class _MapProjection {
-  _MapProjection(List<MapCoordinate> coordinates, this.size)
-    : minimumLatitude = coordinates
-          .map((coordinate) => coordinate.latitude)
-          .reduce((first, second) => first < second ? first : second),
-      maximumLatitude = coordinates
-          .map((coordinate) => coordinate.latitude)
-          .reduce((first, second) => first > second ? first : second),
-      minimumLongitude = coordinates
-          .map((coordinate) => coordinate.longitude)
-          .reduce((first, second) => first < second ? first : second),
-      maximumLongitude = coordinates
-          .map((coordinate) => coordinate.longitude)
-          .reduce((first, second) => first > second ? first : second);
-
-  final Size size;
-  final double minimumLatitude;
-  final double maximumLatitude;
-  final double minimumLongitude;
-  final double maximumLongitude;
-
-  Offset offset(MapCoordinate coordinate) {
-    const padding = 28.0;
-    final latitudeRange = maximumLatitude - minimumLatitude;
-    final longitudeRange = maximumLongitude - minimumLongitude;
-    final xRatio = longitudeRange == 0
-        ? .5
-        : (coordinate.longitude - minimumLongitude) / longitudeRange;
-    final yRatio = latitudeRange == 0
-        ? .5
-        : (maximumLatitude - coordinate.latitude) / latitudeRange;
-    return Offset(
-      padding + xRatio * (size.width - padding * 2),
-      padding + yRatio * (size.height - padding * 2),
-    );
-  }
-}
-
-class _ExistingNetworkPainter extends CustomPainter {
-  const _ExistingNetworkPainter({required this.lines});
-
-  final List<List<Offset>> lines;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = const Color(0xFF1565C0)
-      ..strokeWidth = 4
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round
-      ..style = PaintingStyle.stroke;
-    for (final line in lines.where((line) => line.length >= 2)) {
-      final path = Path()..moveTo(line.first.dx, line.first.dy);
-      for (final point in line.skip(1)) {
-        path.lineTo(point.dx, point.dy);
-      }
-      canvas.drawPath(path, paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(_ExistingNetworkPainter oldDelegate) =>
-      oldDelegate.lines != lines;
+  return points.last;
 }
 
 bool _usableCoordinate(MapCoordinate? coordinate) =>

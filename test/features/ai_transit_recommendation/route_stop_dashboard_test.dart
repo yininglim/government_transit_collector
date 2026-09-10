@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/district_route_stop_evidence_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/admin_feedback_repository.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/district_route_stop_evidence_repository.dart';
@@ -13,6 +14,7 @@ import 'package:government_transit_collector/features/ai_transit_recommendation/
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_stop_recommendation_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_stop_recommendation_repository.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/presentation/route_bus_stop_recommendation_page.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/presentation/ai_recommendation_dashboard_page.dart';
 import 'package:government_transit_collector/features/journey_map/data/journey_map_models.dart';
 import 'package:government_transit_collector/features/journey_map/data/shape_segment.dart';
 import 'package:government_transit_collector/features/peak_operation/data/peak_operation_models.dart';
@@ -20,6 +22,22 @@ import 'package:government_transit_collector/features/route_performance/data/rou
 import 'package:government_transit_collector/features/route_performance/data/route_performance_repository.dart';
 
 void main() {
+  testWidgets('HTTP failure shows the sanitized production message', (
+    tester,
+  ) async {
+    final session = screenedSession([candidate('R1')])
+      ..recommendationResult = const RouteStopRecommendationResult(
+        status: RouteStopRecommendationStatus.temporarilyUnavailable,
+        synthesis: null,
+        failure: RouteStopRecommendationFailure.http,
+        evidence: [],
+        payload: null,
+      );
+    await pumpPage(tester, FakeDashboardCoordinator(candidates: session.candidates), session);
+    expect(find.text('Recommendation Temporarily Unavailable'), findsOneWidget);
+    expect(find.text('The AI service returned an unavailable response.'), findsOneWidget);
+  });
+
   test(
     '21-route generation and retry each use one retained-evidence request',
     () async {
@@ -46,6 +64,42 @@ void main() {
       expect(repository.calls, 2);
       final expected = List.generate(21, (index) => 'R${index + 1}');
       expect(repository.evidenceCalls, [expected, expected]);
+    },
+  );
+
+  test(
+    'deterministic route evidence uses bounded four-way concurrency',
+    () async {
+      final gate = Completer<void>();
+      final repository = TrackingEvidenceRepository(gate);
+      final coordinator = RouteStopDashboardCoordinator(
+        routeRepository: FakeRouteRepository(
+          List.generate(8, (index) => route('R${index + 1}')),
+        ),
+        evidenceRepository: repository,
+        recommendationRepository: FakeRecommendationRepository(),
+      );
+      final screening = coordinator.screenRoutes(
+        startUtc: periodStart,
+        endExclusiveUtc: periodEnd,
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(repository.calls, 4);
+      expect(repository.maximumActive, 4);
+      gate.complete();
+      final result = await screening;
+      expect(repository.calls, 8);
+      expect(repository.maximumActive, 4);
+      expect(result.candidates.map((item) => item.route.routeId), [
+        'R1',
+        'R2',
+        'R3',
+        'R4',
+        'R5',
+        'R6',
+        'R7',
+        'R8',
+      ]);
     },
   );
 
@@ -88,6 +142,70 @@ void main() {
       );
     },
   );
+
+  testWidgets('page shell appears while deterministic preparation is pending', (
+    tester,
+  ) async {
+    final gate = Completer<void>();
+    final coordinator = FakeDashboardCoordinator(
+      candidates: [candidate('R1')],
+      screenGate: gate,
+    );
+    await pumpPage(tester, coordinator, RouteStopDashboardSession());
+    expect(find.text('Route & Bus Stop Recommendations'), findsWidgets);
+    expect(find.byKey(const Key('analysis-period')), findsOneWidget);
+    expect(find.byKey(const Key('route-map-loading-shell')), findsOneWidget);
+    expect(coordinator.analyseCalls, 0);
+    gate.complete();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('route-map-loading-shell')), findsNothing);
+    expect(
+      find.byKey(const Key('existing-network-map-section')),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('dashboard preload is deduplicated and reused on page entry', (
+    tester,
+  ) async {
+    final gate = Completer<void>();
+    final coordinator = FakeDashboardCoordinator(
+      candidates: [candidate('R1')],
+      screenGate: gate,
+    );
+    RouteStopDashboardSession? captured;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AiRecommendationDashboardPage(
+          routeStopCoordinator: coordinator,
+          now: () => DateTime(2026, 8, 28),
+          routeStopPageBuilder: (session) {
+            captured = session;
+            return RouteBusStopRecommendationPage(
+              session: session,
+              coordinator: coordinator,
+              now: () => DateTime(2026, 8, 28),
+              baseMapEnabled: false,
+            );
+          },
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(coordinator.screenCalls, 1);
+    await tester.tap(find.text('Route & Bus Stop Recommendation'));
+    await tester.pump();
+    expect(captured, isNotNull);
+    expect(coordinator.screenCalls, 1);
+    gate.complete();
+    await tester.pumpAndSettle();
+    expect(coordinator.screenCalls, 1);
+    expect(
+      find.byKey(const Key('existing-network-map-section')),
+      findsOneWidget,
+    );
+    expect(coordinator.analyseCalls, 0);
+  });
 
   testWidgets(
     'revisit restores grouped result and Start New clears without auto generation',
@@ -261,14 +379,7 @@ void main() {
         screenedSession([item]),
       );
       expect(find.byKey(const Key('existing-route-shape')), findsOneWidget);
-      expect(
-        find.byKey(const Key('existing-stop-marker-stop-a')),
-        findsOneWidget,
-      );
-      expect(
-        find.byKey(const Key('existing-stop-marker-stop-b')),
-        findsNothing,
-      );
+      expect(find.byKey(const Key('existingStop-marker-stop-b')), findsNothing);
       expect(
         find.textContaining('1 stop occurrences cannot be mapped'),
         findsOneWidget,
@@ -290,10 +401,7 @@ void main() {
       );
       expect(find.byKey(const Key('existing-route-shape')), findsNothing);
       expect(find.textContaining('route shape is unavailable'), findsOneWidget);
-      expect(
-        find.byKey(const Key('existing-stop-marker-stop-b')),
-        findsNothing,
-      );
+      expect(find.byKey(const Key('existingStop-marker-stop-b')), findsNothing);
     },
   );
 
@@ -403,6 +511,24 @@ void main() {
     expect(coordinator.analyseCalls, 0);
   });
 
+  testWidgets('stop improvement resolves target names from retained evidence', (
+    tester,
+  ) async {
+    final items = [candidate('R1')];
+    final session = screenedSession(items)
+      ..recommendationResult = recommendationResult(
+        action: RouteStopRecommendationAction.stopImprovement,
+        targetStopIds: const ['stop-a'],
+      );
+    await pumpPage(tester, FakeDashboardCoordinator(candidates: items), session);
+    expect(find.text('Target Stops'), findsOneWidget);
+    expect(find.text('Stop A'), findsOneWidget);
+    expect(find.text('stop-a'), findsNothing);
+    await tester.tap(find.byKey(const Key('show-on-map-R1')));
+    await tester.pump();
+    expect(find.text('Stop to Improve'), findsOneWidget);
+  });
+
   testWidgets('renders feature summary with action groups as route parents', (
     tester,
   ) async {
@@ -483,7 +609,7 @@ void main() {
     expect(find.byKey(const Key('route-result-J10')), findsNothing);
     expect(find.textContaining('Evidence: Sufficient'), findsNothing);
     expect(find.byKey(const Key('view-details-J10')), findsNothing);
-    expect(find.byKey(const Key('needs-more-evidence')), findsOneWidget);
+    expect(find.byKey(const Key('needs-more-evidence')), findsNothing);
     expect(find.text('Limited / Excluded Routes'), findsWidgets);
     expect(coordinator.analyseCalls, 0);
   });
@@ -503,12 +629,286 @@ void main() {
     expect(find.text('Restored overall summary.'), findsOneWidget);
     expect(find.text('Route Improvement'), findsOneWidget);
     expect(find.text('3 Routes'), findsOneWidget);
+    expect(find.text('AI Rationale'), findsNWidgets(3));
+    expect(find.text('Evidence supports review.'), findsNWidgets(3));
     expect(coordinator.analyseCalls, 0);
     expect(
       find.byKey(const ValueKey('existing-network-map-J10')),
       findsOneWidget,
     );
     expect(find.byKey(const Key('view-route-stop-evidence')), findsOneWidget);
+  });
+
+  testWidgets(
+    'Show on Map uses retained route evidence without an AI call or reload',
+    (tester) async {
+      final items = [
+        candidateWithEvidence(
+          'R1',
+          evidence('R1', stopCount: 3, includeShape: true),
+        ),
+      ];
+      final session = screenedSession(items)
+        ..recommendationResult = groupedResult(['R1']);
+      final coordinator = FakeDashboardCoordinator(candidates: items);
+      await pumpPage(tester, coordinator, session);
+      tester
+          .widget<OutlinedButton>(find.byKey(const Key('show-on-map-R1')))
+          .onPressed!();
+      await tester.pumpAndSettle();
+      expect(session.selectedRouteId, 'R1');
+      expect(
+        session.selectedRecommendationAction,
+        RouteStopRecommendationAction.routeImprovement,
+      );
+      expect(find.byKey(const Key('existing-route-shape')), findsOneWidget);
+      expect(
+        find.byKey(const Key('recommendedArea-marker-recommended-area')),
+        findsNothing,
+      );
+      expect(coordinator.analyseCalls, 0);
+      expect(coordinator.screenCalls, 0);
+    },
+  );
+
+  testWidgets(
+    'validated candidate pair creates deterministic segment and area marker',
+    (tester) async {
+      final items = [
+        candidateWithEvidence(
+          'R1',
+          evidence('R1', stopCount: 3, includeShape: true),
+        ),
+      ];
+      final session = screenedSession(items)
+        ..recommendationResult = recommendationResult(
+          action: RouteStopRecommendationAction.additionalStopCoverage,
+          candidateArea: const RouteStopCandidateArea(
+            routeId: 'R1',
+            fromStopId: 'stop-a',
+            fromStopName: 'Stop A',
+            toStopId: 'stop-b',
+            toStopName: 'Stop B',
+            areaDescription: 'Between retained stops',
+          ),
+        );
+      final coordinator = FakeDashboardCoordinator(candidates: items);
+      await pumpPage(tester, coordinator, session);
+      tester
+          .widget<OutlinedButton>(find.byKey(const Key('show-on-map-R1')))
+          .onPressed!();
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('recommended-candidate-segment')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('recommendedArea-marker-recommended-area')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('route-stop-map-legend')), findsOneWidget);
+      expect(find.text('Existing Stop'), findsOneWidget);
+      expect(find.text('Boundary Stop'), findsOneWidget);
+      expect(
+        find.byKey(const Key('candidateBoundary-marker-stop-a')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('candidateBoundary-marker-stop-b')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('existingStop-marker-stop-c')),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<Icon>(
+              find.descendant(
+                of: find.byKey(
+                  const Key('recommendedArea-marker-recommended-area'),
+                ),
+                matching: find.byType(Icon),
+              ),
+            )
+            .icon,
+        Icons.assistant_navigation,
+      );
+      expect(
+        tester
+            .widget<Icon>(
+              find.descendant(
+                of: find.byKey(const Key('candidateBoundary-marker-stop-a')),
+                matching: find.byType(Icon),
+              ),
+            )
+            .icon,
+        Icons.location_on_outlined,
+      );
+      expect(find.text('Between Stop A and Stop B'), findsOneWidget);
+      expect(coordinator.analyseCalls, 0);
+      expect(coordinator.screenCalls, 0);
+    },
+  );
+
+  testWidgets('missing retained shape does not fabricate an area marker', (
+    tester,
+  ) async {
+    final items = [candidate('R1')];
+    final session = screenedSession(items)
+      ..recommendationResult = recommendationResult(
+        action: RouteStopRecommendationAction.additionalStopCoverage,
+        candidateArea: const RouteStopCandidateArea(
+          routeId: 'R1',
+          fromStopId: 'stop-a',
+          fromStopName: 'Stop A',
+          toStopId: 'stop-b',
+          toStopName: 'Stop B',
+          areaDescription: 'Between retained stops',
+        ),
+      );
+    await pumpPage(
+      tester,
+      FakeDashboardCoordinator(candidates: items),
+      session,
+    );
+    tester
+        .widget<OutlinedButton>(find.byKey(const Key('show-on-map-R1')))
+        .onPressed!();
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('recommendedArea-marker-recommended-area')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const Key('recommended-candidate-segment')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const Key('candidateBoundary-marker-stop-a')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('candidateBoundary-marker-stop-b')),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('exact map marker is unavailable'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('recommendation map state restores without AI on revisit', (
+    tester,
+  ) async {
+    const area = RouteStopCandidateArea(
+      routeId: 'R1',
+      fromStopId: 'stop-a',
+      fromStopName: 'Stop A',
+      toStopId: 'stop-b',
+      toStopName: 'Stop B',
+      areaDescription: 'Between retained stops',
+    );
+    final items = [
+      candidateWithEvidence('R1', evidence('R1', includeShape: true)),
+    ];
+    final session = screenedSession(items)
+      ..recommendationResult = recommendationResult(
+        action: RouteStopRecommendationAction.additionalStopCoverage,
+        candidateArea: area,
+      )
+      ..selectedRecommendationAction =
+          RouteStopRecommendationAction.additionalStopCoverage
+      ..selectedCandidateArea = area;
+    final coordinator = FakeDashboardCoordinator(candidates: items);
+    await pumpPage(tester, coordinator, session);
+    expect(
+      find.byKey(const Key('recommendedArea-marker-recommended-area')),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Recommended Stop Area'), findsOneWidget);
+    expect(find.text('AI Rationale'), findsWidgets);
+    expect(find.text('Evidence supports review.'), findsWidgets);
+    expect(find.textContaining('Map Indicator:'), findsNothing);
+    expect(coordinator.analyseCalls, 0);
+    expect(coordinator.screenCalls, 0);
+  });
+
+  testWidgets('interactive map exposes pan zoom and recenter controls', (
+    tester,
+  ) async {
+    final items = [
+      candidateWithEvidence('R1', evidence('R1', includeShape: true)),
+    ];
+    final coordinator = FakeDashboardCoordinator(candidates: items);
+    await pumpPage(tester, coordinator, screenedSession(items));
+    expect(find.byType(FlutterMap), findsOneWidget);
+    expect(find.byKey(const Key('route-stop-map-zoom-in')), findsOneWidget);
+    expect(find.byKey(const Key('route-stop-map-zoom-out')), findsOneWidget);
+    expect(find.byKey(const Key('route-stop-map-recenter')), findsOneWidget);
+    for (final key in const [
+      Key('route-stop-map-zoom-in'),
+      Key('route-stop-map-zoom-out'),
+      Key('route-stop-map-recenter'),
+    ]) {
+      tester
+          .widget<IconButton>(
+            find.descendant(
+              of: find.byKey(key),
+              matching: find.byType(IconButton),
+            ),
+          )
+          .onPressed!();
+    }
+    await tester.pump();
+    expect(coordinator.analyseCalls, 0);
+    expect(coordinator.screenCalls, 0);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('maintain and Needs More Evidence never create area markers', (
+    tester,
+  ) async {
+    final items = [
+      candidateWithEvidence('R1', evidence('R1', includeShape: true)),
+    ];
+    final maintainSession = screenedSession(items)
+      ..recommendationResult = recommendationResult(
+        action: RouteStopRecommendationAction.maintainCurrentConfiguration,
+      );
+    await pumpPage(
+      tester,
+      FakeDashboardCoordinator(candidates: items),
+      maintainSession,
+    );
+    tester
+        .widget<OutlinedButton>(find.byKey(const Key('show-on-map-R1')))
+        .onPressed!();
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('recommendedArea-marker-recommended-area')),
+      findsNothing,
+    );
+
+    final needsSession = screenedSession(items)
+      ..recommendationResult = needsEvidenceResult('R1')
+      ..selectedRecommendationAction =
+          RouteStopRecommendationAction.insufficientEvidence;
+    await tester.pumpWidget(const SizedBox.shrink());
+    await pumpPage(
+      tester,
+      FakeDashboardCoordinator(candidates: items),
+      needsSession,
+    );
+    expect(find.byKey(const Key('needs-more-evidence')), findsNothing);
+    expect(
+      find.byKey(const Key('no-actionable-recommendations')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('recommendedArea-marker-recommended-area')),
+      findsNothing,
+    );
   });
 }
 
@@ -522,6 +922,7 @@ Future<void> pumpPage(
       session: session,
       coordinator: coordinator,
       now: () => DateTime(2026, 8, 28),
+      baseMapEnabled: false,
     ),
   ),
 );
@@ -578,11 +979,92 @@ RouteStopRecommendationResult groupedResult(
       ),
     ],
     needsMoreEvidence: null,
+    routeRecommendations: [
+      for (final id in ids)
+        RouteStopRecommendationRecord(
+          routeId: id,
+          actions: const [RouteStopRecommendationAction.routeImprovement],
+          conciseRationale: 'Evidence supports review.',
+          routeOwnedEvidenceRefs: const [],
+          candidateArea: null,
+          limitations: const [],
+        ),
+    ],
   ),
   failure: null,
   evidence: const [],
   payload: null,
 );
+
+RouteStopRecommendationResult recommendationResult({
+  required RouteStopRecommendationAction action,
+  RouteStopCandidateArea? candidateArea,
+  List<String> targetStopIds = const [],
+}) => RouteStopRecommendationResult(
+  status: RouteStopRecommendationStatus.available,
+  synthesis: RouteStopRecommendationSynthesis(
+    overallSummary: 'Cross-route summary',
+    recommendationGroups: [
+      RouteStopRecommendationGroup(
+        action: action,
+        summary: 'Review route.',
+        rationale: const ['Evidence supports review.'],
+        evidenceReferences: const [],
+        limitations: const [],
+        routeIds: const ['R1'],
+        candidateAreas: candidateArea == null ? const [] : [candidateArea],
+      ),
+    ],
+    needsMoreEvidence: null,
+    routeRecommendations: [
+      RouteStopRecommendationRecord(
+        routeId: 'R1',
+        actions: [action],
+        conciseRationale: 'Evidence supports review.',
+        routeOwnedEvidenceRefs: const [],
+        targetStopIds: targetStopIds,
+        candidateArea: candidateArea,
+        limitations: const [],
+      ),
+    ],
+  ),
+  failure: null,
+  evidence: const [],
+  payload: null,
+);
+
+RouteStopRecommendationResult needsEvidenceResult(String routeId) =>
+    RouteStopRecommendationResult(
+      status: RouteStopRecommendationStatus.available,
+      synthesis: RouteStopRecommendationSynthesis(
+        overallSummary: 'More evidence is needed.',
+        recommendationGroups: const [],
+        needsMoreEvidence: RouteStopRecommendationGroup(
+          action: RouteStopRecommendationAction.insufficientEvidence,
+          summary: 'Evidence remains limited.',
+          rationale: const ['Review retained evidence.'],
+          evidenceReferences: const [],
+          limitations: const ['Limited evidence.'],
+          routeIds: [routeId],
+          candidateAreas: const [],
+        ),
+        routeRecommendations: [
+          RouteStopRecommendationRecord(
+            routeId: routeId,
+            actions: const [
+              RouteStopRecommendationAction.insufficientEvidence,
+            ],
+            conciseRationale: 'Review retained evidence.',
+            routeOwnedEvidenceRefs: const [],
+            candidateArea: null,
+            limitations: const ['Limited evidence.'],
+          ),
+        ],
+      ),
+      failure: null,
+      evidence: const [],
+      payload: null,
+    );
 final periodStart = DateTime.utc(2026, 7, 29, 16);
 final periodEnd = DateTime.utc(2026, 8, 28, 16);
 
@@ -617,12 +1099,13 @@ DistrictRouteStopEvidence evidence(
   bool includeDistanceAndSpacing = false,
   int observationCount = 0,
   int feedbackCount = 0,
+  String firstStopName = 'Stop A',
 }) {
   final routeValue = route(routeId);
   final stops = [
-    const AiRouteStopEvidence(
+    AiRouteStopEvidence(
       stopId: 'stop-a',
-      stopName: 'Stop A',
+      stopName: firstStopName,
       stopSequence: 1,
       coordinate: MapCoordinate(1.49, 103.74),
       scheduledArrivalSeconds: null,
@@ -636,6 +1119,15 @@ DistrictRouteStopEvidence evidence(
         coordinate: secondCoordinateAvailable
             ? const MapCoordinate(1.50, 103.75)
             : null,
+        scheduledArrivalSeconds: null,
+        scheduledDepartureSeconds: null,
+      ),
+    if (stopCount > 2)
+      const AiRouteStopEvidence(
+        stopId: 'stop-c',
+        stopName: 'Stop C',
+        stopSequence: 3,
+        coordinate: MapCoordinate(1.51, 103.76),
         scheduledArrivalSeconds: null,
         scheduledDepartureSeconds: null,
       ),
@@ -780,6 +1272,30 @@ class FakeEvidenceRepository implements DistrictRouteStopEvidenceRepository {
   }
 }
 
+class TrackingEvidenceRepository
+    implements DistrictRouteStopEvidenceRepository {
+  TrackingEvidenceRepository(this.gate);
+
+  final Completer<void> gate;
+  int calls = 0;
+  int active = 0;
+  int maximumActive = 0;
+
+  @override
+  Future<DistrictRouteStopEvidence> loadEvidence({
+    required String routeId,
+    required DateTime startUtc,
+    required DateTime endExclusiveUtc,
+  }) async {
+    calls++;
+    active++;
+    if (active > maximumActive) maximumActive = active;
+    await gate.future;
+    active--;
+    return evidence(routeId);
+  }
+}
+
 class FakeRecommendationRepository
     implements RouteStopRecommendationRepository {
   int calls = 0;
@@ -799,14 +1315,18 @@ class FakeRecommendationRepository
 }
 
 class FakeDashboardCoordinator extends RouteStopDashboardCoordinator {
-  FakeDashboardCoordinator({required this.candidates, this.gate})
-    : super(
-        routeRepository: FakeRouteRepository(const []),
-        evidenceRepository: FakeEvidenceRepository(const {}),
-        recommendationRepository: FakeRecommendationRepository(),
-      );
+  FakeDashboardCoordinator({
+    required this.candidates,
+    this.gate,
+    this.screenGate,
+  }) : super(
+         routeRepository: FakeRouteRepository(const []),
+         evidenceRepository: FakeEvidenceRepository(const {}),
+         recommendationRepository: FakeRecommendationRepository(),
+       );
   final List<RouteStopDashboardCandidate> candidates;
   final Completer<void>? gate;
+  final Completer<void>? screenGate;
   int analyseCalls = 0;
   int screenCalls = 0;
   @override
@@ -815,6 +1335,7 @@ class FakeDashboardCoordinator extends RouteStopDashboardCoordinator {
     required DateTime endExclusiveUtc,
   }) async {
     screenCalls++;
+    if (screenGate != null) await screenGate!.future;
     return RouteStopDashboardScreeningResult(
       routesAnalysed: candidates.length,
       candidates: candidates,
