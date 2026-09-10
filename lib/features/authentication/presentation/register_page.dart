@@ -139,6 +139,13 @@ class _RegisterPageState extends State<RegisterPage> {
                         const SizedBox(height: 16),
                         TextFormField(
                           controller: _passwordController,
+                          errorBuilder: (context, error) => Text(
+                            error,
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.error,
+                              fontSize: 12,
+                            ),
+                          ),
                           enabled: !_loading,
                           obscureText: _obscurePassword,
                           textInputAction: TextInputAction.next,
@@ -172,6 +179,13 @@ class _RegisterPageState extends State<RegisterPage> {
                         const SizedBox(height: 16),
                         TextFormField(
                           controller: _confirmPasswordController,
+                          errorBuilder: (context, error) => Text(
+                            error,
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.error,
+                              fontSize: 12,
+                            ),
+                          ),
                           enabled: !_loading,
                           obscureText: _obscureConfirmation,
                           textInputAction: TextInputAction.done,

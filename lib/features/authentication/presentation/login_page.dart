@@ -23,7 +23,38 @@ class _LoginPageState extends State<LoginPage> {
   bool _googleLoading = false;
   bool _googleAwaiting = false;
 
+  static const _googleError =
+      'Unable to sign in with Google. Please try again.';
+  String? _message;
+  ScaffoldFeatureController<SnackBar, SnackBarClosedReason>?
+  _googleErrorSnackBar;
+
+  @override
+  void initState() {
+    super.initState();
+    _message = widget.message == _googleError ? null : widget.message;
+    if (widget.repository.callbackMessage == _googleError) {
+      widget.repository.callbackMessage = null;
+    }
+  }
+
+  @override
+  void didUpdateWidget(LoginPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.message != oldWidget.message) _message = widget.message;
+  }
+
+  void _clearGoogleError() {
+    _googleErrorSnackBar?.close();
+    _googleErrorSnackBar = null;
+    if (widget.repository.callbackMessage == _googleError) {
+      widget.repository.callbackMessage = null;
+    }
+    if (_message == _googleError) setState(() => _message = null);
+  }
+
   Future<void> _googleLogin() async {
+    _clearGoogleError();
     FocusManager.instance.primaryFocus?.unfocus();
     setState(() => _googleLoading = true);
     try {
@@ -31,7 +62,7 @@ class _LoginPageState extends State<LoginPage> {
       if (mounted) setState(() => _googleAwaiting = true);
     } on Object catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      _googleErrorSnackBar = ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
             error is AuthFlowException
@@ -74,6 +105,7 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   Future<void> _login() async {
+    _clearGoogleError();
     FocusManager.instance.primaryFocus?.unfocus();
     if (_loading ||
         _googleLoading ||
@@ -117,6 +149,7 @@ class _LoginPageState extends State<LoginPage> {
 
   Future<void> _openRegistration() async {
     if (_loading || _googleLoading || _googleAwaiting) return;
+    _clearGoogleError();
     final message = await Navigator.of(context).push<String>(
       MaterialPageRoute<String>(
         builder: (_) => RegisterPage(repository: widget.repository),
@@ -166,8 +199,8 @@ class _LoginPageState extends State<LoginPage> {
                           style: Theme.of(context).textTheme.bodyLarge,
                         ),
                         const SizedBox(height: 32),
-                        if (widget.message != null) ...[
-                          Text(widget.message!, textAlign: TextAlign.center),
+                        if (_message != null) ...[
+                          Text(_message!, textAlign: TextAlign.center),
                           const SizedBox(height: 16),
                         ],
                         TextFormField(
@@ -272,13 +305,16 @@ class _LoginPageState extends State<LoginPage> {
                           onPressed:
                               _loading || _googleLoading || _googleAwaiting
                               ? null
-                              : () => Navigator.of(context).push(
-                                  MaterialPageRoute<void>(
-                                    builder: (_) => ForgotPasswordPage(
-                                      repository: widget.repository,
+                              : () {
+                                  _clearGoogleError();
+                                  Navigator.of(context).push(
+                                    MaterialPageRoute<void>(
+                                      builder: (_) => ForgotPasswordPage(
+                                        repository: widget.repository,
+                                      ),
                                     ),
-                                  ),
-                                ),
+                                  );
+                                },
                           child: const Text('Forgot Password?'),
                         ),
                         TextButton(
