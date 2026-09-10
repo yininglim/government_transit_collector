@@ -762,6 +762,7 @@ class _BusFrequencyRecommendationPageState
         _savedRecommendationIds.contains(routeId)) {
       return;
     }
+    final analysisVersion = _session.preparationVersion;
     setState(() => _savingRecommendationIds.add(routeId));
     try {
       await _managementRepository.saveBusFrequencyRecommendation(
@@ -771,6 +772,7 @@ class _BusFrequencyRecommendationPageState
         periodEnd: end,
         evidence: candidate.evidence,
       );
+      if (_session.preparationVersion != analysisVersion) return;
       _savingRecommendationIds.remove(routeId);
       _savedRecommendationIds.add(routeId);
       if (!mounted) return;
@@ -779,6 +781,7 @@ class _BusFrequencyRecommendationPageState
         const SnackBar(content: Text('Recommendation saved.')),
       );
     } on Object {
+      if (_session.preparationVersion != analysisVersion) return;
       _savingRecommendationIds.remove(routeId);
       if (!mounted) return;
       setState(() {});

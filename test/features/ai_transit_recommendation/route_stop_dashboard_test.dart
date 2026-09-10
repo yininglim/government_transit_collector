@@ -1464,6 +1464,23 @@ class RecordingRouteStopManagementRepository
   }) => throw UnimplementedError();
 
   @override
+  Future<SavedRecommendation> createFollowUp({
+    required SavedRecommendation recommendation,
+    required String actionText,
+    required DateTime dueDate,
+    required String? note,
+  }) => throw UnimplementedError();
+
+  @override
+  Future<SavedRecommendation> updateFollowUp({
+    required SavedRecommendation recommendation,
+    required String actionText,
+    required DateTime dueDate,
+    required RecommendationFollowUpStatus status,
+    required String? note,
+  }) => throw UnimplementedError();
+
+  @override
   Future<void> deleteRecommendation(String recommendationId) =>
       throw UnimplementedError();
 }

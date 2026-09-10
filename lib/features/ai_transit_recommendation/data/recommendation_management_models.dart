@@ -2,6 +2,24 @@ import 'package:government_transit_collector/features/ai_transit_recommendation/
 
 enum RecommendationManagementFeature { busFrequency, routeBusStop }
 
+enum RecommendationFollowUpStatus {
+  pending('pending'),
+  inProgress('in_progress'),
+  completed('completed');
+
+  const RecommendationFollowUpStatus(this.databaseValue);
+
+  final String databaseValue;
+
+  static RecommendationFollowUpStatus? fromDatabase(Object? value) =>
+      switch (value) {
+        'pending' => RecommendationFollowUpStatus.pending,
+        'in_progress' => RecommendationFollowUpStatus.inProgress,
+        'completed' => RecommendationFollowUpStatus.completed,
+        _ => null,
+      };
+}
+
 enum RecommendationReviewStatus {
   pending('pending_review'),
   accepted('accepted'),
@@ -40,6 +58,7 @@ class SavedRecommendation {
     required this.reviewedAt,
     this.priorityLevel,
     this.priorityReasons = const [],
+    this.followUp,
   });
 
   final String recommendationId;
@@ -60,6 +79,7 @@ class SavedRecommendation {
   final DateTime? reviewedAt;
   final RecommendationPriorityLevel? priorityLevel;
   final List<String> priorityReasons;
+  final RecommendationFollowUp? followUp;
 
   factory SavedRecommendation.fromJson(Map<String, dynamic> json) {
     final snapshot = _map(json['supporting_metrics']);
@@ -102,6 +122,7 @@ class SavedRecommendation {
       priorityReasons: priorityLevel == null
           ? const []
           : _stringList(snapshot['priority_reasons']),
+      followUp: _followUp(json['recommendation_follow_ups']),
     );
   }
 
@@ -112,6 +133,7 @@ class SavedRecommendation {
     DateTime? updatedAt,
     DateTime? reviewedAt,
     bool clearReviewedAt = false,
+    RecommendationFollowUp? followUp,
   }) => SavedRecommendation(
     recommendationId: recommendationId,
     feature: feature,
@@ -131,7 +153,62 @@ class SavedRecommendation {
     reviewedAt: clearReviewedAt ? null : reviewedAt ?? this.reviewedAt,
     priorityLevel: priorityLevel,
     priorityReasons: priorityReasons,
+    followUp: followUp ?? this.followUp,
   );
+}
+
+class RecommendationFollowUp {
+  const RecommendationFollowUp({
+    required this.followUpId,
+    required this.recommendationId,
+    required this.actionText,
+    required this.dueDate,
+    required this.status,
+    required this.note,
+    required this.createdAt,
+    required this.updatedAt,
+    required this.completedAt,
+  });
+
+  final String followUpId;
+  final String recommendationId;
+  final String actionText;
+  final DateTime dueDate;
+  final RecommendationFollowUpStatus status;
+  final String? note;
+  final DateTime createdAt;
+  final DateTime? updatedAt;
+  final DateTime? completedAt;
+
+  factory RecommendationFollowUp.fromJson(Map<String, dynamic> json) {
+    final followUpId = _requiredString(json['follow_up_id']);
+    final recommendationId = _requiredString(json['recommendation_id']);
+    final actionText = _requiredString(json['action_text']);
+    final dueDate = _date(json['due_date']);
+    final status = RecommendationFollowUpStatus.fromDatabase(
+      json['follow_up_status'],
+    );
+    final createdAt = _date(json['created_at']);
+    if (followUpId == null ||
+        recommendationId == null ||
+        actionText == null ||
+        dueDate == null ||
+        status == null ||
+        createdAt == null) {
+      throw const FormatException('Unsupported recommendation follow-up row.');
+    }
+    return RecommendationFollowUp(
+      followUpId: followUpId,
+      recommendationId: recommendationId,
+      actionText: actionText,
+      dueDate: dueDate,
+      status: status,
+      note: _nullableString(json['follow_up_notes']),
+      createdAt: createdAt,
+      updatedAt: _date(json['updated_at']),
+      completedAt: _date(json['completed_at']),
+    );
+  }
 }
 
 RecommendationManagementFeature? _feature(Object? snapshot, Object? type) =>
@@ -175,6 +252,25 @@ List<String> _stringList(Object? value) {
 DateTime? _date(Object? value) =>
     value is String ? DateTime.tryParse(value)?.toLocal() : null;
 
+RecommendationFollowUp? _followUp(Object? value) {
+  final Object? raw;
+  if (value is Map) {
+    raw = value;
+  } else if (value is List && value.isNotEmpty && value.first is Map) {
+    raw = value.first;
+  } else {
+    raw = null;
+  }
+  if (raw is! Map) return null;
+  try {
+    return RecommendationFollowUp.fromJson(
+      raw.map((key, item) => MapEntry(key.toString(), item)),
+    );
+  } on FormatException {
+    return null;
+  }
+}
+
 String recommendationFeatureLabel(RecommendationManagementFeature feature) =>
     switch (feature) {
       RecommendationManagementFeature.busFrequency => 'Bus Frequency',
@@ -186,6 +282,13 @@ String recommendationStatusLabel(RecommendationReviewStatus status) =>
       RecommendationReviewStatus.pending => 'Pending',
       RecommendationReviewStatus.accepted => 'Accepted',
       RecommendationReviewStatus.rejected => 'Rejected',
+    };
+
+String recommendationFollowUpStatusLabel(RecommendationFollowUpStatus status) =>
+    switch (status) {
+      RecommendationFollowUpStatus.pending => 'Pending',
+      RecommendationFollowUpStatus.inProgress => 'In Progress',
+      RecommendationFollowUpStatus.completed => 'Completed',
     };
 
 String recommendationActionLabel(String action) => switch (action) {
