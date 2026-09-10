@@ -17,6 +17,7 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
   final _password = TextEditingController();
   final _confirm = TextEditingController();
   bool _loading = false;
+  final _visiblePasswords = <TextEditingController>{};
   String? _error;
 
   @override
@@ -68,13 +69,29 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
     child: TextFormField(
       controller: controller,
       enabled: !_loading,
-      obscureText: true,
+      obscureText: !_visiblePasswords.contains(controller),
       autocorrect: false,
       enableSuggestions: false,
       textInputAction: last ? TextInputAction.done : TextInputAction.next,
       decoration: InputDecoration(
         labelText: label,
         border: const OutlineInputBorder(),
+        suffixIcon: IconButton(
+          tooltip: _visiblePasswords.contains(controller)
+              ? 'Hide password'
+              : 'Show password',
+          onPressed: _loading
+              ? null
+              : () => setState(() {
+                  if (!_visiblePasswords.remove(controller))
+                    _visiblePasswords.add(controller);
+                }),
+          icon: Icon(
+            _visiblePasswords.contains(controller)
+                ? Icons.visibility_off_outlined
+                : Icons.visibility_outlined,
+          ),
+        ),
       ),
       validator: validator,
       onFieldSubmitted: last ? (_) => _change() : null,

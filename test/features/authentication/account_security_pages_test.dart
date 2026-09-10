@@ -6,6 +6,7 @@ import 'package:government_transit_collector/features/authentication/presentatio
 import 'package:government_transit_collector/features/authentication/presentation/register_page.dart';
 import 'package:government_transit_collector/features/authentication/presentation/reset_password_page.dart';
 import 'auth_pages_test.dart' show PageAuth;
+import 'package:government_transit_collector/features/authentication/presentation/login_page.dart';
 
 void main() {
   Future<void> tap(WidgetTester tester, Finder finder) async {
@@ -14,48 +15,34 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('resend has 60 second cooldown and never submits twice', (
-    tester,
-  ) async {
-    final repository = PageAuth();
-    final pending = Completer<void>();
-    repository.pendingEmail = pending.future;
-    await tester.pumpWidget(
-      MaterialApp(home: ForgotPasswordPage(repository: repository)),
-    );
-    await tester.enterText(find.byType(TextFormField), ' user@example.com ');
-    await tester.tap(find.text('Send Reset Link'));
-    await tester.tap(find.text('Send Reset Link'));
-    await tester.pumpAndSettle();
-    expect(repository.resetEmailCalls, 1);
-    expect(repository.sentEmail, 'user@example.com');
-    expect(find.text("Didn't receive the email?"), findsOneWidget);
-    pending.complete();
-    repository.pendingEmail = null;
-    await tester.pumpAndSettle();
-    expect(
-      find.text(
-        'If an account exists for this email, a password reset link has been sent.',
-      ),
-      findsOneWidget,
-    );
-    await tester.pump(const Duration(seconds: 15));
-    expect(find.text('Resend available in 45s'), findsOneWidget);
-    await tap(tester, find.text('Resend Reset Email'));
-    expect(repository.resetEmailCalls, 1);
-    await tester.pump(const Duration(seconds: 45));
-    await tester.tap(find.text('Resend Reset Email'));
-    await tester.tap(find.text('Resend Reset Email'));
-    await tester.pumpAndSettle();
-    expect(repository.resetEmailCalls, 2);
-    expect(
-      find.text('A new password reset email has been sent.'),
-      findsOneWidget,
-    );
-    expect(find.text('Resend available in 60s'), findsOneWidget);
-    await tester.pumpWidget(const SizedBox()); // Timer disposed on navigation.
-    expect(tester.takeException(), isNull);
-  });
+  testWidgets(
+    'forgot success returns to sign in and prevents duplicate pending sends',
+    (tester) async {
+      final repository = PageAuth();
+      final pending = Completer<void>();
+      repository.pendingEmail = pending.future;
+      await tester.pumpWidget(
+        MaterialApp(home: LoginPage(repository: repository)),
+      );
+      await tap(tester, find.text('Forgot Password?'));
+      await tester.enterText(find.byType(TextFormField), ' user@example.com ');
+      await tester.tap(find.text('Send Reset Link'));
+      await tester.tap(find.text('Send Reset Link'));
+      await tester.pumpAndSettle();
+      expect(repository.resetEmailCalls, 1);
+      pending.complete();
+      await tester.pumpAndSettle();
+      expect(find.byType(ForgotPasswordPage), findsNothing);
+      expect(find.byType(LoginPage), findsOneWidget);
+      expect(
+        find.text(
+          'If an account exists for this email, a password reset link has been sent.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('Resend Reset Email'), findsNothing);
+    },
+  );
 
   testWidgets('signup blocks password equal to email at the form', (
     tester,
@@ -118,17 +105,34 @@ void main() {
       );
       final button = find.widgetWithText(FilledButton, 'Change Email Password');
       final fields = find.byType(TextFormField);
+      for (var index = 0; index < 3; index++) {
+        final editable = find.descendant(
+          of: fields.at(index),
+          matching: find.byType(EditableText),
+        );
+        expect(tester.widget<EditableText>(editable).obscureText, isTrue);
+        final eye = find.descendant(
+          of: fields.at(index),
+          matching: find.byType(IconButton),
+        );
+        await tap(tester, eye);
+        expect(tester.widget<EditableText>(editable).obscureText, isFalse);
+        await tap(tester, eye);
+        expect(tester.widget<EditableText>(editable).obscureText, isTrue);
+      }
       await tap(tester, button);
       expect(find.text('Current password is required.'), findsOneWidget);
       expect(find.text('Password is required.'), findsOneWidget);
-      await tester.enterText(fields.at(0), 'password123');
+      await tester.enterText(fields.at(0), 'Password123!');
       await tester.enterText(fields.at(1), 'short');
       await tap(tester, button);
       expect(
-        find.text('Password must be at least 8 characters.'),
+        find.text(
+          'Password must be at least 8 characters and include uppercase, lowercase, number, and special character.',
+        ),
         findsOneWidget,
       );
-      await tester.enterText(fields.at(1), 'password123');
+      await tester.enterText(fields.at(1), 'Password123!');
       await tap(tester, button);
       expect(
         find.text('New password must be different from your current password.'),
@@ -140,7 +144,7 @@ void main() {
         find.text('Password cannot be the same as your email address.'),
         findsOneWidget,
       );
-      await tester.enterText(fields.at(1), 'new-password123');
+      await tester.enterText(fields.at(1), 'New-password123!');
       await tester.enterText(fields.at(2), 'different');
       await tap(tester, button);
       expect(find.text('Passwords do not match.'), findsOneWidget);
@@ -159,8 +163,8 @@ void main() {
     );
     for (final entry in [
       'wrong-password',
-      'new-password123',
-      'new-password123',
+      'New-password123!',
+      'New-password123!',
     ].asMap().entries) {
       await tester.enterText(
         find.byType(TextFormField).at(entry.key),

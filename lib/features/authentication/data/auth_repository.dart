@@ -35,12 +35,60 @@ class RegistrationResult {
 }
 
 class AuthRepository extends ChangeNotifier {
-  AuthRepository({SupabaseClient? client, String? redirectUrl})
-    : _client = client ?? Supabase.instance.client,
-      _redirectUrl = redirectUrl?.trim();
+  AuthRepository({
+    SupabaseClient? client,
+    String? redirectUrl,
+    String? emailVerificationRedirectUrl,
+  }) : _client = client ?? Supabase.instance.client,
+       _redirectUrl = redirectUrl?.trim(),
+       _emailVerificationRedirectUrl = emailVerificationRedirectUrl?.trim();
 
   final SupabaseClient _client;
   final String? _redirectUrl;
+  final String? _emailVerificationRedirectUrl;
+  bool _registeringEmail = false;
+
+  String get emailVerificationRedirectUrl {
+    final value =
+        _emailVerificationRedirectUrl ??
+        'https://looyien.github.io/government-transit-collector-site/';
+    final uri = Uri.tryParse(value.trim());
+    if (uri == null ||
+        uri.scheme != 'https' ||
+        uri.host.isEmpty ||
+        uri.userInfo.isNotEmpty ||
+        uri.hasQuery ||
+        uri.hasFragment) {
+      throw const AuthFlowException(
+        'Email verification is not configured. Please contact support.',
+      );
+    }
+    return uri.toString();
+  }
+
+  bool _unverifiedEmail(User user) =>
+      user.emailConfirmedAt == null &&
+      user.identities?.any((identity) => identity.provider == 'google') != true;
+
+  Future<void> resendVerificationEmail(String email) async {
+    final validation = AuthValidation.email(email);
+    if (validation != null) throw AuthFlowException(validation);
+    final redirect = emailVerificationRedirectUrl;
+    try {
+      await _client.auth.resend(
+        type: OtpType.signup,
+        email: email.trim(),
+        emailRedirectTo: redirect,
+      );
+    } on AuthException catch (error) {
+      throw AuthFlowException(
+        _isRateLimit(error)
+            ? 'Too many requests. Please wait a minute before trying again.'
+            : 'Unable to resend verification email. Please try again.',
+      );
+    }
+  }
+
   StreamSubscription<Uri>? _linkSubscription;
   SharedPreferences? _preferences;
   bool _handlingCallback = false;
@@ -190,10 +238,20 @@ class AuthRepository extends ChangeNotifier {
     }
   }
 
+  DateTime? _resetEmailRetryAt;
+
   Future<void> sendPasswordReset(String email) async {
     final validation = AuthValidation.email(email);
     if (validation != null) throw AuthFlowException(validation);
     final redirect = redirectUrl;
+    // Keep the resend limit when the form closes or is reopened.
+    final now = DateTime.now();
+    if (_resetEmailRetryAt?.isAfter(now) == true) {
+      throw const AuthFlowException(
+        'Please wait 60 seconds before requesting another reset email.',
+      );
+    }
+    _resetEmailRetryAt = now.add(const Duration(seconds: 60));
     try {
       _expectRecovery = true;
       await _preferences?.setBool(_pendingKey, true);
@@ -280,7 +338,13 @@ class AuthRepository extends ChangeNotifier {
     super.dispose();
   }
 
-  Session? get currentSession => _client.auth.currentSession;
+  Session? get currentSession {
+    final session = _client.auth.currentSession;
+    if (_registeringEmail ||
+        (session != null && !_recovery && _unverifiedEmail(session.user)))
+      return null;
+    return session;
+  }
 
   Stream<AuthState> get authStateChanges => _client.auth.onAuthStateChange;
 
@@ -449,9 +513,12 @@ class AuthRepository extends ChangeNotifier {
         AuthValidation.email(email) ??
         AuthValidation.newPassword(password, email: email);
     if (validation != null) throw AuthFlowException(validation);
+    final redirect = emailVerificationRedirectUrl;
+    _registeringEmail = true;
     try {
       final response = await _client.auth.signUp(
         email: email.trim(),
+        emailRedirectTo: redirect,
         password: password,
         data: <String, dynamic>{'full_name': fullName.trim()},
       );
@@ -466,8 +533,13 @@ class AuthRepository extends ChangeNotifier {
           response.user!.identities?.isEmpty == true) {
         throw const AuthFlowException(existingAccountMessage);
       }
+      final requiresConfirmation =
+          response.session == null || response.user!.emailConfirmedAt == null;
+      if (response.session != null && requiresConfirmation) {
+        await _client.auth.signOut(scope: SignOutScope.local);
+      }
       return RegistrationResult(
-        requiresEmailConfirmation: response.session == null,
+        requiresEmailConfirmation: requiresConfirmation,
       );
     } on AuthException catch (error) {
       if (error.code == 'user_already_exists' ||
@@ -480,16 +552,27 @@ class AuthRepository extends ChangeNotifier {
             ? 'Too many requests. Please wait a few minutes before trying again.'
             : 'Unable to create the account. Please try again.',
       );
+    } finally {
+      _registeringEmail = false;
+      notifyListeners();
     }
   }
 
   Future<void> login({required String email, required String password}) async {
     try {
-      await _client.auth.signInWithPassword(
+      final response = await _client.auth.signInWithPassword(
         email: email.trim(),
         password: password,
       );
+      if (response.user != null && _unverifiedEmail(response.user!)) {
+        await _client.auth.signOut(scope: SignOutScope.local);
+        throw const EmailNotVerifiedException();
+      }
     } on AuthException catch (error) {
+      if (error.code == 'email_not_confirmed' ||
+          error.message.toLowerCase().contains('email not confirmed')) {
+        throw const EmailNotVerifiedException();
+      }
       throw AuthFlowException(_friendlyAuthMessage(error));
     }
   }
@@ -614,4 +697,9 @@ class AuthFlowException implements Exception {
 
   @override
   String toString() => message;
+}
+
+class EmailNotVerifiedException extends AuthFlowException {
+  const EmailNotVerifiedException()
+    : super('Please verify your email before signing in.');
 }

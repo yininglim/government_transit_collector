@@ -15,6 +15,8 @@ class _ResetPasswordPageState extends State<ResetPasswordPage> {
   final _password = TextEditingController();
   final _confirmation = TextEditingController();
   bool _loading = false;
+  bool _showPassword = false;
+  bool _showConfirmation = false;
   String? _message;
 
   @override
@@ -85,14 +87,29 @@ class _ResetPasswordPageState extends State<ResetPasswordPage> {
                       TextFormField(
                         controller: _password,
                         enabled: !_loading,
-                        obscureText: true,
+                        obscureText: !_showPassword,
                         autocorrect: false,
                         enableSuggestions: false,
                         autofillHints: const [AutofillHints.newPassword],
                         textInputAction: TextInputAction.next,
-                        decoration: const InputDecoration(
+                        decoration: InputDecoration(
                           labelText: 'New Password',
-                          border: OutlineInputBorder(),
+                          border: const OutlineInputBorder(),
+                          suffixIcon: IconButton(
+                            tooltip: _showPassword
+                                ? 'Hide password'
+                                : 'Show password',
+                            onPressed: _loading
+                                ? null
+                                : () => setState(
+                                    () => _showPassword = !_showPassword,
+                                  ),
+                            icon: Icon(
+                              _showPassword
+                                  ? Icons.visibility_off_outlined
+                                  : Icons.visibility_outlined,
+                            ),
+                          ),
                         ),
                         validator: (value) => AuthValidation.newPassword(
                           value,
@@ -103,14 +120,30 @@ class _ResetPasswordPageState extends State<ResetPasswordPage> {
                       TextFormField(
                         controller: _confirmation,
                         enabled: !_loading,
-                        obscureText: true,
+                        obscureText: !_showConfirmation,
                         autocorrect: false,
                         enableSuggestions: false,
                         autofillHints: const [AutofillHints.newPassword],
                         textInputAction: TextInputAction.done,
-                        decoration: const InputDecoration(
+                        decoration: InputDecoration(
                           labelText: 'Confirm New Password',
-                          border: OutlineInputBorder(),
+                          border: const OutlineInputBorder(),
+                          suffixIcon: IconButton(
+                            tooltip: _showConfirmation
+                                ? 'Hide password'
+                                : 'Show password',
+                            onPressed: _loading
+                                ? null
+                                : () => setState(
+                                    () =>
+                                        _showConfirmation = !_showConfirmation,
+                                  ),
+                            icon: Icon(
+                              _showConfirmation
+                                  ? Icons.visibility_off_outlined
+                                  : Icons.visibility_outlined,
+                            ),
+                          ),
                         ),
                         validator: (value) => AuthValidation.confirmPassword(
                           value,

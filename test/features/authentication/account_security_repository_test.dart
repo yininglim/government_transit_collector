@@ -20,7 +20,7 @@ void main() {
       await expectLater(
         auth.changePassword(
           currentPassword: 'not-a-google-password',
-          newPassword: 'new-password123',
+          newPassword: 'New-password123!',
         ),
         throwsA(isA<AuthFlowException>()),
       );
@@ -38,6 +38,7 @@ void main() {
     repository = AuthRepository(
       client: backend.client,
       redirectUrl: 'test-auth://callback',
+      emailVerificationRedirectUrl: 'https://example.test/verified/',
     );
   });
   tearDown(() async {
@@ -58,7 +59,7 @@ void main() {
           repository.register(
             fullName: 'Rider',
             email: ' user@example.com ',
-            password: 'password123',
+            password: 'Password123!',
           ),
           message(AuthRepository.existingAccountMessage),
         );
@@ -117,7 +118,7 @@ void main() {
       );
       backend.updateErrorCode = code;
       await expectLater(
-        repository.resetPassword('new-password123'),
+        repository.resetPassword('New-password123!'),
         message(
           code == 'same_password'
               ? 'Your new password cannot be the same as your previous password.'
@@ -137,7 +138,7 @@ void main() {
       await expectLater(
         repository.changePassword(
           currentPassword: 'not-a-google-password',
-          newPassword: 'new-password123',
+          newPassword: 'New-password123!',
         ),
         message('This account does not support app password changes.'),
       );
@@ -153,7 +154,7 @@ void main() {
       await expectLater(
         repository.changePassword(
           currentPassword: 'wrong-password',
-          newPassword: 'new-password123',
+          newPassword: 'New-password123!',
         ),
         message('Current password is incorrect.'),
       );
@@ -171,7 +172,7 @@ void main() {
         await backend.signIn();
         await repository.changePassword(
           currentPassword: 'old-password123',
-          newPassword: 'new-password123',
+          newPassword: 'New-password123!',
         );
         expect(backend.requests.map((r) => r.url.path), [
           '/auth/v1/token',
@@ -182,7 +183,7 @@ void main() {
           'owner@example.test',
         );
         expect(jsonDecode(backend.requests.last.body), {
-          'password': 'new-password123',
+          'password': 'New-password123!',
           'current_password': 'old-password123',
         });
         expect(repository.currentSession!.user.id, 'authenticated-owner');
@@ -206,14 +207,14 @@ void main() {
       await backend.signIn();
       await expectLater(
         repository.changePassword(
-          currentPassword: 'password123',
-          newPassword: 'password123',
+          currentPassword: 'Password123!',
+          newPassword: 'Password123!',
         ),
         message('New password must be different from your current password.'),
       );
       await expectLater(
         repository.changePassword(
-          currentPassword: 'password123',
+          currentPassword: 'Password123!',
           newPassword: 'owner@example.test',
         ),
         message('Password cannot be the same as your email address.'),

@@ -52,7 +52,6 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
     if (_loading || _secondsRemaining > 0 || !_form.currentState!.validate()) {
       return;
     }
-    final resend = _requestedEmail != null;
     FocusManager.instance.primaryFocus?.unfocus();
     setState(() {
       _loading = true;
@@ -63,11 +62,14 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
     try {
       await widget.repository.sendPasswordReset(_requestedEmail!);
       if (!mounted) return;
-      setState(
-        () => _message = resend
-            ? 'A new password reset email has been sent.'
-            : 'If an account exists for this email, a password reset link has been sent.',
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'If an account exists for this email, a password reset link has been sent.',
+          ),
+        ),
       );
+      Navigator.of(context).pop();
     } on Object catch (error) {
       if (!mounted) return;
       setState(
