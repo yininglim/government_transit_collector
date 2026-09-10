@@ -88,6 +88,18 @@ class _LoginPageState extends State<LoginPage> {
         email: _emailController.text,
         password: _passwordController.text,
       );
+    } on EmailNotVerifiedException {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => EmailVerificationPage(
+            repository: widget.repository,
+            email: _emailController.text.trim(),
+            unverifiedSignIn: true,
+          ),
+        ),
+      );
     } on AuthFlowException catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(

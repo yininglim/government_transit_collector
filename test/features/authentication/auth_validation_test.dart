@@ -28,7 +28,7 @@ void main() {
     test('short password fails length validation', () {
       expect(
         AuthValidation.newPassword(password),
-        'Password must be at least 8 characters.',
+        AuthValidation.passwordRequirements,
       );
     });
   }
@@ -41,7 +41,7 @@ void main() {
       'Password cannot be the same as your email address.',
     );
     expect(
-      AuthValidation.newPassword('valid-password', email: 'user@example.com'),
+      AuthValidation.newPassword('Valid-password1', email: 'user@example.com'),
       isNull,
     );
   });
@@ -51,6 +51,32 @@ void main() {
       'New password must be different from your current password.',
     );
   });
+  test(
+    'new password enforces every character requirement without changing login',
+    () {
+      for (final weak in [
+        'Aa1!',
+        'lowercase1!',
+        'UPPERCASE1!',
+        'NoNumbers!',
+        'NoSymbols1',
+        'Password1 ',
+        'Password1\u00e9',
+      ]) {
+        expect(
+          AuthValidation.newPassword(weak),
+          AuthValidation.passwordRequirements,
+        );
+      }
+      expect(AuthValidation.newPassword('Strong1!'), isNull);
+      expect(AuthValidation.password('password123'), isNull);
+      expect(AuthValidation.confirmPassword('Strong1!', 'Strong1!'), isNull);
+      expect(
+        AuthValidation.confirmPassword('Strong2!', 'Strong1!'),
+        'Passwords do not match.',
+      );
+    },
+  );
   group('registration validation', () {
     test('rejects empty required fields', () {
       expect(

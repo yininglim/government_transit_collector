@@ -24,6 +24,8 @@ class AuthBackend {
   final storage = MemoryAuthStorage();
   String role = 'passenger';
   bool google = true;
+  bool emailVerified = true;
+  bool confirmationRequired = true;
   String sessionMethod = 'password';
   bool emailIdentity = false;
   bool obfuscatedSignup = false;
@@ -51,6 +53,7 @@ class AuthBackend {
     'id': 'authenticated-owner',
     'aud': 'authenticated',
     'email': 'owner@example.test',
+    if (emailVerified) 'email_confirmed_at': '2026-01-01T00:00:00Z',
     'role': 'authenticated',
     'created_at': '2026-01-01T00:00:00Z',
     'app_metadata': {'provider': google ? 'google' : 'email'},
@@ -127,7 +130,13 @@ class AuthBackend {
           }, 422);
         }
         if (obfuscatedSignup) return reply({...user, 'identities': []});
-        return reply(session);
+        return reply(
+          confirmationRequired
+              ? {...user, 'email_confirmed_at': null}
+              : session,
+        );
+      case '/auth/v1/resend':
+        return reply({});
       case '/auth/v1/recover':
         if (recoveryErrorCode != null) {
           return reply({
