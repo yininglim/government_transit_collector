@@ -232,18 +232,37 @@ class DepartureRecommendationPageState
           return Column(
             children: [
               for (final journey in snapshot.data!)
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.bookmark_outline),
-                  title: Text(journey.name),
-                  subtitle: Text(
-                    journey.usable
-                        ? '${journey.origin!.name} \u2192 ${journey.destination!.name}'
-                        : 'A saved stop is no longer available.',
+                Card(
+                  margin: const EdgeInsets.only(top: 8),
+                  elevation: 0,
+                  color: Theme.of(context).colorScheme.surface,
+                  clipBehavior: Clip.antiAlias,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    side: BorderSide(
+                      color: Theme.of(context).colorScheme.outlineVariant,
+                    ),
                   ),
-                  onTap: _inputsBusy || !journey.usable
-                      ? null
-                      : () => _useSavedJourney(journey),
+                  child: ListTile(
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 4,
+                    ),
+                    leading: Icon(
+                      Icons.bookmark_outline,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    title: Text(journey.name),
+                    subtitle: Text(
+                      journey.usable
+                          ? '${journey.origin!.name} \u2192 ${journey.destination!.name}'
+                          : 'A saved stop is no longer available.',
+                    ),
+                    onTap: _inputsBusy || !journey.usable
+                        ? null
+                        : () => _useSavedJourney(journey),
+                  ),
                 ),
             ],
           );
@@ -1356,7 +1375,7 @@ class DepartureRecommendationPageState
             Expanded(
               child: Text(
                 'Recent Searches',
-                style: Theme.of(context).textTheme.titleLarge,
+                style: Theme.of(context).textTheme.titleMedium,
               ),
             ),
 
@@ -1383,17 +1402,35 @@ class DepartureRecommendationPageState
         else if (_recentSearches!.isEmpty)
           const Text('No recent searches yet.')
         else
-          Card(
-            clipBehavior: Clip.antiAlias,
-            child: Column(
-              children: _recentSearches!
-                  .take(_recentExpanded ? 10 : 3)
-                  .map(
-                    (search) => ListTile(
+          Column(
+            children: _recentSearches!
+                .take(_recentExpanded ? 10 : 3)
+                .map(
+                  (search) => Card(
+                    margin: const EdgeInsets.only(top: 8),
+                    elevation: 0,
+                    color: Theme.of(context).colorScheme.surface,
+                    clipBehavior: Clip.antiAlias,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      side: BorderSide(
+                        color: Theme.of(context).colorScheme.outlineVariant,
+                      ),
+                    ),
+                    child: ListTile(
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 4,
+                      ),
+
                       key: Key(
                         'recent-${search.originStopId}-${search.destinationStopId}',
                       ),
-                      leading: const Icon(Icons.history),
+                      leading: Icon(
+                        Icons.history,
+                        size: 24,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
                       title: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
@@ -1424,7 +1461,13 @@ class DepartureRecommendationPageState
                                           )
                                       ? null
                                       : () => _deleteRecentSearch(search),
-                                  icon: const Icon(Icons.delete_outline),
+                                  icon: Icon(
+                                    Icons.delete_outline,
+                                    size: 24,
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.primary,
+                                  ),
                                 ),
                               ],
                             ),
@@ -1435,9 +1478,9 @@ class DepartureRecommendationPageState
                           ? null
                           : () => _restoreRecentSearch(search),
                     ),
-                  )
-                  .toList(growable: false),
-            ),
+                  ),
+                )
+                .toList(growable: false),
           ),
         if (_historyError == null && (_recentSearches?.length ?? 0) > 3)
           TextButton(

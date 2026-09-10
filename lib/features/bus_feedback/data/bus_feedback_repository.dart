@@ -2,6 +2,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'bus_feedback.dart';
 
+const feedbackNotStartedMessage =
+    'This trip has not started yet. You can report an issue after the scheduled departure time.';
+
 const duplicateFeedbackMessage =
     'You have already submitted a report for this stop and scheduled departure.';
 
@@ -16,10 +19,14 @@ abstract interface class BusFeedbackRepository {
 }
 
 class SupabaseBusFeedbackRepository implements BusFeedbackRepository {
-  SupabaseBusFeedbackRepository({SupabaseClient? client})
-    : _client = client ?? Supabase.instance.client;
+  SupabaseBusFeedbackRepository({
+    SupabaseClient? client,
+    DateTime Function()? now,
+  }) : _client = client ?? Supabase.instance.client,
+       _now = now ?? DateTime.now;
 
   final SupabaseClient _client;
+  final DateTime Function() _now;
 
   @override
   Future<void> submitFeedback(BusFeedback feedback) async {
@@ -44,6 +51,14 @@ class SupabaseBusFeedbackRepository implements BusFeedbackRepository {
         throw const BusFeedbackException(
           'Please select a valid scheduled departure.',
         );
+      }
+      // Service dates are Malaysia calendar dates; GTFS seconds can exceed 24h.
+      final date = feedback.serviceDate!;
+      final departure = DateTime.utc(date.year, date.month, date.day)
+          .subtract(const Duration(hours: 8))
+          .add(Duration(seconds: feedback.scheduledDepartureSeconds!));
+      if (_now().toUtc().isBefore(departure)) {
+        throw const BusFeedbackException(feedbackNotStartedMessage);
       }
       final existing = await _client
           .from('bus_feedback')

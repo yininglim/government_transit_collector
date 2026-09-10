@@ -208,9 +208,7 @@ class _BusFeedbackPageState extends State<BusFeedbackPage> {
     final now = _currentTransitTime;
 
     if (now.isBefore(departure)) {
-      return 'Scheduled departure: '
-          '${_formatTime(departure)}. '
-          'Late and missing-bus reports are not available before the scheduled departure.';
+      return feedbackNotStartedMessage;
     }
 
     final missingBusAvailableAt = departure.add(
@@ -558,6 +556,13 @@ class _BusFeedbackPageState extends State<BusFeedbackPage> {
 
   Future<void> _submitFeedback() async {
     if (_submitting || _departure == null || _loadingTimes || _loadingStops) {
+      return;
+    }
+
+    if (_currentTransitTime.isBefore(_scheduledDeparture!)) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text(feedbackNotStartedMessage)));
       return;
     }
 

@@ -93,30 +93,29 @@ class SupabaseFeedbackReferenceRepository
     final normalized =
     query.trim();
 
-    if (normalized.isEmpty) {
-      return const [];
-    }
-
     try {
       final safe =
       _escapeLikePattern(
         normalized,
       );
 
-      final data = await _client
-          .from('gtfs_routes')
-          .select(
-        'route_id, route_short_name, route_long_name',
-      )
-          .or(
-        'route_short_name.ilike.%$safe%,route_long_name.ilike.%$safe%,route_id.ilike.%$safe%',
-      )
-          .order(
-        'route_short_name',
-      )
-          .limit(
-        resultLimit,
-      );
+      final data = <Map<String, dynamic>>[];
+      for (var offset = 0; ; offset += _batchSize) {
+        var request = _client.from('gtfs_routes').select(
+          'route_id, route_short_name, route_long_name',
+        );
+        if (normalized.isNotEmpty) {
+          request = request.or(
+            'route_short_name.ilike.%$safe%,route_long_name.ilike.%$safe%,route_id.ilike.%$safe%',
+          );
+        }
+        final page = await request
+            .order('route_short_name')
+            .order('route_id')
+            .range(offset, offset + _batchSize - 1);
+        data.addAll(page);
+        if (page.length < _batchSize) break;
+      }
 
       return data
           .map(
