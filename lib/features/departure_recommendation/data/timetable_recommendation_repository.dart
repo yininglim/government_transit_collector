@@ -16,21 +16,20 @@ String _journeyIdentity(JourneyRecommendation journey) => switch (journey) {
     'transfer|${j.firstTripId}|${j.secondTripId}|${j.transferStopId}|${j.originStopSequence}|${j.destinationStopSequence}',
 };
 
-/// Service-day seconds in Malaysia (UTC+8), including partial seconds.
-/// Other service dates retain their existing timetable behavior.
+/// Elapsed Malaysia service-day seconds, including overnight GTFS services.
 int minimumCurrentDepartureSeconds(
   DateTime travelDate, {
   DateTime Function()? now,
 }) {
   final current = currentTransitServiceDateTime(now: now);
-  if (travelDate.year != current.year ||
-      travelDate.month != current.month ||
-      travelDate.day != current.day)
-    return 0;
-  return current.hour * 3600 +
-      current.minute * 60 +
-      current.second +
-      (current.millisecond > 0 || current.microsecond > 0 ? 1 : 0);
+  final serviceStart = DateTime.utc(
+    travelDate.year,
+    travelDate.month,
+    travelDate.day,
+  ).subtract(const Duration(hours: 8));
+  final elapsed = current.toUtc().difference(serviceStart).inMicroseconds;
+  if (elapsed <= 0) return 0;
+  return (elapsed / Duration.microsecondsPerSecond).ceil();
 }
 
 /// Keep the ranked winner, then prefer actual distinct route combinations.

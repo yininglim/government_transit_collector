@@ -631,37 +631,40 @@ class DepartureRecommendationPageState
       _routeStructureFound = null;
     });
 
-    final directFuture = widget.tripRepository.findDirectRoutes(
-      originStopId: origin.id,
-      destinationStopId: destination.id,
-    );
-
-    final transferFuture = widget.transferRepository.findOneTransferJourneys(
-      originStopId: origin.id,
-      destinationStopId: destination.id,
-    );
-
     List<DirectRouteResult>? directResults;
     List<OneTransferJourneyResult>? transferResults;
-
     String? directError;
     String? transferError;
 
-    try {
-      directResults = await directFuture;
-    } on DirectTripReadException catch (error) {
-      directError = error.message;
-    } on Object {
-      directError = 'Unable to find direct routes.';
-    }
-
-    try {
-      transferResults = await transferFuture;
-    } on TransferJourneyReadException catch (error) {
-      transferError = error.message;
-    } on Object {
-      transferError = 'Unable to find one-transfer routes.';
-    }
+    // Attach both error handlers immediately while retaining partial results.
+    await Future.wait([
+      () async {
+        try {
+          directResults = await widget.tripRepository.findDirectRoutes(
+            originStopId: origin.id,
+            destinationStopId: destination.id,
+          );
+        } on DirectTripReadException catch (error) {
+          directError = error.message;
+        } on Object {
+          directError = 'Unable to find direct routes.';
+        }
+      }(),
+      () async {
+        try {
+          transferResults = await widget.transferRepository
+              .findOneTransferJourneys(
+                originStopId: origin.id,
+                destinationStopId: destination.id,
+              );
+        } on TransferJourneyReadException catch (error) {
+          transferError = error.message;
+        } on Object {
+          transferError = 'Unable to find one-transfer routes.';
+        }
+      }(),
+    ]);
+    if (!mounted) return;
 
     final routeStructureFound =
         directResults?.isNotEmpty == true ||

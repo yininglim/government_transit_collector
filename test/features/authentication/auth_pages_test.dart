@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'package:government_transit_collector/features/passenger_home/presentation/passenger_home_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -106,6 +108,28 @@ class PageAuth extends AuthRepository {
   }
 }
 
+class RefreshingPageAuth extends PageAuth {
+  RefreshingPageAuth() {
+    recovering = false;
+  }
+  final changes = StreamController<AuthState>.broadcast();
+  final session = Session.fromJson(AuthBackend().session)!;
+  static const profile = AppProfile(
+    userId: 'authenticated-owner',
+    fullName: 'Passenger',
+    role: 'passenger',
+    email: 'owner@example.test',
+  );
+  Completer<AppProfile?>? pending;
+  @override
+  Session? get currentSession => session;
+  @override
+  Stream<AuthState> get authStateChanges => changes.stream;
+  @override
+  Future<AppProfile?> loadCurrentProfile() async =>
+      pending == null ? profile : await pending!.future;
+}
+
 void main() {
   Future<void> show(
     WidgetTester tester,
@@ -125,6 +149,50 @@ void main() {
     await tester.tap(target);
     await tester.pumpAndSettle();
   }
+
+  testWidgets(
+    'review: token refresh preserves the existing passenger page state',
+    (tester) async {
+      final repository = RefreshingPageAuth();
+      await show(tester, AuthGate(repository: repository));
+      final original = tester.state(find.byType(PassengerHomePage));
+      repository.pending = Completer<AppProfile?>();
+      repository.changes.add(
+        AuthState(AuthChangeEvent.tokenRefreshed, repository.currentSession),
+      );
+      await tester.pump();
+      expect(find.byType(PassengerHomePage), findsOneWidget);
+      expect(tester.state(find.byType(PassengerHomePage)), same(original));
+      repository.pending!.complete(RefreshingPageAuth.profile);
+      await tester.pumpAndSettle();
+      expect(tester.state(find.byType(PassengerHomePage)), same(original));
+      await tester.pumpWidget(const SizedBox());
+      await repository.changes.close();
+      repository.dispose();
+    },
+  );
+
+  testWidgets(
+    'review: fresh callback error is displayed once and cleared for retry',
+    (tester) async {
+      const error = 'Unable to sign in with Google. Please try again.';
+      final repository = PageAuth()..callbackMessage = error;
+      await show(
+        tester,
+        LoginPage(repository: repository, message: repository.callbackMessage),
+      );
+      expect(find.text(error), findsOneWidget);
+      expect(repository.callbackMessage, isNull);
+      await tap(tester, find.text('Sign In'));
+      expect(find.text(error), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      await show(
+        tester,
+        LoginPage(repository: repository, message: repository.callbackMessage),
+      );
+      expect(find.text(error), findsNothing);
+    },
+  );
 
   testWidgets(
     'login order, Google abstraction, signup and phone keyboard layout',

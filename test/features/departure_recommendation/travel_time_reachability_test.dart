@@ -26,6 +26,7 @@ void main() {
         originStopId: 'origin',
         destinationStopId: 'destination',
         travelDate: f.monday,
+        now: () => DateTime.utc(2026, 8, 16, 16),
         travelTimeSeconds: target,
         mode: mode,
         directRoutes: const [

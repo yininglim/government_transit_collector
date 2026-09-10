@@ -119,7 +119,7 @@ class _StopSelectionPageState extends State<StopSelectionPage> {
       final current = available == null
           ? await widget.repository.getStopById(stop.id)
           : available.where((item) => item.id == stop.id).firstOrNull;
-      if (!mounted) return;
+      if (!mounted || ModalRoute.of(context)?.isCurrent != true) return;
       if (current == null || current.id == widget.excludedStopId) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(

@@ -77,7 +77,10 @@ class _AuthGateState extends State<AuthGate> {
     }
     if (mounted) {
       setState(() {
-        _loading = true;
+        // A token refresh for the same user must not dispose the passenger tabs.
+        _loading =
+            _profile == null ||
+            _profile!.userId != widget.repository.currentSession?.user.id;
         _error = null;
       });
     }
