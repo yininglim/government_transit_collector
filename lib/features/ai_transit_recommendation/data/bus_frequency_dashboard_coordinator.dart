@@ -1,3 +1,4 @@
+import 'package:government_transit_collector/core/time/transit_service_time.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_evidence_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_evidence_repository.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_recommendation_models.dart';
@@ -5,6 +6,7 @@ import 'package:government_transit_collector/features/ai_transit_recommendation/
 import 'package:government_transit_collector/features/route_performance/data/route_performance_models.dart';
 import 'package:government_transit_collector/features/route_performance/data/route_performance_repository.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/scheduled_service_evidence_models.dart';
+import 'package:timezone/timezone.dart' as timezone;
 
 class BusFrequencyDashboardCandidate {
   const BusFrequencyDashboardCandidate({
@@ -56,12 +58,15 @@ class BusFrequencyDashboardSession {
   bool setupFailure = false;
   bool screeningComplete = false;
   int routesAnalysed = 0;
+  Future<void>? preparation;
+  int preparationVersion = 0;
 
   bool matchesPeriod(DateTime startUtc, DateTime endExclusiveUtc) =>
       periodStartUtc?.isAtSameMomentAs(startUtc) == true &&
       periodEndUtc?.isAtSameMomentAs(endExclusiveUtc) == true;
 
   void begin(DateTime startUtc, DateTime endExclusiveUtc) {
+    preparationVersion++;
     periodStartUtc = startUtc;
     periodEndUtc = endExclusiveUtc;
     candidates.clear();
@@ -71,9 +76,11 @@ class BusFrequencyDashboardSession {
     setupFailure = false;
     screeningComplete = false;
     routesAnalysed = 0;
+    preparation = null;
   }
 
   void clear() {
+    preparationVersion++;
     periodStartUtc = null;
     periodEndUtc = null;
     candidates.clear();
@@ -83,6 +90,7 @@ class BusFrequencyDashboardSession {
     setupFailure = false;
     screeningComplete = false;
     routesAnalysed = 0;
+    preparation = null;
   }
 }
 
@@ -120,36 +128,64 @@ class BusFrequencyDashboardCoordinator {
   }) async {
     final routes = await _routeRepository.loadRoutes();
     final ordered = [...routes]..sort(_compareRoutes);
-    final candidates = <BusFrequencyDashboardCandidate>[];
-    final excludedRoutes = <BusFrequencyDashboardExcludedRoute>[];
-    for (final route in ordered) {
-      try {
-        final evidence = await _evidenceRepository.loadEvidence(
-          routeId: route.routeId,
-          startUtc: startUtc,
-          endExclusiveUtc: endExclusiveUtc,
-        );
-        if (isBusFrequencyDashboardEligible(evidence)) {
-          candidates.add(
-            BusFrequencyDashboardCandidate(route: route, evidence: evidence),
+    final outcomes = List<
+      ({
+        BusFrequencyDashboardCandidate? candidate,
+        BusFrequencyDashboardExcludedRoute? excluded,
+      })?
+    >.filled(ordered.length, null);
+    var nextIndex = 0;
+    Future<void> worker() async {
+      while (true) {
+        final index = nextIndex++;
+        if (index >= ordered.length) return;
+        final route = ordered[index];
+        try {
+          final evidence = await _evidenceRepository.loadEvidence(
+            routeId: route.routeId,
+            startUtc: startUtc,
+            endExclusiveUtc: endExclusiveUtc,
           );
-        } else {
-          excludedRoutes.add(
-            BusFrequencyDashboardExcludedRoute(
+          if (isBusFrequencyDashboardEligible(evidence)) {
+            outcomes[index] = (
+              candidate: BusFrequencyDashboardCandidate(
+                route: route,
+                evidence: evidence,
+              ),
+              excluded: null,
+            );
+          } else {
+            outcomes[index] = (
+              candidate: null,
+              excluded: BusFrequencyDashboardExcludedRoute(
+                route: route,
+                reason: busFrequencyDashboardExclusionReason(evidence),
+                evidence: evidence,
+              ),
+            );
+          }
+        } on Object {
+          outcomes[index] = (
+            candidate: null,
+            excluded: BusFrequencyDashboardExcludedRoute(
               route: route,
-              reason: busFrequencyDashboardExclusionReason(evidence),
-              evidence: evidence,
+              reason: BusFrequencyDashboardExclusionReason.evidenceLoadingFailure,
+              evidence: null,
             ),
           );
         }
-      } on Object {
-        excludedRoutes.add(
-          BusFrequencyDashboardExcludedRoute(
-            route: route,
-            reason: BusFrequencyDashboardExclusionReason.evidenceLoadingFailure,
-            evidence: null,
-          ),
-        );
+      }
+    }
+    final workerCount = ordered.length < 4 ? ordered.length : 4;
+    await Future.wait([for (var i = 0; i < workerCount; i++) worker()]);
+    final candidates = <BusFrequencyDashboardCandidate>[];
+    final excludedRoutes = <BusFrequencyDashboardExcludedRoute>[];
+    for (final outcome in outcomes) {
+      final value = outcome!;
+      if (value.candidate != null) {
+        candidates.add(value.candidate!);
+      } else {
+        excludedRoutes.add(value.excluded!);
       }
     }
     return BusFrequencyDashboardScreeningResult(
@@ -157,6 +193,46 @@ class BusFrequencyDashboardCoordinator {
       candidates: List.unmodifiable(candidates),
       excludedRoutes: List.unmodifiable(excludedRoutes),
     );
+  }
+
+  Future<void> prepareSession({
+    required BusFrequencyDashboardSession session,
+    required DateTime startUtc,
+    required DateTime endExclusiveUtc,
+  }) {
+    if (session.matchesPeriod(startUtc, endExclusiveUtc)) {
+      if (session.screeningComplete) return Future.value();
+      final existing = session.preparation;
+      if (existing != null) return existing;
+    }
+    session.begin(startUtc, endExclusiveUtc);
+    final version = session.preparationVersion;
+    late final Future<void> work;
+    work = () async {
+      try {
+        final result = await screenRoutes(
+          startUtc: startUtc,
+          endExclusiveUtc: endExclusiveUtc,
+        );
+        if (session.preparationVersion != version ||
+            !session.matchesPeriod(startUtc, endExclusiveUtc)) {
+          return;
+        }
+        session.candidates.addAll(result.candidates);
+        session.excludedRoutes.addAll(result.excludedRoutes);
+        session.routesAnalysed = result.routesAnalysed;
+        session.screeningComplete = true;
+        session.empty = result.candidates.isEmpty;
+      } on Object {
+        if (session.preparationVersion == version) {
+          session.setupFailure = true;
+        }
+      } finally {
+        if (identical(session.preparation, work)) session.preparation = null;
+      }
+    }();
+    session.preparation = work;
+    return work;
   }
 
   Future<BusFrequencyRecommendationResult> analyse({
@@ -179,6 +255,22 @@ class BusFrequencyDashboardCoordinator {
     evidence: candidates.map((candidate) => candidate.evidence).toList(),
     startUtc: startUtc,
     endExclusiveUtc: endExclusiveUtc,
+  );
+}
+
+({DateTime startUtc, DateTime endUtc}) busFrequencyAnalysisPeriod({
+  DateTime Function()? now,
+}) {
+  final current = currentTransitServiceDateTime(now: now);
+  final today = timezone.TZDateTime(
+    transitServiceLocation,
+    current.year,
+    current.month,
+    current.day,
+  );
+  return (
+    startUtc: today.subtract(const Duration(days: 29)).toUtc(),
+    endUtc: today.add(const Duration(days: 1)).toUtc(),
   );
 }
 

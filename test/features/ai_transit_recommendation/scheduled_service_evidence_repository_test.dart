@@ -4,9 +4,70 @@ import 'package:government_transit_collector/features/ai_transit_recommendation/
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/scheduled_service_evidence_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/scheduled_service_evidence_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/timetable_recommendation_repository.dart';
+import 'package:government_transit_collector/features/realtime_vehicle/data/trip_progress_repository.dart';
 import 'package:government_transit_collector/features/route_performance/data/route_performance_models.dart';
+import 'package:government_transit_collector/features/route_performance/data/route_performance_repository.dart';
 
 void main() {
+  test('lean scheduled path preserves reference-stop semantics', () async {
+    final result = await DefaultScheduledServiceEvidenceRepository(
+      useLeanRouteLoader: true,
+      routeRepository: FakeLeanRouteRepository(),
+      routeTripDataSource: FakeLeanRouteTripDataSource(),
+      stopTimeDataSource: FakeLeanStopTimeDataSource(),
+      dataSource: FakeScheduledServiceDataSource(
+        metadata: [metadata('trip-a')],
+      ),
+    ).loadEvidence(
+      routeId: 'J15',
+      startUtc: localDayStartUtc,
+      endExclusiveUtc: localDayEndUtc,
+    );
+
+    final departure = result.directionGroups.single.departures.single;
+    expect(departure.tripId, 'trip-a');
+    expect(departure.referenceStopId, 'first');
+    expect(departure.referenceStopSequence, 1);
+    expect(departure.departureSeconds, 8 * 3600);
+    expect(
+      result.status,
+      ScheduledServiceEvidenceStatus.insufficientForHeadway,
+    );
+  });
+
+  test('lean scheduled path matches grouped scheduled outputs', () async {
+    final trips = [
+      trip('trip-a', 8 * 3600),
+      trip('trip-b', 8 * 3600 + 30 * 60),
+      trip('trip-c', 9 * 3600),
+    ];
+    final full = await repository(trips: trips).loadEvidence(
+      routeId: 'J15',
+      startUtc: localDayStartUtc,
+      endExclusiveUtc: localDayEndUtc,
+    );
+    final lean = await leanRepository(trips).loadEvidence(
+      routeId: 'J15',
+      startUtc: localDayStartUtc,
+      endExclusiveUtc: localDayEndUtc,
+    );
+
+    expect(lean.scheduledDepartureCount, full.scheduledDepartureCount);
+    expect(lean.directionGroups.length, full.directionGroups.length);
+    expect(
+      lean.directionGroups.single.headwaysSeconds,
+      full.directionGroups.single.headwaysSeconds,
+    );
+    expect(
+      lean.directionGroups.single.hourlyBuckets
+          .map((bucket) => bucket.scheduledDepartureCount),
+      full.directionGroups.single.hourlyBuckets
+          .map((bucket) => bucket.scheduledDepartureCount),
+    );
+    expect(lean.status, full.status);
+    expect(lean.incompleteTripIds, full.incompleteTripIds);
+  });
+
   test(
     'orders scheduled departures and calculates consecutive headways',
     () async {
@@ -266,6 +327,93 @@ class FakeRouteNetworkRepository implements RouteNetworkEvidenceRepository {
       trips: trips,
     );
   }
+}
+
+DefaultScheduledServiceEvidenceRepository leanRepository(
+  List<AiRouteTripEvidence> trips,
+) {
+  return DefaultScheduledServiceEvidenceRepository(
+    useLeanRouteLoader: true,
+    routeRepository: FakeLeanRouteRepository(),
+    routeTripDataSource: FakeLeanRouteTripDataSource(
+      tripIds: trips.map((item) => item.tripId).toList(),
+    ),
+    stopTimeDataSource: FakeLeanStopTimeDataSource(
+      stopTimes: {
+        for (final trip in trips)
+          trip.tripId: [
+            for (final stop in trip.stops)
+              TripStopTimeRecord(
+                stopId: stop.stopId,
+                stopSequence: stop.stopSequence,
+                arrivalSeconds: stop.scheduledArrivalSeconds,
+                departureSeconds: stop.scheduledDepartureSeconds,
+              ),
+          ],
+      },
+    ),
+    dataSource: FakeScheduledServiceDataSource(
+      metadata: [for (final item in trips) metadata(item.tripId)],
+    ),
+  );
+}
+
+class FakeLeanRouteRepository implements RoutePerformanceRepository {
+  @override
+  Future<List<RoutePerformanceRoute>> loadRoutes() async => [
+    const RoutePerformanceRoute(
+      routeId: 'J15',
+      shortName: 'J15',
+      longName: 'Johor route',
+    ),
+  ];
+
+  @override
+  Future<RoutePerformanceData> loadRoutePerformance({
+    required String routeId,
+    required DateTime startUtc,
+    required DateTime endExclusiveUtc,
+  }) => throw UnimplementedError();
+}
+
+class FakeLeanRouteTripDataSource implements RouteTripDataSource {
+  FakeLeanRouteTripDataSource({this.tripIds = const ['trip-a']});
+
+  final List<String> tripIds;
+
+  @override
+  Future<List<String>> fetchTripIds({
+    required String routeId,
+    required int offset,
+    required int limit,
+  }) async => offset == 0 ? tripIds : const [];
+}
+
+class FakeLeanStopTimeDataSource implements TripProgressStopTimeDataSource {
+  FakeLeanStopTimeDataSource({Map<String, List<TripStopTimeRecord>>? stopTimes})
+    : stopTimes = stopTimes ??
+          const {
+            'trip-a': [
+              TripStopTimeRecord(
+                stopId: 'second',
+                stopSequence: 2,
+                arrivalSeconds: 9 * 3600,
+                departureSeconds: 9 * 3600,
+              ),
+              TripStopTimeRecord(
+                stopId: 'first',
+                stopSequence: 1,
+                arrivalSeconds: 8 * 3600,
+                departureSeconds: null,
+              ),
+            ],
+          };
+
+  final Map<String, List<TripStopTimeRecord>> stopTimes;
+
+  @override
+  Future<List<TripStopTimeRecord>> loadStopTimes(String tripId) async =>
+      stopTimes[tripId] ?? const [];
 }
 
 class FakeScheduledServiceDataSource implements ScheduledServiceDataSource {

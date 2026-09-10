@@ -5,6 +5,7 @@ import 'package:government_transit_collector/features/ai_transit_recommendation/
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/district_route_stop_evidence_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_stop_dashboard_coordinator.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_network_evidence_models.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_stop_evidence_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_stop_recommendation_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_stop_recommendation_repository.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/presentation/route_stop_network_map.dart';
@@ -21,6 +22,7 @@ class RouteBusStopRecommendationPage extends StatefulWidget {
     this.routeRepository,
     this.now,
     this.baseMapEnabled = true,
+    this.preparationScheduler,
     super.key,
   });
 
@@ -31,6 +33,7 @@ class RouteBusStopRecommendationPage extends StatefulWidget {
   final RoutePerformanceRepository? routeRepository;
   final DateTime Function()? now;
   final bool baseMapEnabled;
+  final Future<void> Function()? preparationScheduler;
 
   @override
   State<RouteBusStopRecommendationPage> createState() =>
@@ -45,6 +48,7 @@ class _RouteBusStopRecommendationPageState
   bool _screening = false;
   bool _analysing = false;
   bool _retrying = false;
+  final Set<String> _expandedGroups = <String>{};
 
   List<RouteStopDashboardCandidate> get _candidates => _session.candidates;
   List<RouteStopDashboardExcludedRoute> get _excludedRoutes =>
@@ -86,11 +90,15 @@ class _RouteBusStopRecommendationPageState
     if (_screening || _analysing || _retrying) return;
     final period = _newPeriod();
     setState(() => _screening = true);
-    await _coordinator.prepareSession(
-      session: _session,
-      startUtc: period.startUtc,
-      endExclusiveUtc: period.endUtc,
-    );
+    if (widget.preparationScheduler != null) {
+      await widget.preparationScheduler!();
+    } else {
+      await _coordinator.prepareSession(
+        session: _session,
+        startUtc: period.startUtc,
+        endExclusiveUtc: period.endUtc,
+      );
+    }
     if (!mounted) return;
     setState(() => _screening = false);
   }
@@ -125,6 +133,7 @@ class _RouteBusStopRecommendationPageState
     );
     if (!mounted) return;
     setState(() {
+      _expandedGroups.clear();
       _session.recommendationResult = result;
       _analysing = false;
     });
@@ -299,46 +308,52 @@ class _RouteBusStopRecommendationPageState
   );
 
   Widget _evidenceOverview() {
-    final routeStructures = _candidates
-        .map((candidate) => candidate.evidence.routeStopEvidence.network.trips)
-        .toList();
-    final stopLists = routeStructures
-        .expand((trips) => trips)
-        .map((trip) => trip.stops);
-    final allStops = stopLists.expand((stops) => stops).toList();
-    final coordinateCount = allStops
-        .where((stop) => _usableCoordinate(stop.coordinate))
-        .length;
-    final distanceSources = _candidates.map((candidate) {
-      final source = candidate.evidence.routeStopEvidence;
-      final distances = source.network.trips
-          .map((trip) => trip.routeDistanceMeters)
-          .whereType<double>();
-      final spacing = source.stopSpacingByTrip
-          .expand((trip) => trip.consecutiveStops)
-          .map((item) => item.distanceMeters)
-          .whereType<double>();
-      return (
-        available: distances.isNotEmpty && spacing.isNotEmpty,
-        present: distances.isNotEmpty || spacing.isNotEmpty,
-      );
-    }).toList();
-    final operational = _candidates.map((candidate) {
-      final source = candidate.evidence.routeStopEvidence.operational;
-      return source.peakOperationSummary.observationCount > 0 ||
-          source.routePerformanceSummary.totalObservations > 0;
-    }).toList();
-    final feedback = _candidates
-        .map(
-          (candidate) =>
-              candidate
-                  .evidence
-                  .routeStopEvidence
-                  .feedback
-                  .routeStopRelevantRecordCount >
-              0,
+    final allStops = _candidates
+        .expand(
+          (candidate) => candidate.evidence.routeStopEvidence.network.trips,
         )
+        .expand((trip) => trip.stops)
         .toList();
+    final delayedTrips = _candidates.fold<int>(
+      0,
+      (sum, candidate) =>
+          sum +
+          candidate
+              .evidence
+              .routeStopEvidence
+              .operational
+              .routePerformanceSummary
+              .delayedTripCount,
+    );
+    final relevantFeedback = _candidates.fold<int>(
+      0,
+      (sum, candidate) =>
+          sum +
+          candidate
+              .evidence
+              .routeStopEvidence
+              .feedback
+              .routeStopRelevantRecordCount,
+    );
+    final stopIssues = _candidates.fold<int>(
+      0,
+      (sum, candidate) =>
+          sum +
+          (candidate.evidence.routeStopEvidence.feedback.countByIssueType[
+                  RouteStopFeedbackIssueTypes.missingBusStop] ??
+              0) +
+          (candidate.evidence.routeStopEvidence.feedback.countByIssueType[
+                  RouteStopFeedbackIssueTypes.longWalkingDistance] ??
+              0),
+    );
+    final routeInformationIssues = _candidates.fold<int>(
+      0,
+      (sum, candidate) =>
+          sum +
+          (candidate.evidence.routeStopEvidence.feedback.countByIssueType[
+                  RouteStopFeedbackIssueTypes.incorrectRouteInformation] ??
+              0),
+    );
     return Card(
       key: const Key('route-stop-evidence-overview'),
       child: Padding(
@@ -347,7 +362,7 @@ class _RouteBusStopRecommendationPageState
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              'Route / Stop Evidence Coverage',
+              'Route & Stop Evidence',
               style: Theme.of(context).textTheme.titleLarge,
             ),
             const SizedBox(height: 12),
@@ -355,60 +370,35 @@ class _RouteBusStopRecommendationPageState
               spacing: 16,
               runSpacing: 12,
               children: [
+                _coverageMetric('Analysis Period', 'Past 30 Days'),
                 _coverageMetric(
                   'Routes Analysed',
                   '${_session.routesAnalysed}',
                 ),
-                _coverageMetric('Eligible Routes', '${_candidates.length}'),
+                _coverageMetric('Stop Records Analysed', '${allStops.length}'),
                 _coverageMetric(
-                  'Limited / Excluded Routes',
-                  '${_excludedRoutes.length}',
+                  'Delayed Trips',
+                  '$delayedTrips',
+                ),
+                _coverageMetric(
+                  'Relevant Route/Stop Feedback',
+                  '$relevantFeedback',
                 ),
               ],
             ),
-            const SizedBox(height: 16),
-            _coverageRow(
-              'Route / Trip Structure',
-              _candidates.isEmpty ? 'Missing' : 'Available',
+            const SizedBox(height: 8),
+            Text(
+              'Feedback breakdown',
+              style: Theme.of(context).textTheme.labelMedium,
             ),
-            _coverageRow(
-              'Ordered Stops',
-              _sourceCoverage(
-                total: routeStructures.length,
-                available: routeStructures
-                    .where(
-                      (trips) => trips.every((trip) => trip.stops.length >= 2),
-                    )
-                    .length,
-                present: routeStructures
-                    .where(
-                      (trips) => trips.any((trip) => trip.stops.isNotEmpty),
-                    )
-                    .length,
-              ),
+            Wrap(
+              spacing: 12,
+              runSpacing: 4,
+              children: [
+                Text('Stop-related Issues: $stopIssues'),
+                Text('Route-information Issues: $routeInformationIssues'),
+              ],
             ),
-            _coverageRow(
-              'Stop Coordinates',
-              _sourceCoverage(
-                total: allStops.length,
-                available: coordinateCount,
-                present: coordinateCount,
-              ),
-            ),
-            _coverageRow(
-              'Route Distance / Spacing',
-              _sourceCoverage(
-                total: distanceSources.length,
-                available: distanceSources
-                    .where((source) => source.available)
-                    .length,
-                present: distanceSources
-                    .where((source) => source.available || source.present)
-                    .length,
-              ),
-            ),
-            _coverageRow('Operational Evidence', _booleanCoverage(operational)),
-            _coverageRow('Relevant Feedback', _booleanCoverage(feedback)),
             const SizedBox(height: 12),
             Wrap(
               spacing: 8,
@@ -557,39 +547,6 @@ class _RouteBusStopRecommendationPageState
     ),
   );
 
-  Widget _coverageRow(String label, String value) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 4),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(child: Text(label)),
-        const SizedBox(width: 12),
-        Flexible(
-          child: Text(
-            value,
-            textAlign: TextAlign.end,
-            style: const TextStyle(fontWeight: FontWeight.w600),
-          ),
-        ),
-      ],
-    ),
-  );
-
-  String _booleanCoverage(List<bool> values) => _sourceCoverage(
-    total: values.length,
-    available: values.where((value) => value).length,
-    present: values.where((value) => value).length,
-  );
-
-  String _sourceCoverage({
-    required int total,
-    required int available,
-    required int present,
-  }) {
-    if (total == 0 || present == 0) return 'Missing';
-    return available == total ? 'Available' : 'Limited';
-  }
-
   Future<void> _showLimitedRoutes() => showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
@@ -665,13 +622,13 @@ class _RouteBusStopRecommendationPageState
               'Trips with route distance: $routeDistances of ${trips.length}',
               'Available consecutive spacing values: $spacingValues',
             ]),
-            _detailSection('Operational Evidence', [
+            _detailSection('Operational Observations', [
               'Peak Operation observations: '
                   '${source.operational.peakOperationSummary.observationCount}',
               'Route Performance observations: '
                   '${source.operational.routePerformanceSummary.totalObservations}',
             ]),
-            _detailSection('Feedback', [
+            _detailSection('Passenger Feedback', [
               'Relevant route/stop feedback: '
                   '${source.feedback.routeStopRelevantRecordCount}',
             ]),
@@ -839,8 +796,23 @@ class _RouteBusStopRecommendationPageState
           const SizedBox(height: 8),
           Text(group.summary),
           const SizedBox(height: 10),
-          for (final routeId in group.routeIds)
+          for (final routeId in (_expandedGroups.contains(group.action.name)
+              ? group.routeIds
+              : group.routeIds.take(3)))
             _recommendationRoute(group, routeId),
+          if (group.routeIds.length > 3)
+            TextButton(
+              onPressed: () => setState(() {
+                if (!_expandedGroups.add(group.action.name)) {
+                  _expandedGroups.remove(group.action.name);
+                }
+              }),
+              child: Text(
+                _expandedGroups.contains(group.action.name)
+                    ? 'Show fewer'
+                    : 'Show ${group.routeIds.length - 3} more routes',
+              ),
+            ),
         ],
       ),
     ),
@@ -853,6 +825,20 @@ class _RouteBusStopRecommendationPageState
     final candidate = _candidate(routeId);
     final record = _recommendationRecord(routeId);
     final rationale = record?.conciseRationale;
+    final evidence = candidate?.evidence.routeStopEvidence;
+    final stopIssueCount = evidence == null
+        ? 0
+        : (evidence.feedback.countByIssueType[
+                    RouteStopFeedbackIssueTypes.missingBusStop] ??
+                0) +
+            (evidence.feedback.countByIssueType[
+                    RouteStopFeedbackIssueTypes.longWalkingDistance] ??
+                0);
+    final routeInformationIssueCount = evidence == null
+        ? 0
+        : evidence.feedback.countByIssueType[
+                RouteStopFeedbackIssueTypes.incorrectRouteInformation] ??
+            0;
     final targetStopNames = group.action ==
             RouteStopRecommendationAction.stopImprovement
         ? _targetStopNames(candidate, record?.targetStopIds ?? const [])
@@ -875,6 +861,24 @@ class _RouteBusStopRecommendationPageState
             Text('Target Stops', style: Theme.of(context).textTheme.labelLarge),
             const SizedBox(height: 2),
             for (final name in targetStopNames) Text(name),
+          ],
+          if (evidence != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Supporting Evidence',
+              style: Theme.of(context).textTheme.labelLarge,
+            ),
+            const SizedBox(height: 2),
+            Text(
+              'Relevant passenger feedback: '
+              '${evidence.feedback.routeStopRelevantRecordCount}',
+            ),
+            Text(
+              'Delayed trips: '
+              '${evidence.operational.routePerformanceSummary.delayedTripCount}',
+            ),
+            Text('Stop-related issues: $stopIssueCount'),
+            Text('Route-information issues: $routeInformationIssueCount'),
           ],
           if (rationale != null) ...[
             const SizedBox(height: 8),

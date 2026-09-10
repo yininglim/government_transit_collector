@@ -21,7 +21,7 @@ class DefaultBusFrequencyEvidenceRepository
     AdminFeedbackRepository? feedbackRepository,
   }) : _scheduledServiceRepository =
            scheduledServiceRepository ??
-           DefaultScheduledServiceEvidenceRepository(),
+           DefaultScheduledServiceEvidenceRepository(useLeanRouteLoader: true),
        _operationalRepository =
            operationalRepository ?? DefaultOperationalEvidenceRepository(),
        _feedbackRepository =

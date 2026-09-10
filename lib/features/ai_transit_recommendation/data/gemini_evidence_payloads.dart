@@ -15,7 +15,6 @@ const maxPayloadPeakBuckets = 48;
 const maxPayloadTripVariants = 20;
 const maxPayloadStopsPerTrip = 100;
 const maxPayloadUncostableDepartures = 100;
-const maxBusFrequencyFeatureRoutes = 20;
 
 abstract interface class GeminiEvidencePayload {
   Map<String, dynamic> toJson();
@@ -164,7 +163,7 @@ class BusFrequencyGeminiPayloadBuilder {
   BusFrequencyGeminiEvidencePayload buildFeature(
     List<BusFrequencyEvidence> evidence,
   ) {
-    if (evidence.isEmpty || evidence.length > maxBusFrequencyFeatureRoutes) {
+    if (evidence.isEmpty) {
       throw ArgumentError.value(evidence.length, 'evidence');
     }
     final first = evidence.first;
