@@ -1,12 +1,31 @@
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/cost_recommendation_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/cost_recommendation_repository.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/cost_scenario.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/fuel_cost_calculation_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/fuel_cost_calculation_repository.dart';
 import 'package:government_transit_collector/features/route_performance/data/route_performance_models.dart';
 import 'package:government_transit_collector/features/route_performance/data/route_performance_repository.dart';
+import 'package:government_transit_collector/core/time/transit_service_time.dart';
+import 'package:timezone/timezone.dart' as timezone;
 
 const costDashboardBatchSize = 3;
 const costDashboardMaximumConcurrency = 2;
+
+({DateTime startUtc, DateTime endUtc, DateTime referenceDate})
+costAnalysisPeriod({DateTime Function()? now}) {
+  final current = currentTransitServiceDateTime(now: now);
+  final today = timezone.TZDateTime(
+    transitServiceLocation,
+    current.year,
+    current.month,
+    current.day,
+  );
+  return (
+    startUtc: today.subtract(const Duration(days: 29)).toUtc(),
+    endUtc: today.add(const Duration(days: 1)).toUtc(),
+    referenceDate: DateTime(current.year, current.month, current.day),
+  );
+}
 
 class CostDashboardCandidate {
   const CostDashboardCandidate({required this.route, required this.evidence});
@@ -30,9 +49,12 @@ class CostDashboardSession {
   DateTime? referenceDate;
   bool empty = false;
   bool setupFailure = false;
+  bool screeningComplete = false;
   int completedInBatch = 0;
   int batchTotal = 0;
   int nextCandidateIndex = 0;
+  Future<void>? preparationFuture;
+  int preparationVersion = 0;
 
   bool matchesPeriod(
     DateTime startUtc,
@@ -44,6 +66,8 @@ class CostDashboardSession {
       _sameDate(referenceDate, reference);
 
   void begin(DateTime startUtc, DateTime endExclusiveUtc, DateTime reference) {
+    preparationVersion++;
+    preparationFuture = null;
     periodStartUtc = startUtc;
     periodEndUtc = endExclusiveUtc;
     referenceDate = DateTime(reference.year, reference.month, reference.day);
@@ -51,12 +75,15 @@ class CostDashboardSession {
     entries.clear();
     empty = false;
     setupFailure = false;
+    screeningComplete = false;
     completedInBatch = 0;
     batchTotal = 0;
     nextCandidateIndex = 0;
   }
 
   void clear() {
+    preparationVersion++;
+    preparationFuture = null;
     periodStartUtc = null;
     periodEndUtc = null;
     referenceDate = null;
@@ -64,6 +91,7 @@ class CostDashboardSession {
     entries.clear();
     empty = false;
     setupFailure = false;
+    screeningComplete = false;
     completedInBatch = 0;
     batchTotal = 0;
     nextCandidateIndex = 0;
@@ -91,6 +119,65 @@ class CostDashboardCoordinator {
   final RoutePerformanceRepository _routeRepository;
   final FuelCostCalculationRepository _evidenceRepository;
   final CostRecommendationRepository _recommendationRepository;
+
+  Future<void> prepareSession({
+    required CostDashboardSession session,
+    required DateTime startUtc,
+    required DateTime endExclusiveUtc,
+    required DateTime referenceDate,
+  }) {
+    if (session.matchesPeriod(startUtc, endExclusiveUtc, referenceDate) &&
+        session.screeningComplete) {
+      return Future<void>.value();
+    }
+    final current = session.preparationFuture;
+    if (current != null &&
+        session.matchesPeriod(startUtc, endExclusiveUtc, referenceDate)) {
+      return current;
+    }
+    final version = ++session.preparationVersion;
+    session.periodStartUtc = startUtc;
+    session.periodEndUtc = endExclusiveUtc;
+    session.referenceDate = DateTime(
+      referenceDate.year,
+      referenceDate.month,
+      referenceDate.day,
+    );
+    session.candidates.clear();
+    session.entries.clear();
+    session.empty = false;
+    session.setupFailure = false;
+    session.screeningComplete = false;
+    session.completedInBatch = 0;
+    session.batchTotal = 0;
+    session.nextCandidateIndex = 0;
+    final future = () async {
+      try {
+        final candidates = await screenCandidates(
+          startUtc: startUtc,
+          endExclusiveUtc: endExclusiveUtc,
+          referenceDate: referenceDate,
+        );
+        if (session.preparationVersion != version) return;
+        session.candidates
+          ..clear()
+          ..addAll(candidates);
+        session.empty = candidates.isEmpty;
+        session.batchTotal = candidates.length;
+        session.screeningComplete = true;
+      } on Object {
+        if (session.preparationVersion == version) {
+          session.setupFailure = true;
+        }
+      } finally {
+        if (session.preparationVersion == version) {
+          session.preparationFuture = null;
+        }
+      }
+    }();
+    session.preparationFuture = future;
+    return future;
+  }
 
   Future<List<CostDashboardCandidate>> screenCandidates({
     required DateTime startUtc,
@@ -125,6 +212,7 @@ class CostDashboardCoordinator {
     required DateTime startUtc,
     required DateTime endExclusiveUtc,
     required DateTime referenceDate,
+    CostPlanningContext? planningContext,
     void Function(int completed, int total, CostDashboardEntry entry)?
     onCompleted,
   }) async {
@@ -159,6 +247,10 @@ class CostDashboardCoordinator {
             endExclusiveUtc: endExclusiveUtc,
             referenceDate: referenceDate,
             evidence: candidate.evidence,
+            planningContext:
+                planningContext?.routeId == candidate.route.routeId
+                ? planningContext
+                : null,
           );
         } on Object {
           result = const CostRecommendationResult(
@@ -194,6 +286,7 @@ class CostDashboardCoordinator {
     required DateTime startUtc,
     required DateTime endExclusiveUtc,
     required DateTime referenceDate,
+    CostPlanningContext? planningContext,
   }) async {
     final result = await _recommendationRepository.generate(
       routeId: candidate.route.routeId,
@@ -201,6 +294,9 @@ class CostDashboardCoordinator {
       endExclusiveUtc: endExclusiveUtc,
       referenceDate: referenceDate,
       evidence: candidate.evidence,
+      planningContext: planningContext?.routeId == candidate.route.routeId
+          ? planningContext
+          : null,
     );
     return CostDashboardEntry(route: candidate.route, result: result);
   }

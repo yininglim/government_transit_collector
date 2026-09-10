@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:developer' as developer;
 
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_evidence_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_recommendation_models.dart';
@@ -113,6 +114,9 @@ class DefaultBusFrequencyRecommendationRepository
     required DateTime endExclusiveUtc,
   }) async {
     if (evidence.isEmpty) {
+      _logBusFrequencyFailure(
+        failure: BusFrequencyRecommendationFailure.evidenceUnavailable,
+      );
       return const BusFrequencyRecommendationResult(
         status: BusFrequencyRecommendationStatus.insufficientEvidence,
         synthesis: null,
@@ -123,6 +127,9 @@ class DefaultBusFrequencyRecommendationRepository
     try {
       _validateEvidence(evidence, startUtc, endExclusiveUtc);
     } on Object {
+      _logBusFrequencyFailure(
+        failure: BusFrequencyRecommendationFailure.evidenceUnavailable,
+      );
       return const BusFrequencyRecommendationResult(
         status: BusFrequencyRecommendationStatus.temporarilyUnavailable,
         synthesis: null,
@@ -154,6 +161,10 @@ class DefaultBusFrequencyRecommendationRepository
         payload: payload,
       );
     } on BusFrequencyRecommendationValidationException catch (error) {
+      _logBusFrequencyFailure(
+        failure: error.failure,
+        validationCategory: error.failure.name,
+      );
       return BusFrequencyRecommendationResult(
         status: BusFrequencyRecommendationStatus.invalidAiResponse,
         synthesis: null,
@@ -164,6 +175,21 @@ class DefaultBusFrequencyRecommendationRepository
       return _transportFailure(error, payload: payload);
     }
   }
+}
+
+void _logBusFrequencyFailure({
+  required BusFrequencyRecommendationFailure failure,
+  int? statusCode,
+  String? validationCategory,
+}) {
+  final fields = <String>['failure=${failure.name}'];
+  if (statusCode != null) {
+    fields.add('status=$statusCode');
+  }
+  if (validationCategory != null) {
+    fields.add('category=$validationCategory');
+  }
+  developer.log(fields.join(' '), name: 'BusFrequencyAI');
 }
 
 void _validateEvidence(
@@ -386,6 +412,10 @@ BusFrequencyRecommendationResult _transportFailure(
     GeminiTransportFailure.network => BusFrequencyRecommendationFailure.network,
     GeminiTransportFailure.http => BusFrequencyRecommendationFailure.http,
   };
+  _logBusFrequencyFailure(
+    failure: mapped,
+    statusCode: error.statusCode,
+  );
   return BusFrequencyRecommendationResult(
     status: mapped == BusFrequencyRecommendationFailure.malformedResponse
         ? BusFrequencyRecommendationStatus.invalidAiResponse

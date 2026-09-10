@@ -15,6 +15,7 @@ class AiRecommendationDashboardPage extends StatefulWidget {
     this.costPageBuilder,
     this.busFrequencyCoordinator,
     this.routeStopCoordinator,
+    this.costCoordinator,
     this.now,
     this.preloadBusFrequency = true,
     this.preloadRouteStops = true,
@@ -28,6 +29,7 @@ class AiRecommendationDashboardPage extends StatefulWidget {
   final Widget Function(CostDashboardSession session)? costPageBuilder;
   final BusFrequencyDashboardCoordinator? busFrequencyCoordinator;
   final RouteStopDashboardCoordinator? routeStopCoordinator;
+  final CostDashboardCoordinator? costCoordinator;
   final DateTime Function()? now;
   final bool preloadBusFrequency;
   final bool preloadRouteStops;
@@ -44,6 +46,7 @@ class _AiRecommendationDashboardPageState
   final _costSession = CostDashboardSession();
   BusFrequencyDashboardCoordinator? _busFrequencyCoordinator;
   RouteStopDashboardCoordinator? _routeStopCoordinator;
+  CostDashboardCoordinator? _costCoordinator;
   late final _RecommendationPreparationScheduler _preparationScheduler;
 
   BusFrequencyDashboardCoordinator get _frequencyCoordinator =>
@@ -52,11 +55,15 @@ class _AiRecommendationDashboardPageState
   RouteStopDashboardCoordinator get _routeCoordinator =>
       _routeStopCoordinator ??= RouteStopDashboardCoordinator();
 
+  CostDashboardCoordinator get _costCoordinatorValue =>
+      _costCoordinator ??= CostDashboardCoordinator();
+
   @override
   void initState() {
     super.initState();
     _busFrequencyCoordinator = widget.busFrequencyCoordinator;
     _routeStopCoordinator = widget.routeStopCoordinator;
+    _costCoordinator = widget.costCoordinator;
     _preparationScheduler = _RecommendationPreparationScheduler(
       preparations: {
         _RecommendationFeature.busFrequency: () async {
@@ -75,6 +82,15 @@ class _AiRecommendationDashboardPageState
             endExclusiveUtc: period.endUtc,
           );
         },
+        _RecommendationFeature.cost: () async {
+          final period = costAnalysisPeriod(now: widget.now);
+          await _costCoordinatorValue.prepareSession(
+            session: _costSession,
+            startUtc: period.startUtc,
+            endExclusiveUtc: period.endUtc,
+            referenceDate: period.referenceDate,
+          );
+        },
       },
       prepared: {
         _RecommendationFeature.busFrequency: () =>
@@ -89,6 +105,15 @@ class _AiRecommendationDashboardPageState
               routeStopAnalysisPeriod(now: widget.now).startUtc,
               routeStopAnalysisPeriod(now: widget.now).endUtc,
             ),
+        _RecommendationFeature.cost: () {
+          final period = costAnalysisPeriod(now: widget.now);
+          return _costSession.screeningComplete &&
+              _costSession.matchesPeriod(
+                period.startUtc,
+                period.endUtc,
+                period.referenceDate,
+              );
+        },
       },
     );
     if (widget.preloadBusFrequency) {
@@ -97,6 +122,7 @@ class _AiRecommendationDashboardPageState
     if (widget.preloadRouteStops) {
       unawaited(_preparationScheduler.enqueue(_RecommendationFeature.routeStops));
     }
+    unawaited(_preparationScheduler.enqueue(_RecommendationFeature.cost));
   }
 
   @override
@@ -161,7 +187,16 @@ class _AiRecommendationDashboardPageState
                 MaterialPageRoute<void>(
                   builder: (_) =>
                       widget.costPageBuilder?.call(_costSession) ??
-                      CostEstimationReportPage(session: _costSession),
+                      CostEstimationReportPage(
+                        session: _costSession,
+                        coordinator: _costCoordinatorValue,
+                        preparationScheduler: () =>
+                            _preparationScheduler.request(
+                              _RecommendationFeature.cost,
+                            ),
+                        busFrequencySession: _busFrequencySession,
+                        now: widget.now,
+                      ),
                 ),
               ),
             ),
@@ -172,7 +207,7 @@ class _AiRecommendationDashboardPageState
   }
 }
 
-enum _RecommendationFeature { busFrequency, routeStops }
+enum _RecommendationFeature { busFrequency, routeStops, cost }
 
 class _RecommendationPreparationScheduler {
   _RecommendationPreparationScheduler({

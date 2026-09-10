@@ -60,10 +60,18 @@ class DirectionFuelCalculationEvidence {
   const DirectionFuelCalculationEvidence({
     required this.directionId,
     required this.departures,
+    this.directionLabel,
+    this.currentHeadwayMinutes,
+    this.minimumHeadwaySeconds,
+    this.maximumHeadwaySeconds,
   });
 
   final int? directionId;
   final List<ScheduledDepartureFuelEvidence> departures;
+  final String? directionLabel;
+  final double? currentHeadwayMinutes;
+  final int? minimumHeadwaySeconds;
+  final int? maximumHeadwaySeconds;
 
   int get costableDepartureCount => departures
       .where(
@@ -95,6 +103,7 @@ class FuelCostCalculationEvidence {
     required this.scheduledServiceStatus,
     required this.incompleteTripIds,
     required this.hasCompleteDirectionData,
+    this.currentHeadwayMinutes,
   });
 
   final RoutePerformanceRoute route;
@@ -116,4 +125,5 @@ class FuelCostCalculationEvidence {
   final ScheduledServiceEvidenceStatus scheduledServiceStatus;
   final List<String> incompleteTripIds;
   final bool hasCompleteDirectionData;
+  final double? currentHeadwayMinutes;
 }

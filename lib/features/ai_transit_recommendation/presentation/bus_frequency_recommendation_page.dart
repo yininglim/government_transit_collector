@@ -5,6 +5,7 @@ import 'package:government_transit_collector/features/ai_transit_recommendation/
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_recommendation_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_recommendation_repository.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/scheduled_service_evidence_models.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/presentation/numeric_display.dart';
 import 'package:government_transit_collector/features/route_performance/data/route_performance_repository.dart';
 
 class BusFrequencyRecommendationPage extends StatefulWidget {
@@ -150,6 +151,18 @@ class _BusFrequencyRecommendationPageState
                 'Review deterministic service evidence before generating an AI recommendation.',
               ),
               const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  key: const Key('analyse-routes'),
+                  onPressed: _screening || _analysing
+                      ? null
+                      : _startNewAnalysis,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Start New Analysis'),
+                ),
+              ),
+              const SizedBox(height: 16),
               if (_screening)
                 const Card(
                   child: Padding(
@@ -205,15 +218,6 @@ class _BusFrequencyRecommendationPageState
                   ),
                 ],
               ],
-              const SizedBox(height: 24),
-              OutlinedButton.icon(
-                key: const Key('analyse-routes'),
-                onPressed: _screening || _analysing
-                    ? null
-                    : _startNewAnalysis,
-                icon: const Icon(Icons.refresh),
-                label: const Text('Start New Analysis'),
-              ),
             ],
           ),
         ],
@@ -263,22 +267,22 @@ class _BusFrequencyRecommendationPageState
               runSpacing: 12,
               children: [
                 _metric('Analysis Period', 'Past 30 Days'),
-                _metric('Routes Analysed', '${_session.routesAnalysed}'),
+                _metric('Routes Analysed', displayCount(_session.routesAnalysed)),
                 _metric(
                   'Scheduled Departures',
-                  '${evidence.fold<int>(0, (sum, item) => sum + item.scheduledService.scheduledDepartureCount)}',
+                  displayCount(evidence.fold<int>(0, (sum, item) => sum + item.scheduledService.scheduledDepartureCount)),
                 ),
                 _metric(
                   'Vehicle Position Observations',
-                  '${evidence.fold<int>(0, (sum, item) => sum + item.operational.routePerformanceSummary.totalObservations)}',
+                  displayCount(evidence.fold<int>(0, (sum, item) => sum + item.operational.routePerformanceSummary.totalObservations)),
                 ),
                 _metric(
                   'Delayed Trips',
-                  '${evidence.fold<int>(0, (sum, item) => sum + item.operational.routePerformanceSummary.delayedTripCount)}',
+                  displayCount(evidence.fold<int>(0, (sum, item) => sum + item.operational.routePerformanceSummary.delayedTripCount)),
                 ),
                 _metric(
                   'Relevant Passenger Feedback',
-                  '${evidence.fold<int>(0, (sum, item) => sum + item.feedback.frequencyRelevantRecordCount)}',
+                  displayCount(evidence.fold<int>(0, (sum, item) => sum + item.feedback.frequencyRelevantRecordCount)),
                 ),
               ],
             ),
@@ -294,11 +298,11 @@ class _BusFrequencyRecommendationPageState
                 spacing: 12,
                 runSpacing: 4,
                 children: [
-                  if (lateFeedback > 0) Text('Late: $lateFeedback'),
+                  if (lateFeedback > 0) Text('Late: ${displayCount(lateFeedback)}'),
                   if (overcrowdedFeedback > 0)
-                    Text('Overcrowded: $overcrowdedFeedback'),
+                    Text('Overcrowded: ${displayCount(overcrowdedFeedback)}'),
                   if (didNotArriveFeedback > 0)
-                    Text('Did Not Arrive: $didNotArriveFeedback'),
+                    Text('Did Not Arrive: ${displayCount(didNotArriveFeedback)}'),
                 ],
               ),
             ],
@@ -488,7 +492,7 @@ class _BusFrequencyRecommendationPageState
               children: [
                 _conciseEvidence(
                   'Scheduled departures',
-                  '${scheduled.scheduledDepartureCount}',
+                  displayCount(scheduled.scheduledDepartureCount),
                 ),
                 _conciseEvidence(
                   'Current Headway',
@@ -513,11 +517,11 @@ class _BusFrequencyRecommendationPageState
               children: [
                 _conciseEvidence(
                   'Delayed trips',
-                  '${evidence.operational.routePerformanceSummary.delayedTripCount}',
+                  displayCount(evidence.operational.routePerformanceSummary.delayedTripCount),
                 ),
                 _conciseEvidence(
                   'Relevant feedback',
-                  '${evidence.feedback.frequencyRelevantRecordCount}',
+                  displayCount(evidence.feedback.frequencyRelevantRecordCount),
                 ),
                 if ((evidence.feedback.countByIssueType[
                             BusFrequencyFeedbackIssueTypes.busWasLate] ??
@@ -525,7 +529,7 @@ class _BusFrequencyRecommendationPageState
                     0)
                   _conciseEvidence(
                     'Late feedback',
-                    '${evidence.feedback.countByIssueType[BusFrequencyFeedbackIssueTypes.busWasLate]}',
+                    displayCount(evidence.feedback.countByIssueType[BusFrequencyFeedbackIssueTypes.busWasLate]!),
                   ),
                 if ((evidence.feedback.countByIssueType[
                             BusFrequencyFeedbackIssueTypes.busOvercrowded] ??
@@ -533,7 +537,7 @@ class _BusFrequencyRecommendationPageState
                     0)
                   _conciseEvidence(
                     'Overcrowded feedback',
-                    '${evidence.feedback.countByIssueType[BusFrequencyFeedbackIssueTypes.busOvercrowded]}',
+                    displayCount(evidence.feedback.countByIssueType[BusFrequencyFeedbackIssueTypes.busOvercrowded]!),
                   ),
                 if ((evidence.feedback.countByIssueType[
                             BusFrequencyFeedbackIssueTypes.busDidNotArrive] ??
@@ -541,7 +545,7 @@ class _BusFrequencyRecommendationPageState
                     0)
                   _conciseEvidence(
                     'Did Not Arrive feedback',
-                    '${evidence.feedback.countByIssueType[BusFrequencyFeedbackIssueTypes.busDidNotArrive]}',
+                    displayCount(evidence.feedback.countByIssueType[BusFrequencyFeedbackIssueTypes.busDidNotArrive]!),
                   ),
               ],
             ),
@@ -634,16 +638,16 @@ class _BusFrequencyRecommendationPageState
               candidate.route.displayName,
               style: Theme.of(context).textTheme.titleMedium,
             ),
-            Text('Scheduled departures: ${scheduled.scheduledDepartureCount}'),
+            Text('Scheduled departures: ${displayCount(scheduled.scheduledDepartureCount)}'),
             Text('Headway intervals: $headways'),
             Text(
               'Peak Operation observations: ${evidence.operational.peakOperationSummary.observationCount}',
             ),
             Text(
-              'Route Performance observations: ${evidence.operational.routePerformanceSummary.totalObservations}',
+              'Route Performance observations: ${displayCount(evidence.operational.routePerformanceSummary.totalObservations)}',
             ),
             Text(
-              'Frequency-related feedback: ${evidence.feedback.frequencyRelevantRecordCount}',
+              'Frequency-related feedback: ${displayCount(evidence.feedback.frequencyRelevantRecordCount)}',
             ),
           ],
         ),
@@ -675,7 +679,7 @@ class _BusFrequencyRecommendationPageState
             const SizedBox(height: 16),
             _evidenceSection(context, 'Scheduled Service', [
               'Status: ${_scheduledStatusLabel(scheduled.status)}',
-              'Scheduled departures: ${scheduled.scheduledDepartureCount}',
+              'Scheduled departures: ${displayCount(scheduled.scheduledDepartureCount)}',
               'Directions represented: ${scheduled.directionGroups.length}',
               for (final direction in scheduled.directionGroups)
                 '${_directionLabel(direction.directionId)} headway: '
@@ -686,13 +690,13 @@ class _BusFrequencyRecommendationPageState
               'Peak Operation coverage: '
                   '${peak.hasReliablePeak ? 'Available' : 'Limited'}',
               'Route Performance observations: '
-                  '${performance.totalObservations}',
+                  '${displayCount(performance.totalObservations)}',
               'Complete Route Performance trips: '
                   '${performance.completeTrips.length}',
             ]),
             _evidenceSection(context, 'Passenger Feedback', [
               'Frequency-related feedback: '
-                  '${evidence.feedback.frequencyRelevantRecordCount}',
+                  '${displayCount(evidence.feedback.frequencyRelevantRecordCount)}',
               'Total feedback records: ${evidence.feedback.totalRecordCount}',
             ]),
             _evidenceSection(
