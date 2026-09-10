@@ -38,25 +38,48 @@ void main() {
     expect(payload.containsKey('records'), isFalse);
   });
 
-  test('empty and over-limit evidence cause zero requests', () async {
+  test('21 eligible routes fit one recommendation group and request', () async {
+    final ids = List.generate(21, (index) => 'R$index');
+    final gemini = FakeGemini(
+      validResponse({for (final id in ids) id: 'maintainService'}),
+    );
+    final result = await repository(gemini).generate(
+      evidence: [for (final id in ids) routeEvidence(id)],
+      startUtc: start,
+      endExclusiveUtc: end,
+    );
+    expect(gemini.calls, 1);
+    expect(result.failure, isNull);
+    expect(result.synthesis!.recommendationGroups.single.routeIds, ids);
+  });
+
+  test('empty evidence causes zero requests', () async {
     final gemini = FakeGemini(validResponse({'R1': 'maintainService'}));
     final empty = await repository(
       gemini,
     ).generate(evidence: const [], startUtc: start, endExclusiveUtc: end);
-    final tooMany = await repository(gemini).generate(
-      evidence: List.generate(21, (i) => routeEvidence('R$i')),
-      startUtc: start,
-      endExclusiveUtc: end,
-    );
     expect(gemini.calls, 0);
     expect(
       empty.failure,
       BusFrequencyRecommendationFailure.evidenceUnavailable,
     );
-    expect(
-      tooMany.failure,
-      BusFrequencyRecommendationFailure.routeLimitExceeded,
-    );
+  });
+
+  test('22 and larger eligible route sets remain supported', () async {
+    for (final count in [22, 35]) {
+      final ids = List.generate(count, (index) => 'R$index');
+      final gemini = FakeGemini(
+        validResponse({for (final id in ids) id: 'maintainService'}),
+      );
+      final result = await repository(gemini).generate(
+        evidence: [for (final id in ids) routeEvidence(id)],
+        startUtc: start,
+        endExclusiveUtc: end,
+      );
+      expect(gemini.calls, 1);
+      expect(result.failure, isNull);
+      expect(result.synthesis!.recommendationGroups.single.routeIds, ids);
+    }
   });
 
   test(
@@ -130,8 +153,6 @@ void main() {
   for (final mutation in [
     'fabricated',
     'duplicate-route',
-    'cross-group',
-    'duplicate-action',
     'unknown-reference',
     'duplicate-reference',
     'cross-route-reference',
@@ -143,31 +164,27 @@ void main() {
         'R1': 'maintainService',
         'R2': 'decreaseService',
       });
-      final groups = response['recommendationGroups'] as List<dynamic>;
+      final records = response['routeRecommendations'] as List<dynamic>;
       switch (mutation) {
         case 'fabricated':
-          (groups[0] as Map<String, dynamic>)['routeIds'] = ['UNKNOWN'];
+          (records[0] as Map<String, dynamic>)['routeId'] = 'UNKNOWN';
         case 'duplicate-route':
-          (groups[0] as Map<String, dynamic>)['routeIds'] = ['R1', 'R1'];
-        case 'cross-group':
-          (groups[1] as Map<String, dynamic>)['routeIds'] = ['R1'];
-        case 'duplicate-action':
-          (groups[1] as Map<String, dynamic>)['action'] = 'maintainService';
+          records.add(Map<String, dynamic>.from(records[0] as Map));
         case 'unknown-reference':
-          (groups[0] as Map<String, dynamic>)['evidenceReferences'] = [
+          (records[0] as Map<String, dynamic>)['evidenceRefs'] = [
             'unknown',
           ];
         case 'duplicate-reference':
-          (groups[0] as Map<String, dynamic>)['evidenceReferences'] = [
+          (records[0] as Map<String, dynamic>)['evidenceRefs'] = [
             'route.R1.scheduled.summary',
             'route.R1.scheduled.summary',
           ];
         case 'cross-route-reference':
-          (groups[0] as Map<String, dynamic>)['evidenceReferences'] = [
+          (records[0] as Map<String, dynamic>)['evidenceRefs'] = [
             'route.R2.scheduled.summary',
           ];
         case 'missing-route':
-          groups.removeLast();
+          records.removeLast();
         case 'extra-property':
           response['invented'] = true;
       }
@@ -188,10 +205,8 @@ void main() {
 
   test('rejects empty route IDs', () async {
     final response = validResponse({'R1': 'maintainService'});
-    ((response['recommendationGroups'] as List).single
-        as Map<String, dynamic>)['routeIds'] = [
-      '',
-    ];
+    ((response['routeRecommendations'] as List).single
+        as Map<String, dynamic>)['routeId'] = '';
     final result = await repository(FakeGemini(response)).generate(
       evidence: [routeEvidence('R1')],
       startUtc: start,
@@ -234,13 +249,21 @@ void main() {
       );
       expect(
         _keys(busFrequencyRecommendationResponseSchema),
-        containsAll(['overallSummary', 'recommendationGroups', 'routeIds']),
+        containsAll(['overallSummary', 'routeRecommendations']),
       );
       expect(
         _keys(busFrequencyRecommendationResponseSchema),
         isNot(contains('recommendedHeadway')),
       );
-      expect(maxBusFrequencyFeatureRoutes, 20);
+      final groupProperties =
+          (busFrequencyRecommendationResponseSchema['properties']
+                  as Map<String, dynamic>)['routeRecommendations']
+              as Map<String, dynamic>;
+      final itemProperties =
+          (groupProperties['items'] as Map<String, dynamic>)['properties']
+              as Map<String, dynamic>;
+      expect(itemProperties, contains('routeId'));
+      expect(itemProperties, contains('evidenceRefs'));
     },
   );
 
@@ -268,22 +291,15 @@ DefaultBusFrequencyRecommendationRepository repository(FakeGemini gemini) =>
     DefaultBusFrequencyRecommendationRepository(geminiDataSource: gemini);
 
 Map<String, dynamic> validResponse(Map<String, String> routes) {
-  final byAction = <String, List<String>>{};
-  for (final entry in routes.entries) {
-    byAction.putIfAbsent(entry.value, () => []).add(entry.key);
-  }
   return {
     'overallSummary': 'Overall evidence-grounded summary.',
-    'recommendationGroups': [
-      for (final entry in byAction.entries)
+    'routeRecommendations': [
+      for (final entry in routes.entries)
         {
-          'action': entry.key,
-          'summary': 'Evidence supports this grouped action.',
-          'rationale': ['Submitted scheduled evidence supports the action.'],
-          'routeIds': entry.value,
-          'evidenceReferences': [
-            for (final id in entry.value) 'route.$id.scheduled.summary',
-          ],
+          'action': entry.value,
+          'routeId': entry.key,
+          'conciseRationale': 'Submitted scheduled evidence supports the action.',
+          'evidenceRefs': ['route.${entry.key}.scheduled.summary'],
           'limitations': ['Operational coverage is limited.'],
         },
     ],

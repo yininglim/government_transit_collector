@@ -3,6 +3,9 @@ import 'package:government_transit_collector/features/ai_transit_recommendation/
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_network_evidence_repository.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/scheduled_service_evidence_models.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/timetable_recommendation_repository.dart';
+import 'package:government_transit_collector/features/realtime_vehicle/data/trip_progress_repository.dart';
+import 'package:government_transit_collector/features/route_performance/data/route_performance_models.dart';
+import 'package:government_transit_collector/features/route_performance/data/route_performance_repository.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:timezone/timezone.dart' as timezone;
 
@@ -36,11 +39,24 @@ class DefaultScheduledServiceEvidenceRepository
   DefaultScheduledServiceEvidenceRepository({
     RouteNetworkEvidenceRepository? routeNetworkRepository,
     ScheduledServiceDataSource? dataSource,
-  }) : _routeNetworkRepository =
-           routeNetworkRepository ?? DefaultRouteNetworkEvidenceRepository(),
+    bool useLeanRouteLoader = false,
+    RoutePerformanceRepository? routeRepository,
+    RouteTripDataSource? routeTripDataSource,
+    TripProgressStopTimeDataSource? stopTimeDataSource,
+  }) : _routeNetworkRepository = useLeanRouteLoader
+           ? routeNetworkRepository
+           : routeNetworkRepository ?? DefaultRouteNetworkEvidenceRepository(),
+       _leanRouteLoader = useLeanRouteLoader
+           ? _LeanScheduledRouteLoader(
+               routeRepository: routeRepository,
+               routeTripDataSource: routeTripDataSource,
+               stopTimeDataSource: stopTimeDataSource,
+             )
+           : null,
        _dataSource = dataSource ?? SupabaseScheduledServiceDataSource();
 
-  final RouteNetworkEvidenceRepository _routeNetworkRepository;
+  final RouteNetworkEvidenceRepository? _routeNetworkRepository;
+  final _LeanScheduledRouteLoader? _leanRouteLoader;
   final ScheduledServiceDataSource _dataSource;
 
   @override
@@ -55,8 +71,12 @@ class DefaultScheduledServiceEvidenceRepository
       );
     }
     try {
-      final network = await _routeNetworkRepository.loadRoute(routeId);
-      final tripIds = network.trips
+      final routeData = _leanRouteLoader != null
+          ? await _leanRouteLoader!.loadRoute(routeId)
+          : _ScheduledRouteInput.fromNetwork(
+              await _routeNetworkRepository!.loadRoute(routeId),
+            );
+      final tripIds = routeData.trips
           .map((trip) => trip.tripId)
           .toList(growable: false);
       final metadata = tripIds.isEmpty
@@ -76,7 +96,7 @@ class DefaultScheduledServiceEvidenceRepository
       final incompleteTripIds = <String>{};
       final departuresByDirection = <int?, List<ScheduledDepartureEvidence>>{};
       var hasCompleteDirectionData = true;
-      for (final trip in network.trips) {
+      for (final trip in routeData.trips) {
         final tripMetadata = metadataByTrip[trip.tripId];
         if (tripMetadata == null) {
           incompleteTripIds.add(trip.tripId);
@@ -154,7 +174,7 @@ class DefaultScheduledServiceEvidenceRepository
           ? ScheduledServiceEvidenceStatus.insufficientForHeadway
           : ScheduledServiceEvidenceStatus.available;
       return ScheduledServiceEvidence(
-        route: network.route,
+        route: routeData.route,
         periodStart: startUtc,
         periodEnd: endExclusiveUtc,
         directionGroups: directionGroups,
@@ -171,7 +191,7 @@ class DefaultScheduledServiceEvidenceRepository
     }
   }
 
-  AiRouteStopEvidence? _departureReference(AiRouteTripEvidence trip) {
+  AiRouteStopEvidence? _departureReference(_ScheduledTripInput trip) {
     if (trip.stops.isEmpty) return null;
     return trip.stops.reduce(
       (current, stop) =>
@@ -268,6 +288,99 @@ class DefaultScheduledServiceEvidenceRepository
       minimumHeadwaySeconds: headways.isEmpty ? null : headways.first,
       maximumHeadwaySeconds: headways.isEmpty ? null : headways.last,
     );
+  }
+}
+
+class _ScheduledRouteInput {
+  const _ScheduledRouteInput({required this.route, required this.trips});
+
+  factory _ScheduledRouteInput.fromNetwork(AiRouteNetworkEvidence network) {
+    return _ScheduledRouteInput(
+      route: network.route,
+      trips: [
+        for (final trip in network.trips)
+          _ScheduledTripInput(tripId: trip.tripId, stops: trip.stops),
+      ],
+    );
+  }
+
+  final RoutePerformanceRoute route;
+  final List<_ScheduledTripInput> trips;
+}
+
+class _ScheduledTripInput {
+  const _ScheduledTripInput({required this.tripId, required this.stops});
+
+  final String tripId;
+  final List<AiRouteStopEvidence> stops;
+}
+
+class _LeanScheduledRouteLoader {
+  _LeanScheduledRouteLoader({
+    RoutePerformanceRepository? routeRepository,
+    RouteTripDataSource? routeTripDataSource,
+    TripProgressStopTimeDataSource? stopTimeDataSource,
+  }) : _routeRepository = routeRepository ?? DefaultRoutePerformanceRepository(),
+       _routeTripDataSource =
+           routeTripDataSource ?? SupabaseRouteTripDataSource(),
+       _stopTimeDataSource =
+           stopTimeDataSource ?? SupabaseTripProgressStopTimeDataSource();
+
+  static const _pageSize = 1000;
+
+  final RoutePerformanceRepository _routeRepository;
+  final RouteTripDataSource _routeTripDataSource;
+  final TripProgressStopTimeDataSource _stopTimeDataSource;
+
+  Future<_ScheduledRouteInput> loadRoute(String routeId) async {
+    final results = await Future.wait([
+      _routeRepository.loadRoutes(),
+      _loadTripIds(routeId),
+    ]);
+    final routes = results[0] as List<RoutePerformanceRoute>;
+    final route = routes.where((item) => item.routeId == routeId).firstOrNull;
+    if (route == null) {
+      throw const RouteNetworkEvidenceReadException(
+        'The selected route is not available.',
+      );
+    }
+    final tripIds = results[1] as List<String>;
+    final stopTimes = await Future.wait([
+      for (final tripId in tripIds) _stopTimeDataSource.loadStopTimes(tripId),
+    ]);
+    return _ScheduledRouteInput(
+      route: route,
+      trips: [
+        for (var index = 0; index < tripIds.length; index++)
+          _ScheduledTripInput(
+            tripId: tripIds[index],
+            stops: [
+              for (final stopTime in stopTimes[index])
+                AiRouteStopEvidence(
+                  stopId: stopTime.stopId,
+                  stopName: null,
+                  stopSequence: stopTime.stopSequence,
+                  coordinate: null,
+                  scheduledArrivalSeconds: stopTime.arrivalSeconds,
+                  scheduledDepartureSeconds: stopTime.departureSeconds,
+                ),
+            ],
+          ),
+      ],
+    );
+  }
+
+  Future<List<String>> _loadTripIds(String routeId) async {
+    final tripIds = <String>[];
+    for (var offset = 0; ; offset += _pageSize) {
+      final page = await _routeTripDataSource.fetchTripIds(
+        routeId: routeId,
+        offset: offset,
+        limit: _pageSize,
+      );
+      tripIds.addAll(page);
+      if (page.length < _pageSize) return tripIds;
+    }
   }
 }
 

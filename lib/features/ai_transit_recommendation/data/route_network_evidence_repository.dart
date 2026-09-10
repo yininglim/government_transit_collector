@@ -41,12 +41,13 @@ class DefaultRouteNetworkEvidenceRepository
   final RouteTripDataSource _routeTripDataSource;
   final JourneyMapDataSource _mapDataSource;
   final TripProgressStopTimeDataSource _stopTimeDataSource;
+  Future<List<RoutePerformanceRoute>>? _routesFuture;
 
   @override
   Future<AiRouteNetworkEvidence> loadRoute(String routeId) async {
     try {
       final responses = await Future.wait([
-        _routeRepository.loadRoutes(),
+        _loadRoutes(),
         _loadTripIds(routeId),
       ]);
       final routes = responses[0] as List<RoutePerformanceRoute>;
@@ -131,6 +132,20 @@ class DefaultRouteNetworkEvidenceRepository
         'Unable to load route network evidence.',
       );
     }
+  }
+
+  Future<List<RoutePerformanceRoute>> _loadRoutes() {
+    final existing = _routesFuture;
+    if (existing != null) return existing;
+    final future = _routeRepository.loadRoutes();
+    _routesFuture = future;
+    future.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace __) {
+        if (identical(_routesFuture, future)) _routesFuture = null;
+      },
+    );
+    return future;
   }
 
   Future<List<String>> _loadTripIds(String routeId) async {

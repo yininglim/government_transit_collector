@@ -34,6 +34,7 @@ class DefaultOperationalEvidenceRepository
   final PeakOperationCalculator _peakOperationCalculator;
   final RoutePerformanceRepository _routePerformanceRepository;
   final RoutePerformanceCalculator _routePerformanceCalculator;
+  Future<List<RoutePerformanceRoute>>? _routesFuture;
 
   @override
   Future<AiOperationalEvidence> loadEvidence({
@@ -43,7 +44,7 @@ class DefaultOperationalEvidenceRepository
   }) async {
     try {
       final results = await Future.wait([
-        _routePerformanceRepository.loadRoutes(),
+        _loadRoutes(),
         _peakOperationRepository.loadObservations(
           startUtc: startUtc,
           endExclusiveUtc: endExclusiveUtc,
@@ -87,6 +88,20 @@ class DefaultOperationalEvidenceRepository
         'Unable to load operational evidence.',
       );
     }
+  }
+
+  Future<List<RoutePerformanceRoute>> _loadRoutes() {
+    final existing = _routesFuture;
+    if (existing != null) return existing;
+    final future = _routePerformanceRepository.loadRoutes();
+    _routesFuture = future;
+    future.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace __) {
+        if (identical(_routesFuture, future)) _routesFuture = null;
+      },
+    );
+    return future;
   }
 }
 

@@ -119,7 +119,7 @@ void main() {
           (item) => (item['trip_ids'] as List<dynamic>).contains('trip-a'),
         );
         final firstStops = tripA['ordered_stops'] as List<dynamic>;
-        expect(firstStops.map((item) => item['stop_id']), ['stop-a', 'stop-b']);
+        expect(firstStops.map((item) => item[0]), ['stop-a', 'stop-b']);
         expect(
           tripA['consecutive_spacing_meters'],
           hasLength(firstStops.length - 1),
@@ -201,9 +201,8 @@ void main() {
       expect(pattern['trip_ids'], ['trip-1', 'trip-2']);
       expect(pattern['evidence_refs'], ['network.trip.0', 'network.trip.1']);
       expect(pattern['occurrence_count'], 2);
-      expect(stops.first['arrival_seconds_min_max_missing'], [100, 300, 0]);
-      expect(stops.last['departure_seconds_min_max_missing'], [220, 420, 0]);
-      expect(stops.last['arrival_seconds_min_max_missing'], [null, null, 2]);
+      expect(stops.first, ['a', 1, 100, 300, 0, null, null, 2]);
+      expect(stops.last, ['b', 2, null, null, 2, 220, 420, 0]);
       expect(pattern['consecutive_spacing_meters'], [null]);
       expect(
         payload['evidence_references'],
@@ -393,9 +392,7 @@ void main() {
 
       expect(network['stop_catalog'], hasLength(2));
       expect(
-        (pattern['ordered_stops'] as List<dynamic>).map(
-          (item) => item['stop_id'],
-        ),
+        (pattern['ordered_stops'] as List<dynamic>).map((item) => item[0]),
         ['a', 'b', 'a'],
       );
       expect(pattern['consecutive_spacing_meters'], [null, null]);
@@ -432,6 +429,67 @@ void main() {
       expect(network['unique_trip_pattern_count'], 1);
       expect(network['stop_catalog'], hasLength(50));
       expect(size, lessThan(30000));
+    });
+
+    test('feature payload shares stop metadata and keeps route membership', () {
+      final payload = const RouteStopGeminiPayloadBuilder().buildFeature([
+        districtEvidence(routeId: 'R1'),
+        districtEvidence(routeId: 'R2'),
+      ]).toJson();
+      final catalog = payload['shared_stop_catalog'] as Map<String, dynamic>;
+      final routes = payload['routes'] as List<dynamic>;
+
+      expect(
+        payload['ordered_stop_field_order'],
+        RouteStopGeminiPayloadBuilder.orderedStopFieldOrder,
+      );
+      expect(catalog, hasLength(3));
+      expect(catalog['stop-a'], containsPair('stop_name', 'Name stop-a'));
+      expect(catalog['stop-a'], isNot(contains('stop_id')));
+      for (final route in routes) {
+        final identity = route['route'] as Map<String, dynamic>;
+        final namespace =
+            'route.${Uri.encodeComponent(identity['route_id'] as String)}.';
+        final allowed = (route['evidence_references'] as List<dynamic>)
+            .cast<String>()
+            .toSet();
+        final network = route['network'] as Map<String, dynamic>;
+        expect(network, isNot(contains('stop_catalog')));
+        expect(network['served_stop_ids'], ['stop-a', 'stop-b', 'stop-c']);
+        final pattern = (network['trip_patterns'] as List<dynamic>).first;
+        expect(
+          pattern['evidence_refs'],
+          everyElement(startsWith(namespace)),
+        );
+        final exposed = _exposedEvidenceReferences(route);
+        expect(exposed, isNotEmpty);
+        expect(exposed, everyElement(startsWith(namespace)));
+        expect(allowed, containsAll(exposed));
+      }
+    });
+
+    test('feature payload rejects cross-route stop metadata conflicts', () {
+      expect(
+        () => const RouteStopGeminiPayloadBuilder().buildFeature([
+          districtEvidence(routeId: 'R1'),
+          districtEvidence(
+            routeId: 'R2',
+            trips: [
+              routeTrip('other', [
+                routeStop(
+                  'stop-a',
+                  1,
+                  const MapCoordinate(1.5, 103.7),
+                  'Other',
+                ),
+                routeStop('stop-b', 2),
+              ]),
+            ],
+            spacingByTrip: const [],
+          ),
+        ]),
+        throwsA(isA<RouteStopGeminiPayloadBuildException>()),
+      );
     });
   });
 
@@ -497,6 +555,32 @@ void main() {
       expect(payload['known_limitations'], contains('no_scheduled_departures'));
     });
   });
+}
+
+List<String> _exposedEvidenceReferences(Object? value) {
+  final references = <String>[];
+  void visit(Object? item) {
+    if (item is List<dynamic>) {
+      for (final child in item) {
+        visit(child);
+      }
+    } else if (item is Map<String, dynamic>) {
+      for (final entry in item.entries) {
+        if (entry.key == 'evidence_ref' && entry.value is String) {
+          references.add(entry.value as String);
+        } else if ((entry.key == 'evidence_refs' ||
+                entry.key == 'evidence_references') &&
+            entry.value is List<dynamic>) {
+          references.addAll((entry.value as List<dynamic>).cast<String>());
+        } else {
+          visit(entry.value);
+        }
+      }
+    }
+  }
+
+  visit(value);
+  return references;
 }
 
 final periodStart = DateTime.utc(2026, 8, 20);
@@ -618,6 +702,7 @@ AiOperationalEvidence operationalEvidence() => AiOperationalEvidence(
 );
 
 DistrictRouteStopEvidence districtEvidence({
+  String routeId = 'J15',
   List<AiRouteTripEvidence>? trips,
   List<TripStopSpacingEvidence>? spacingByTrip,
   String longComment = 'feedback',
@@ -651,10 +736,17 @@ DistrictRouteStopEvidence districtEvidence({
     feedback('r4', 'Incorrect route information', longComment),
   ];
   final routeEvidence = RouteStopEvidence(
-    routeId: 'J15',
+    routeId: routeId,
     periodStart: periodStart,
     periodEnd: periodEnd,
-    network: AiRouteNetworkEvidence(route: route, trips: networkTrips),
+    network: AiRouteNetworkEvidence(
+      route: RoutePerformanceRoute(
+        routeId: routeId,
+        shortName: routeId,
+        longName: route.longName,
+      ),
+      trips: networkTrips,
+    ),
     operational: operationalEvidence(),
     feedback: RouteStopFeedbackEvidence(
       records: records,

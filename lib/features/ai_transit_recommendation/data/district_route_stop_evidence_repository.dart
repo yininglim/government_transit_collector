@@ -25,6 +25,7 @@ class DefaultDistrictRouteStopEvidenceRepository
 
   final RouteStopEvidenceRepository _routeStopRepository;
   final DistrictBoundaryRepository _boundaryRepository;
+  Future<DistrictBoundaryEvidence>? _boundaryFuture;
 
   @override
   Future<DistrictRouteStopEvidence> loadEvidence({
@@ -38,7 +39,7 @@ class DefaultDistrictRouteStopEvidenceRepository
         startUtc: startUtc,
         endExclusiveUtc: endExclusiveUtc,
       ),
-      _boundaryRepository.loadBoundary(),
+      _loadBoundary(),
     ]);
     final routeStopEvidence = results[0] as RouteStopEvidence;
     final boundary = results[1] as DistrictBoundaryEvidence;
@@ -78,6 +79,20 @@ class DefaultDistrictRouteStopEvidenceRepository
       stopOccurrenceCounts: _counts(occurrences.map((stop) => stop.membership)),
       uniqueStopCounts: _counts(uniqueMembership.values),
     );
+  }
+
+  Future<DistrictBoundaryEvidence> _loadBoundary() {
+    final existing = _boundaryFuture;
+    if (existing != null) return existing;
+    final future = _boundaryRepository.loadBoundary();
+    _boundaryFuture = future;
+    future.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace __) {
+        if (identical(_boundaryFuture, future)) _boundaryFuture = null;
+      },
+    );
+    return future;
   }
 
   DistrictStopMembership _classify(

@@ -1,9 +1,11 @@
+import 'package:government_transit_collector/core/time/transit_service_time.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/district_route_stop_evidence_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/district_route_stop_evidence_repository.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_stop_recommendation_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_stop_recommendation_repository.dart';
 import 'package:government_transit_collector/features/route_performance/data/route_performance_models.dart';
 import 'package:government_transit_collector/features/route_performance/data/route_performance_repository.dart';
+import 'package:timezone/timezone.dart' as timezone;
 
 class RouteStopDashboardCandidate {
   const RouteStopDashboardCandidate({
@@ -55,12 +57,18 @@ class RouteStopDashboardSession {
   bool screeningComplete = false;
   int routesAnalysed = 0;
   String? selectedRouteId;
+  RouteStopRecommendationAction? selectedRecommendationAction;
+  RouteStopCandidateArea? selectedCandidateArea;
+  List<String> selectedTargetStopIds = const [];
+  Future<void>? preparation;
+  int preparationVersion = 0;
 
   bool matchesPeriod(DateTime startUtc, DateTime endExclusiveUtc) =>
       periodStartUtc?.isAtSameMomentAs(startUtc) == true &&
       periodEndUtc?.isAtSameMomentAs(endExclusiveUtc) == true;
 
   void begin(DateTime startUtc, DateTime endExclusiveUtc) {
+    preparationVersion++;
     periodStartUtc = startUtc;
     periodEndUtc = endExclusiveUtc;
     candidates.clear();
@@ -71,9 +79,14 @@ class RouteStopDashboardSession {
     screeningComplete = false;
     routesAnalysed = 0;
     selectedRouteId = null;
+    selectedRecommendationAction = null;
+    selectedCandidateArea = null;
+    selectedTargetStopIds = const [];
+    preparation = null;
   }
 
   void clear() {
+    preparationVersion++;
     periodStartUtc = null;
     periodEndUtc = null;
     candidates.clear();
@@ -84,6 +97,10 @@ class RouteStopDashboardSession {
     screeningComplete = false;
     routesAnalysed = 0;
     selectedRouteId = null;
+    selectedRecommendationAction = null;
+    selectedCandidateArea = null;
+    selectedTargetStopIds = const [];
+    preparation = null;
   }
 }
 
@@ -121,43 +138,104 @@ class RouteStopDashboardCoordinator {
   }) async {
     final routes = await _routeRepository.loadRoutes();
     final ordered = [...routes]..sort(_compareRoutes);
-    final candidates = <RouteStopDashboardCandidate>[];
-    final excludedRoutes = <RouteStopDashboardExcludedRoute>[];
-    for (final route in ordered) {
-      try {
-        final evidence = await _evidenceRepository.loadEvidence(
-          routeId: route.routeId,
-          startUtc: startUtc,
-          endExclusiveUtc: endExclusiveUtc,
-        );
-        if (isRouteStopDashboardEligible(evidence)) {
-          candidates.add(
-            RouteStopDashboardCandidate(route: route, evidence: evidence),
+    final outcomes =
+        List<
+          ({
+            RouteStopDashboardCandidate? candidate,
+            RouteStopDashboardExcludedRoute? excluded,
+          })?
+        >.filled(ordered.length, null);
+    var nextIndex = 0;
+    Future<void> worker() async {
+      while (nextIndex < ordered.length) {
+        final index = nextIndex++;
+        final route = ordered[index];
+        RouteStopDashboardCandidate? candidate;
+        RouteStopDashboardExcludedRoute? excluded;
+        try {
+          final evidence = await _evidenceRepository.loadEvidence(
+            routeId: route.routeId,
+            startUtc: startUtc,
+            endExclusiveUtc: endExclusiveUtc,
           );
-        } else {
-          excludedRoutes.add(
-            RouteStopDashboardExcludedRoute(
+          if (isRouteStopDashboardEligible(evidence)) {
+            candidate = RouteStopDashboardCandidate(
+              route: route,
+              evidence: evidence,
+            );
+          } else {
+            excluded = RouteStopDashboardExcludedRoute(
               route: route,
               reason: RouteStopDashboardExclusionReason.unusableTripStructure,
               evidence: evidence,
-            ),
-          );
-        }
-      } on Object {
-        excludedRoutes.add(
-          RouteStopDashboardExcludedRoute(
+            );
+          }
+        } on Object {
+          excluded = RouteStopDashboardExcludedRoute(
             route: route,
             reason: RouteStopDashboardExclusionReason.evidenceLoadingFailure,
             evidence: null,
-          ),
-        );
+          );
+        }
+        outcomes[index] = (candidate: candidate, excluded: excluded);
       }
     }
+
+    await Future.wait(List.generate(4, (_) => worker()));
+    final candidates = outcomes
+        .map((outcome) => outcome?.candidate)
+        .whereType<RouteStopDashboardCandidate>()
+        .toList();
+    final excludedRoutes = outcomes
+        .map((outcome) => outcome?.excluded)
+        .whereType<RouteStopDashboardExcludedRoute>()
+        .toList();
     return RouteStopDashboardScreeningResult(
       routesAnalysed: ordered.length,
       candidates: List.unmodifiable(candidates),
       excludedRoutes: List.unmodifiable(excludedRoutes),
     );
+  }
+
+  Future<void> prepareSession({
+    required RouteStopDashboardSession session,
+    required DateTime startUtc,
+    required DateTime endExclusiveUtc,
+  }) {
+    if (session.matchesPeriod(startUtc, endExclusiveUtc)) {
+      if (session.screeningComplete) return Future.value();
+      final existing = session.preparation;
+      if (existing != null) return existing;
+    }
+    session.begin(startUtc, endExclusiveUtc);
+    final version = session.preparationVersion;
+    late final Future<void> work;
+    work = () async {
+      try {
+        final result = await screenRoutes(
+          startUtc: startUtc,
+          endExclusiveUtc: endExclusiveUtc,
+        );
+        if (session.preparationVersion != version ||
+            !session.matchesPeriod(startUtc, endExclusiveUtc)) {
+          return;
+        }
+        session.candidates.addAll(result.candidates);
+        session.excludedRoutes.addAll(result.excludedRoutes);
+        session.routesAnalysed = result.routesAnalysed;
+        session.screeningComplete = true;
+        session.selectedRouteId = result.candidates.firstOrNull?.route.routeId;
+        session.empty = result.candidates.isEmpty;
+      } on Object {
+        if (session.preparationVersion == version) {
+          session.setupFailure = true;
+        }
+      } finally {
+        if (identical(session.preparation, work)) session.preparation = null;
+      }
+    }();
+    session.preparation = work;
+    return work;
   }
 
   Future<RouteStopRecommendationResult> analyse({
@@ -183,6 +261,22 @@ class RouteStopDashboardCoordinator {
       endExclusiveUtc: endExclusiveUtc,
     );
   }
+}
+
+({DateTime startUtc, DateTime endUtc}) routeStopAnalysisPeriod({
+  DateTime Function()? now,
+}) {
+  final current = currentTransitServiceDateTime(now: now);
+  final today = timezone.TZDateTime(
+    transitServiceLocation,
+    current.year,
+    current.month,
+    current.day,
+  );
+  return (
+    startUtc: today.subtract(const Duration(days: 29)).toUtc(),
+    endUtc: today.add(const Duration(days: 1)).toUtc(),
+  );
 }
 
 bool isRouteStopDashboardEligible(DistrictRouteStopEvidence evidence) {

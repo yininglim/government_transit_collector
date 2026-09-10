@@ -48,25 +48,10 @@ class GeminiInteractionsDataSource implements GeminiDataSource {
               'x-goog-api-key': apiKey,
               'Content-Type': 'application/json',
             },
-            body: jsonEncode({
-              'model': model,
-              'input': request.input,
-              if (request.instructions != null &&
-                  request.instructions!.trim().isNotEmpty)
-                'system_instruction': request.instructions,
-              'generation_config': {
-                'thinking_level': defaultGeminiThinkingLevel,
-              },
-              'response_format': {
-                'type': 'text',
-                'mime_type': 'application/json',
-                'schema': request.responseSchema,
-              },
-              'store': false,
-            }),
+            body: serializeGeminiInteractionBody(request, model: model),
           )
           .timeout(requestTimeout);
-      _validateStatus(response.statusCode);
+      _validateStatus(response.statusCode, response.body);
       return parseGeminiStructuredInteractionResponse(response.body);
     } on GeminiTransportException {
       rethrow;
@@ -89,13 +74,33 @@ class GeminiInteractionsDataSource implements GeminiDataSource {
   }
 }
 
-void _validateStatus(int statusCode) {
+String serializeGeminiInteractionBody(
+  GeminiStructuredInteractionRequest request, {
+  String model = defaultGeminiModel,
+}) => jsonEncode({
+  'model': model,
+  'input': request.input,
+  if (request.instructions != null && request.instructions!.trim().isNotEmpty)
+    'system_instruction': request.instructions,
+  'generation_config': {'thinking_level': defaultGeminiThinkingLevel},
+  'response_format': {
+    'type': 'text',
+    'mime_type': 'application/json',
+    'schema': request.responseSchema,
+  },
+  'store': false,
+});
+
+void _validateStatus(int statusCode, String body) {
+  final providerError = _providerError(body);
   if (statusCode >= 200 && statusCode < 300) return;
   if (statusCode == 401 || statusCode == 403) {
     throw GeminiTransportException(
       failure: GeminiTransportFailure.authentication,
       statusCode: statusCode,
       message: 'Gemini authentication or permission was denied.',
+      providerErrorCode: providerError.$1,
+      providerErrorMessage: providerError.$2,
     );
   }
   if (statusCode == 429) {
@@ -103,14 +108,44 @@ void _validateStatus(int statusCode) {
       failure: GeminiTransportFailure.rateLimited,
       statusCode: statusCode,
       message: 'Gemini rate limit was reached.',
+      providerErrorCode: providerError.$1,
+      providerErrorMessage: providerError.$2,
     );
   }
   throw GeminiTransportException(
     failure: GeminiTransportFailure.http,
     statusCode: statusCode,
     message: 'Gemini returned HTTP $statusCode.',
+    providerErrorCode: providerError.$1,
+    providerErrorMessage: providerError.$2,
   );
 }
+
+(String?, String?) _providerError(String body) {
+  try {
+    final decoded = jsonDecode(body);
+    if (decoded is! Map<String, dynamic>) return (null, null);
+    final error = decoded['error'];
+    if (error is! Map<String, dynamic>) return (null, null);
+    final code = error['code'];
+    final message = error['message'];
+    final codeText = code is String
+        ? code.trim()
+        : code is num
+        ? code.toString()
+        : '';
+    final safeCode = codeText.isNotEmpty ? _truncate(codeText, 80) : null;
+    final safeMessage = message is String && message.trim().isNotEmpty
+        ? _truncate(message.trim().replaceAll(RegExp(r'\s+'), ' '), 240)
+        : null;
+    return (safeCode, safeMessage);
+  } on Object {
+    return (null, null);
+  }
+}
+
+String _truncate(String value, int maxLength) =>
+    value.length <= maxLength ? value : value.substring(0, maxLength);
 
 GeminiStructuredInteractionResult parseGeminiStructuredInteractionResponse(
   String body,

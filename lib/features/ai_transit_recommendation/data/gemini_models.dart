@@ -37,11 +37,15 @@ class GeminiTransportException implements Exception {
     required this.failure,
     required this.message,
     this.statusCode,
+    this.providerErrorCode,
+    this.providerErrorMessage,
   });
 
   final GeminiTransportFailure failure;
   final String message;
   final int? statusCode;
+  final String? providerErrorCode;
+  final String? providerErrorMessage;
 
   @override
   String toString() => message;

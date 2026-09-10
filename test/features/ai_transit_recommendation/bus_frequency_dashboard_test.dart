@@ -71,6 +71,64 @@ void main() {
     },
   );
 
+  test('same-period preparation reuses in-progress and completed work', () async {
+    final screenGate = Completer<void>();
+    final coordinator = FakeCoordinator(
+      candidates(1),
+      screenGate: screenGate,
+    );
+    final session = BusFrequencyDashboardSession();
+    final first = coordinator.prepareSession(
+      session: session,
+      startUtc: start,
+      endExclusiveUtc: end,
+    );
+    final second = coordinator.prepareSession(
+      session: session,
+      startUtc: start,
+      endExclusiveUtc: end,
+    );
+    expect(second, same(first));
+    expect(coordinator.screenCalls, 1);
+    screenGate.complete();
+    await first;
+    await coordinator.prepareSession(
+      session: session,
+      startUtc: start,
+      endExclusiveUtc: end,
+    );
+    expect(coordinator.screenCalls, 1);
+    expect(session.screeningComplete, isTrue);
+    expect(session.candidates, hasLength(1));
+  });
+
+  test('stale preparation completion cannot overwrite a newer period', () async {
+    final oldGate = Completer<void>();
+    final oldCoordinator = FakeCoordinator(
+      candidates(1),
+      screenGate: oldGate,
+    );
+    final newCoordinator = FakeCoordinator(candidates(2));
+    final session = BusFrequencyDashboardSession();
+    final oldWork = oldCoordinator.prepareSession(
+      session: session,
+      startUtc: start,
+      endExclusiveUtc: end,
+    );
+    final newStart = start.add(const Duration(days: 1));
+    final newEnd = end.add(const Duration(days: 1));
+    await newCoordinator.prepareSession(
+      session: session,
+      startUtc: newStart,
+      endExclusiveUtc: newEnd,
+    );
+    oldGate.complete();
+    await oldWork;
+    expect(session.matchesPeriod(newStart, newEnd), isTrue);
+    expect(session.candidates.map((item) => item.route.routeId), ['R1', 'R2']);
+    expect(session.routesAnalysed, 2);
+  });
+
   testWidgets('entry screens evidence and makes no recommendation request', (
     tester,
   ) async {
@@ -121,6 +179,11 @@ void main() {
     expect(find.byKey(const Key('overall-ai-summary')), findsOneWidget);
     expect(find.text('Overall evidence-grounded summary.'), findsOneWidget);
     expect(find.text('Maintain Current Frequency'), findsOneWidget);
+    expect(find.text('AI Rationale'), findsOneWidget);
+    expect(
+      find.text('Scheduled evidence supports this action.'),
+      findsOneWidget,
+    );
     expect(find.text('3 Routes'), findsOneWidget);
     expect(find.byKey(const Key('group-route-R1')), findsOneWidget);
     expect(find.byKey(const Key('group-route-R2')), findsOneWidget);
@@ -246,6 +309,28 @@ void main() {
     );
   });
 
+  testWidgets('revisit during preparation reuses the same screening work', (
+    tester,
+  ) async {
+    final screenGate = Completer<void>();
+    final session = BusFrequencyDashboardSession();
+    final coordinator = FakeCoordinator(
+      candidates(1),
+      screenGate: screenGate,
+    );
+    await pumpPage(tester, coordinator, session: session);
+    expect(coordinator.screenCalls, 1);
+    await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+    await pumpPage(tester, coordinator, session: session);
+    expect(coordinator.screenCalls, 1);
+    screenGate.complete();
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('frequency-evidence-overview')),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('Start New Analysis clears result and screens again', (
     tester,
   ) async {
@@ -279,7 +364,7 @@ void main() {
     expect(coordinator.lastCandidateIds, ['R1', 'R2']);
   });
 
-  testWidgets('post-Gemini insufficient routes render separately', (
+  testWidgets('post-Gemini insufficient routes are presentation-filtered', (
     tester,
   ) async {
     final coordinator = FakeCoordinator(
@@ -289,9 +374,53 @@ void main() {
     await pumpPage(tester, coordinator);
     await tapGenerate(tester);
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('post-gemini-needs-evidence')), findsOneWidget);
+    expect(find.byKey(const Key('post-gemini-needs-evidence')), findsNothing);
     expect(find.byKey(const Key('group-route-R2')), findsNothing);
-    expect(find.text('Needs More Evidence'), findsOneWidget);
+    expect(find.text('Needs More Evidence'), findsNothing);
+  });
+
+  testWidgets('only insufficient evidence renders the actionable empty state', (
+    tester,
+  ) async {
+    final item = candidates(1);
+    final insufficient = BusFrequencyRecommendationGroup(
+      action: BusFrequencyRecommendationAction.insufficientEvidence,
+      routeRecommendations: [
+        BusFrequencyRouteRecommendationRecord(
+          routeId: 'R1',
+          action: BusFrequencyRecommendationAction.insufficientEvidence,
+          conciseRationale: 'Coverage is limited.',
+          evidenceRefs: const ['route.R1.scheduled.summary'],
+          limitations: const ['Operational coverage is limited.'],
+          source: BusFrequencyRecommendationSource.gemini,
+        ),
+      ],
+      source: BusFrequencyRecommendationSource.gemini,
+    );
+    final coordinator = FakeCoordinator(
+      item,
+      resultOverride: BusFrequencyRecommendationResult(
+        status: BusFrequencyRecommendationStatus.available,
+        synthesis: BusFrequencyRecommendationSynthesis(
+          overallSummary: 'Overall evidence-grounded summary.',
+          routeRecommendations: const [],
+          recommendationGroups: const [],
+          needsMoreEvidence: insufficient,
+        ),
+        failure: null,
+        payload: null,
+      ),
+    );
+    await pumpPage(tester, coordinator);
+    await tapGenerate(tester);
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        'No actionable recommendations are available with the current evidence.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Needs More Evidence'), findsNothing);
   });
 
   testWidgets('narrow portrait with long summary and route wraps safely', (
@@ -499,19 +628,24 @@ BusFrequencyRecommendationResult success(
     List<String> routeIds,
   ) => BusFrequencyRecommendationGroup(
     action: action,
-    summary: 'Evidence supports this grouped action.',
-    rationale: const ['Scheduled evidence supports this action.'],
-    routeIds: routeIds,
-    evidenceReferences: [
-      for (final id in routeIds) 'route.$id.scheduled.summary',
+    routeRecommendations: [
+      for (final id in routeIds)
+        BusFrequencyRouteRecommendationRecord(
+          routeId: id,
+          action: action,
+          conciseRationale: 'Scheduled evidence supports this action.',
+          evidenceRefs: ['route.$id.scheduled.summary'],
+          limitations: const ['Operational coverage is limited.'],
+          source: BusFrequencyRecommendationSource.gemini,
+        ),
     ],
-    limitations: const ['Operational coverage is limited.'],
     source: BusFrequencyRecommendationSource.gemini,
   );
   return BusFrequencyRecommendationResult(
     status: BusFrequencyRecommendationStatus.available,
     synthesis: BusFrequencyRecommendationSynthesis(
       overallSummary: 'Overall evidence-grounded summary.',
+      routeRecommendations: const [],
       recommendationGroups: [
         group(BusFrequencyRecommendationAction.maintainService, actionable),
       ],
@@ -536,19 +670,24 @@ BusFrequencyRecommendationResult groupedResult(
     List<String> routeIds,
   ) => BusFrequencyRecommendationGroup(
     action: action,
-    summary: 'Evidence supports this grouped action.',
-    rationale: const ['Scheduled evidence supports this action.'],
-    routeIds: routeIds,
-    evidenceReferences: [
-      for (final id in routeIds) 'route.$id.scheduled.summary',
+    routeRecommendations: [
+      for (final id in routeIds)
+        BusFrequencyRouteRecommendationRecord(
+          routeId: id,
+          action: action,
+          conciseRationale: 'Scheduled evidence supports this action.',
+          evidenceRefs: ['route.$id.scheduled.summary'],
+          limitations: const ['Operational coverage is limited.'],
+          source: BusFrequencyRecommendationSource.gemini,
+        ),
     ],
-    limitations: const ['Operational coverage is limited.'],
     source: BusFrequencyRecommendationSource.gemini,
   );
   return BusFrequencyRecommendationResult(
     status: BusFrequencyRecommendationStatus.available,
     synthesis: BusFrequencyRecommendationSynthesis(
       overallSummary: overallSummary,
+      routeRecommendations: const [],
       recommendationGroups: [
         for (final item in groups) group(item.$1, item.$2),
       ],
@@ -607,6 +746,7 @@ class FakeCoordinator extends BusFrequencyDashboardCoordinator {
     this.items, {
     this.excluded = const [],
     this.gate,
+    this.screenGate,
     this.firstFailure = false,
     this.includeInsufficient = false,
     this.resultOverride,
@@ -618,6 +758,7 @@ class FakeCoordinator extends BusFrequencyDashboardCoordinator {
   final List<BusFrequencyDashboardCandidate> items;
   final List<BusFrequencyDashboardExcludedRoute> excluded;
   final Completer<void>? gate;
+  final Completer<void>? screenGate;
   final bool firstFailure;
   final bool includeInsufficient;
   final BusFrequencyRecommendationResult? resultOverride;
@@ -631,6 +772,7 @@ class FakeCoordinator extends BusFrequencyDashboardCoordinator {
     required DateTime endExclusiveUtc,
   }) async {
     screenCalls++;
+    if (screenGate != null) await screenGate!.future;
     return BusFrequencyDashboardScreeningResult(
       routesAnalysed: items.length + excluded.length,
       candidates: items,
