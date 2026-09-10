@@ -5,6 +5,7 @@ import 'package:government_transit_collector/features/ai_transit_recommendation/
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/district_route_stop_evidence_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_stop_dashboard_coordinator.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_network_evidence_models.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/recommendation_management_repository.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_stop_evidence_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_stop_recommendation_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_stop_recommendation_repository.dart';
@@ -24,6 +25,8 @@ class RouteBusStopRecommendationPage extends StatefulWidget {
     this.now,
     this.baseMapEnabled = true,
     this.preparationScheduler,
+    this.managementRepository,
+    this.preserveRetainedSession = false,
     super.key,
   });
 
@@ -35,6 +38,8 @@ class RouteBusStopRecommendationPage extends StatefulWidget {
   final DateTime Function()? now;
   final bool baseMapEnabled;
   final Future<void> Function()? preparationScheduler;
+  final RecommendationManagementRepository? managementRepository;
+  final bool preserveRetainedSession;
 
   @override
   State<RouteBusStopRecommendationPage> createState() =>
@@ -45,11 +50,14 @@ class _RouteBusStopRecommendationPageState
     extends State<RouteBusStopRecommendationPage> {
   late final RouteStopDashboardCoordinator _coordinator;
   late final RouteStopDashboardSession _session;
+  late final RecommendationManagementRepository _managementRepository;
   final _mapSectionKey = GlobalKey();
   bool _screening = false;
   bool _analysing = false;
   bool _retrying = false;
   final Set<String> _expandedGroups = <String>{};
+  Set<String> get _savingRecommendationIds => _session.savingRecommendationIds;
+  Set<String> get _savedRecommendationIds => _session.savedRecommendationIds;
 
   List<RouteStopDashboardCandidate> get _candidates => _session.candidates;
   List<RouteStopDashboardExcludedRoute> get _excludedRoutes =>
@@ -64,6 +72,8 @@ class _RouteBusStopRecommendationPageState
   void initState() {
     super.initState();
     _session = widget.session ?? RouteStopDashboardSession();
+    _managementRepository =
+        widget.managementRepository ?? DefaultRecommendationManagementRepository();
     _coordinator =
         widget.coordinator ??
         RouteStopDashboardCoordinator(
@@ -72,7 +82,8 @@ class _RouteBusStopRecommendationPageState
           recommendationRepository: widget.recommendationRepository,
         );
     final period = _newPeriod();
-    if (_session.periodStartUtc != null &&
+    if (!widget.preserveRetainedSession &&
+        _session.periodStartUtc != null &&
         !_session.matchesPeriod(period.startUtc, period.endUtc)) {
       _session.clear();
     }
@@ -105,6 +116,8 @@ class _RouteBusStopRecommendationPageState
   }
 
   Future<void> _startNewAnalysis() async {
+    _savingRecommendationIds.clear();
+    _savedRecommendationIds.clear();
     _session.clear();
     await _prepareEvidence();
   }
@@ -135,6 +148,8 @@ class _RouteBusStopRecommendationPageState
     if (!mounted) return;
     setState(() {
       _expandedGroups.clear();
+      _savingRecommendationIds.clear();
+      _savedRecommendationIds.clear();
       _session.recommendationResult = result;
       _analysing = false;
     });
@@ -153,7 +168,11 @@ class _RouteBusStopRecommendationPageState
         endExclusiveUtc: end,
       );
       if (!mounted) return;
-      setState(() => _session.recommendationResult = replacement);
+      setState(() {
+        _savingRecommendationIds.clear();
+        _savedRecommendationIds.clear();
+        _session.recommendationResult = replacement;
+      });
     } on Object {
       if (!mounted) return;
     } finally {
@@ -904,11 +923,96 @@ class _RouteBusStopRecommendationPageState
                 icon: const Icon(Icons.map_outlined),
                 label: const Text('Show on Map'),
               ),
+              if (_currentResultIsPersistable &&
+                  record != null &&
+                  record.actions.any(
+                    (action) =>
+                        action != RouteStopRecommendationAction.insufficientEvidence,
+                  ))
+                OutlinedButton.icon(
+                  key: Key('save-route-stop-${group.action.name}-$routeId'),
+                  onPressed:
+                      _savingRecommendationIds.contains(routeId) ||
+                          _savedRecommendationIds.contains(routeId)
+                      ? null
+                      : () => _saveRecommendation(record, candidate),
+                  icon: _savingRecommendationIds.contains(routeId)
+                      ? const SizedBox.square(
+                          dimension: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Icon(
+                          _savedRecommendationIds.contains(routeId)
+                              ? Icons.check
+                              : Icons.bookmark_add_outlined,
+                        ),
+                  label: Text(
+                    _savingRecommendationIds.contains(routeId)
+                        ? 'Saving...'
+                        : _savedRecommendationIds.contains(routeId)
+                        ? 'Saved'
+                        : 'Save Recommendation',
+                  ),
+                ),
             ],
           ),
         ],
       ),
     );
+  }
+
+  Future<void> _saveRecommendation(
+    RouteStopRecommendationRecord recommendation,
+    RouteStopDashboardCandidate? candidate,
+  ) async {
+    if (!_currentResultIsPersistable) return;
+    final start = _periodStartUtc;
+    final end = _periodEndUtc;
+    final routeId = recommendation.routeId;
+    if (candidate == null || start == null || end == null) {
+      _showSaveError();
+      return;
+    }
+    if (_savingRecommendationIds.contains(routeId) ||
+        _savedRecommendationIds.contains(routeId)) {
+      return;
+    }
+    setState(() => _savingRecommendationIds.add(routeId));
+    try {
+      await _managementRepository.saveRouteBusStopRecommendation(
+        recommendation: recommendation,
+        routeDisplayLabel: candidate.route.displayName,
+        periodStart: start,
+        periodEnd: end,
+        evidence: candidate.evidence,
+      );
+      _savingRecommendationIds.remove(routeId);
+      _savedRecommendationIds.add(routeId);
+      if (!mounted) return;
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Recommendation saved.')),
+      );
+    } on Object {
+      _savingRecommendationIds.remove(routeId);
+      if (!mounted) return;
+      setState(() {});
+      _showSaveError();
+    }
+  }
+
+  void _showSaveError() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Unable to save this recommendation.')),
+    );
+  }
+
+  bool get _currentResultIsPersistable {
+    final result = _result;
+    return result?.status == RouteStopRecommendationStatus.available &&
+        result?.synthesis != null &&
+        result?.payload != null;
   }
 
   RouteStopDashboardCandidate? _candidate(String routeId) => _candidates

@@ -4,6 +4,7 @@ import 'package:government_transit_collector/features/ai_transit_recommendation/
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_evidence_repository.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_recommendation_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_recommendation_repository.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/recommendation_management_repository.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/scheduled_service_evidence_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/presentation/numeric_display.dart';
 import 'package:government_transit_collector/features/route_performance/data/route_performance_repository.dart';
@@ -17,6 +18,8 @@ class BusFrequencyRecommendationPage extends StatefulWidget {
     this.routeRepository,
     this.now,
     this.preparationScheduler,
+    this.managementRepository,
+    this.preserveRetainedSession = false,
     super.key,
   });
   final BusFrequencyDashboardSession? session;
@@ -26,6 +29,8 @@ class BusFrequencyRecommendationPage extends StatefulWidget {
   final RoutePerformanceRepository? routeRepository;
   final DateTime Function()? now;
   final Future<void> Function()? preparationScheduler;
+  final RecommendationManagementRepository? managementRepository;
+  final bool preserveRetainedSession;
   @override
   State<BusFrequencyRecommendationPage> createState() =>
       _BusFrequencyRecommendationPageState();
@@ -35,15 +40,20 @@ class _BusFrequencyRecommendationPageState
     extends State<BusFrequencyRecommendationPage> {
   late final BusFrequencyDashboardCoordinator _coordinator;
   late final BusFrequencyDashboardSession _session;
+  late final RecommendationManagementRepository _managementRepository;
   bool _screening = false;
   bool _analysing = false;
   final Set<String> _expandedGroups = <String>{};
+  Set<String> get _savingRecommendationIds => _session.savingRecommendationIds;
+  Set<String> get _savedRecommendationIds => _session.savedRecommendationIds;
   _RecommendationActionFilter _actionFilter = _RecommendationActionFilter.all;
 
   @override
   void initState() {
     super.initState();
     _session = widget.session ?? BusFrequencyDashboardSession();
+    _managementRepository =
+        widget.managementRepository ?? DefaultRecommendationManagementRepository();
     _coordinator =
         widget.coordinator ??
         BusFrequencyDashboardCoordinator(
@@ -52,7 +62,8 @@ class _BusFrequencyRecommendationPageState
           recommendationRepository: widget.recommendationRepository,
         );
     final period = _newPeriod();
-    if (_session.periodStartUtc != null &&
+    if (!widget.preserveRetainedSession &&
+        _session.periodStartUtc != null &&
         !_session.matchesPeriod(period.startUtc, period.endUtc)) {
       _session.clear();
     }
@@ -88,6 +99,8 @@ class _BusFrequencyRecommendationPageState
     setState(() {
       _actionFilter = _RecommendationActionFilter.all;
       _expandedGroups.clear();
+      _savingRecommendationIds.clear();
+      _savedRecommendationIds.clear();
       _session.clear();
     });
     await _prepareEvidence();
@@ -115,6 +128,8 @@ class _BusFrequencyRecommendationPageState
     setState(() {
       _expandedGroups.clear();
       _actionFilter = _RecommendationActionFilter.all;
+      _savingRecommendationIds.clear();
+      _savedRecommendationIds.clear();
       _session.recommendationResult = result;
       _analysing = false;
     });
@@ -134,6 +149,8 @@ class _BusFrequencyRecommendationPageState
     setState(() {
       _expandedGroups.clear();
       _actionFilter = _RecommendationActionFilter.all;
+      _savingRecommendationIds.clear();
+      _savedRecommendationIds.clear();
       _session.recommendationResult = result;
       _analysing = false;
     });
@@ -687,18 +704,92 @@ class _BusFrequencyRecommendationPageState
             const SizedBox(height: 4),
             Text(recommendation.conciseRationale),
             const SizedBox(height: 8),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                key: Key('view-route-evidence-$routeId'),
-                onPressed: () => _showRouteEvidence(context, candidate),
-                icon: const Icon(Icons.fact_check_outlined),
-                label: const Text('View Evidence'),
-              ),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                TextButton.icon(
+                  key: Key('view-route-evidence-$routeId'),
+                  onPressed: () => _showRouteEvidence(context, candidate),
+                  icon: const Icon(Icons.fact_check_outlined),
+                  label: const Text('View Evidence'),
+                ),
+                OutlinedButton.icon(
+                  key: Key('save-frequency-recommendation-$routeId'),
+                  onPressed:
+                      _savingRecommendationIds.contains(routeId) ||
+                          _savedRecommendationIds.contains(routeId)
+                      ? null
+                      : () => _saveRecommendation(recommendation, candidate),
+                  icon: _savingRecommendationIds.contains(routeId)
+                      ? const SizedBox.square(
+                          dimension: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Icon(
+                          _savedRecommendationIds.contains(routeId)
+                              ? Icons.check
+                              : Icons.bookmark_add_outlined,
+                        ),
+                  label: Text(
+                    _savingRecommendationIds.contains(routeId)
+                        ? 'Saving...'
+                        : _savedRecommendationIds.contains(routeId)
+                        ? 'Saved'
+                        : 'Save Recommendation',
+                  ),
+                ),
+              ],
             ),
           ],
         ),
       ),
+    );
+  }
+
+  Future<void> _saveRecommendation(
+    BusFrequencyRouteRecommendationRecord recommendation,
+    BusFrequencyDashboardCandidate candidate,
+  ) async {
+    final start = _session.periodStartUtc;
+    final end = _session.periodEndUtc;
+    if (start == null || end == null) {
+      _showSaveError('Unable to save this recommendation.');
+      return;
+    }
+    final routeId = recommendation.routeId;
+    if (_savingRecommendationIds.contains(routeId) ||
+        _savedRecommendationIds.contains(routeId)) {
+      return;
+    }
+    setState(() => _savingRecommendationIds.add(routeId));
+    try {
+      await _managementRepository.saveBusFrequencyRecommendation(
+        recommendation: recommendation,
+        routeDisplayLabel: candidate.route.displayName,
+        periodStart: start,
+        periodEnd: end,
+        evidence: candidate.evidence,
+      );
+      _savingRecommendationIds.remove(routeId);
+      _savedRecommendationIds.add(routeId);
+      if (!mounted) return;
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Recommendation saved.')),
+      );
+    } on Object {
+      _savingRecommendationIds.remove(routeId);
+      if (!mounted) return;
+      setState(() {});
+      _showSaveError('Unable to save this recommendation.');
+    }
+  }
+
+  void _showSaveError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
     );
   }
 
