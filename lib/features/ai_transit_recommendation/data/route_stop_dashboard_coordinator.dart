@@ -1,6 +1,8 @@
 import 'package:government_transit_collector/core/time/transit_service_time.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/admin_feedback_repository.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/district_route_stop_evidence_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/district_route_stop_evidence_repository.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_stop_evidence_repository.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_stop_recommendation_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_stop_recommendation_repository.dart';
 import 'package:government_transit_collector/features/route_performance/data/route_performance_models.dart';
@@ -109,17 +111,16 @@ class RouteStopDashboardCoordinator {
     RoutePerformanceRepository? routeRepository,
     DistrictRouteStopEvidenceRepository? evidenceRepository,
     RouteStopRecommendationRepository? recommendationRepository,
-  }) : _routeRepository =
-           routeRepository ?? DefaultRoutePerformanceRepository(),
-       _evidenceRepository =
-           evidenceRepository ?? DefaultDistrictRouteStopEvidenceRepository(),
-       _recommendationRepository =
-           recommendationRepository ??
-           DefaultRouteStopRecommendationRepository();
+  }) {
+    _routeRepository = routeRepository;
+    _evidenceRepository = evidenceRepository;
+    _recommendationRepository =
+        recommendationRepository ?? DefaultRouteStopRecommendationRepository();
+  }
 
-  final RoutePerformanceRepository _routeRepository;
-  final DistrictRouteStopEvidenceRepository _evidenceRepository;
-  final RouteStopRecommendationRepository _recommendationRepository;
+  late final RoutePerformanceRepository? _routeRepository;
+  late final DistrictRouteStopEvidenceRepository? _evidenceRepository;
+  late final RouteStopRecommendationRepository _recommendationRepository;
 
   Future<List<RouteStopDashboardCandidate>> screenCandidates({
     required DateTime startUtc,
@@ -136,7 +137,35 @@ class RouteStopDashboardCoordinator {
     required DateTime startUtc,
     required DateTime endExclusiveUtc,
   }) async {
-    final routes = await _routeRepository.loadRoutes();
+    late final RoutePerformanceRepository sharedRouteRepository;
+    late final DistrictRouteStopEvidenceRepository evidenceRepository;
+    if (_evidenceRepository case final injectedEvidence?) {
+      sharedRouteRepository = _ScreeningRoutePerformanceRepository(
+        _routeRepository ?? DefaultRoutePerformanceRepository(),
+      );
+      evidenceRepository = injectedEvidence;
+    } else {
+      final dataSource = SupabaseRoutePerformanceDataSource();
+      sharedRouteRepository = _ScreeningRoutePerformanceRepository(
+        ScreeningRoutePerformanceRepository(
+          dataSource: dataSource,
+          observationDataSource: dataSource,
+          startUtc: startUtc,
+          endExclusiveUtc: endExclusiveUtc,
+        ),
+      );
+      evidenceRepository = DefaultDistrictRouteStopEvidenceRepository(
+        routeStopRepository: DefaultRouteStopEvidenceRepository(
+          routeRepository: sharedRouteRepository,
+          feedbackRepository: ScreeningAdminFeedbackRepository(
+            delegate: DefaultAdminFeedbackRepository(),
+            startUtc: startUtc,
+            endExclusiveUtc: endExclusiveUtc,
+          ),
+        ),
+      );
+    }
+    final routes = await sharedRouteRepository.loadRoutes();
     final ordered = [...routes]..sort(_compareRoutes);
     final outcomes =
         List<
@@ -153,7 +182,7 @@ class RouteStopDashboardCoordinator {
         RouteStopDashboardCandidate? candidate;
         RouteStopDashboardExcludedRoute? excluded;
         try {
-          final evidence = await _evidenceRepository.loadEvidence(
+          final evidence = await evidenceRepository.loadEvidence(
             routeId: route.routeId,
             startUtc: startUtc,
             endExclusiveUtc: endExclusiveUtc,
@@ -261,6 +290,29 @@ class RouteStopDashboardCoordinator {
       endExclusiveUtc: endExclusiveUtc,
     );
   }
+}
+
+class _ScreeningRoutePerformanceRepository
+    implements RoutePerformanceRepository {
+  _ScreeningRoutePerformanceRepository(this._delegate);
+
+  final RoutePerformanceRepository _delegate;
+  Future<List<RoutePerformanceRoute>>? _routesFuture;
+
+  @override
+  Future<List<RoutePerformanceRoute>> loadRoutes() =>
+      _routesFuture ??= _delegate.loadRoutes();
+
+  @override
+  Future<RoutePerformanceData> loadRoutePerformance({
+    required String routeId,
+    required DateTime startUtc,
+    required DateTime endExclusiveUtc,
+  }) => _delegate.loadRoutePerformance(
+    routeId: routeId,
+    startUtc: startUtc,
+    endExclusiveUtc: endExclusiveUtc,
+  );
 }
 
 ({DateTime startUtc, DateTime endUtc}) routeStopAnalysisPeriod({
