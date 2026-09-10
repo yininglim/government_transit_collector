@@ -29,11 +29,54 @@ class AdminHomePage extends StatefulWidget {
 }
 
 class _AdminHomePageState extends State<AdminHomePage> {
+  static const _destinationCount = 5;
+
+  late final List<Widget?> _destinations;
+  int _selectedIndex = 0;
   bool _signingOut = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _destinations = List<Widget?>.filled(_destinationCount, null);
+    _destinations[0] = _buildDestination(0);
+  }
+
+  Widget _buildDestination(int index) => switch (index) {
+    0 => _AdminDashboard(
+      profile: widget.profile,
+      signingOut: _signingOut,
+      onLogout: _logout,
+    ),
+    1 => const AiRecommendationDashboardPage(),
+    2 => RoutePerformanceDashboardPage(
+      repository: widget.routePerformanceRepository,
+      savedReportRepository: widget.savedOperationalReportRepository,
+    ),
+    3 => PeakOperationAnalysisPage(
+      repository: widget.peakOperationRepository,
+      savedReportRepository: widget.savedOperationalReportRepository,
+    ),
+    4 => SavedOperationalReportsPage(
+      repository: widget.savedOperationalReportRepository,
+    ),
+    _ => throw RangeError.index(index, _destinations),
+  };
+
+  void _selectDestination(int index) {
+    if (index == _selectedIndex) return;
+    setState(() {
+      _selectedIndex = index;
+      _destinations[index] ??= _buildDestination(index);
+    });
+  }
 
   Future<void> _logout() async {
     if (_signingOut) return;
-    setState(() => _signingOut = true);
+    setState(() {
+      _signingOut = true;
+      _destinations[0] = _buildDestination(0);
+    });
     try {
       await widget.repository.logout();
     } on AuthFlowException catch (error) {
@@ -41,26 +84,105 @@ class _AdminHomePageState extends State<AdminHomePage> {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(error.message)));
-      setState(() => _signingOut = false);
+      _resetSigningOut();
     } on Object {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Unable to sign out. Please try again.')),
       );
-      setState(() => _signingOut = false);
+      _resetSigningOut();
     }
+  }
+
+  void _resetSigningOut() {
+    setState(() {
+      _signingOut = false;
+      _destinations[0] = _buildDestination(0);
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      body: IndexedStack(
+        index: _selectedIndex,
+        children: List<Widget>.generate(
+          _destinationCount,
+          (index) => _destinations[index] ?? const SizedBox.shrink(),
+        ),
+      ),
+      bottomNavigationBar: SafeArea(
+        top: false,
+        child: NavigationBar(
+          selectedIndex: _selectedIndex,
+          onDestinationSelected: _selectDestination,
+          destinations: const [
+            NavigationDestination(
+              icon: Icon(Icons.home_outlined),
+              selectedIcon: Icon(Icons.home_rounded),
+              label: 'Home',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.auto_awesome_outlined),
+              selectedIcon: Icon(Icons.auto_awesome),
+              label: 'AI',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.analytics_outlined),
+              selectedIcon: Icon(Icons.analytics),
+              label: 'Performance',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.query_stats_outlined),
+              selectedIcon: Icon(Icons.query_stats),
+              label: 'Peak',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.description_outlined),
+              selectedIcon: Icon(Icons.description),
+              label: 'Reports',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AdminDashboard extends StatelessWidget {
+  const _AdminDashboard({
+    required this.profile,
+    required this.signingOut,
+    required this.onLogout,
+  });
+
+  final AppProfile profile;
+  final bool signingOut;
+  final VoidCallback onLogout;
+
+  String get _greeting {
+    final hour = DateTime.now().hour;
+    if (hour < 12) return 'Good Morning';
+    if (hour < 18) return 'Good Afternoon';
+    return 'Good Evening';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Scaffold(
       appBar: AppBar(
         title: const Text('Government Transit Collector'),
         actions: [
           IconButton(
+            tooltip: 'Admin profile',
+            onPressed: null,
+            icon: const Icon(Icons.account_circle_outlined),
+          ),
+          IconButton(
             tooltip: 'Sign out',
-            onPressed: _signingOut ? null : _logout,
-            icon: _signingOut
+            onPressed: signingOut ? null : onLogout,
+            icon: signingOut
                 ? const SizedBox.square(
                     dimension: 20,
                     child: CircularProgressIndicator(strokeWidth: 2),
@@ -70,85 +192,70 @@ class _AdminHomePageState extends State<AdminHomePage> {
         ],
       ),
       body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.all(24),
-          children: [
-            Text(
-              'Admin / Transport Authority',
-              style: Theme.of(
-                context,
-              ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold),
+        child: LayoutBuilder(
+          builder: (context, constraints) => SingleChildScrollView(
+            padding: EdgeInsets.symmetric(
+              horizontal: constraints.maxWidth >= 720 ? 40 : 24,
+              vertical: 24,
             ),
-            const SizedBox(height: 8),
-            Text('Welcome, ${widget.profile.displayName}'),
-            const SizedBox(height: 32),
-            Card(
-              child: ListTile(
-                leading: const Icon(Icons.auto_awesome),
-                title: const Text('AI Transit Recommendation'),
-                subtitle: const Text(
-                  'Review transit recommendations and estimation reports.',
-                ),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const AiRecommendationDashboardPage(),
-                  ),
-                ),
-              ),
-            ),
-            Card(
-              child: ListTile(
-                leading: const Icon(Icons.analytics_outlined),
-                title: const Text('Route Performance Dashboard'),
-                subtitle: const Text(
-                  'Analyse collected travel time, delay frequency, and route efficiency.',
-                ),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => RoutePerformanceDashboardPage(
-                      repository: widget.routePerformanceRepository,
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 920),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      '$_greeting, ${profile.displayName}',
+                      style: theme.textTheme.headlineMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
-                  ),
-                ),
-              ),
-            ),
-            Card(
-              child: ListTile(
-                leading: const Icon(Icons.query_stats),
-                title: const Text('Peak Operation Analysis'),
-                subtitle: const Text(
-                  'Identify high observed bus service activity by time of day.',
-                ),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => PeakOperationAnalysisPage(
-                      repository: widget.peakOperationRepository,
+                    const SizedBox(height: 8),
+                    Text(
+                      'Monitor and improve Johor bus operations.',
+                      style: theme.textTheme.bodyLarge?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
                     ),
-                  ),
-                ),
-              ),
-            ),
-            Card(
-              child: ListTile(
-                leading: const Icon(Icons.inventory_2_outlined),
-                title: const Text('Saved Operational Reports'),
-                subtitle: const Text(
-                  'Review historical Route Performance and Peak Operation snapshots.',
-                ),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => SavedOperationalReportsPage(
-                      repository: widget.savedOperationalReportRepository,
+                    const SizedBox(height: 28),
+                    Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(
+                              Icons.directions_bus_filled_outlined,
+                              size: 36,
+                              color: theme.colorScheme.primary,
+                            ),
+                            const SizedBox(width: 20),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Operations overview',
+                                    style: theme.textTheme.titleLarge?.copyWith(
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  const Text(
+                                    'Use the navigation below to review recommendations, performance, peak activity, and saved reports.',
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
-                  ),
+                  ],
                 ),
               ),
             ),
-          ],
+          ),
         ),
       ),
     );
