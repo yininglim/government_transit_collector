@@ -264,16 +264,41 @@ class _PassengerHomePageState extends State<PassengerHomePage>
         () => _pushTab(
           5,
           (_) => Scaffold(
-            body: ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                Text('My Trips', style: Theme.of(context).textTheme.titleLarge),
-                MyTripsSection(
-                  repository: _trackedJourneys,
-                  feedbackRepository: widget.feedbackRepository,
-                  onPlanAgain: (recent) => _openDeparture(null, recent),
+            body: SafeArea(
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 760),
+                  child: ListView(
+                    physics: const ClampingScrollPhysics(),
+                    padding: const EdgeInsets.all(20),
+                    children: [
+                      Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(20),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Text(
+                                'My Trips',
+                                style: Theme.of(context).textTheme.titleLarge,
+                              ),
+                              const SizedBox(height: 8),
+                              const Text('Review your completed journeys.'),
+                              const SizedBox(height: 16),
+                              MyTripsSection(
+                                repository: _trackedJourneys,
+                                feedbackRepository: widget.feedbackRepository,
+                                onPlanAgain: (recent) =>
+                                    _openDeparture(null, recent),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ],
+              ),
             ),
           ),
         ),

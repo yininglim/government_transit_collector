@@ -468,7 +468,19 @@ class _MyTripsSectionState extends State<MyTripsSection> {
     }
     if (_trips == null) return const Center(child: CircularProgressIndicator());
     if (_trips!.isEmpty) {
-      return const Text('Your completed tracked journeys will appear here.');
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'No completed journeys yet',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Trips you complete while using Track Journey will appear here.',
+          ),
+        ],
+      );
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
