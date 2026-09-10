@@ -1,3 +1,4 @@
+import 'package:government_transit_collector/core/widgets/readable_app_bar.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -202,7 +203,7 @@ class _RealtimeJourneyTrackerPageState extends State<RealtimeJourneyTrackerPage>
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: widget.showPageHeader
-          ? AppBar(title: const Text('Realtime Journey Tracker'))
+          ? readableAppBar(context, title: const Text('Realtime Journey Tracker'))
           : null,
       body: SafeArea(child: _buildBody()),
     );
@@ -1134,6 +1135,8 @@ class _TrackerStatusPanel extends StatelessWidget {
             Text('Refresh interval: Every ${pollingInterval.inSeconds} sec'),
             const SizedBox(height: 8),
             DropdownButtonFormField<String?>(
+              itemHeight: null,
+              isDense: false,
               key: const Key('route-filter'),
               initialValue: selectedRoute,
               isExpanded: true,
@@ -1149,8 +1152,6 @@ class _TrackerStatusPanel extends StatelessWidget {
                     value: route,
                     child: Text(
                       routeLabel(route),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
                 ),

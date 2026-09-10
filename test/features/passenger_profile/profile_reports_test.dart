@@ -1,3 +1,5 @@
+import 'package:government_transit_collector/core/widgets/responsive_app_shell.dart';
+import '../tracked_journeys/tracked_journey_lifecycle_test.dart' show MemoryJourneys;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -38,6 +40,8 @@ void main() {
           home: PassengerHomePage(
             profile: existing.profile,
             repository: auth,
+            trackedJourneyRepository: MemoryJourneys(),
+            livePageBuilder: (_) => const Scaffold(body: Text('Live content')),
             recentSearchRepository: existing.RecentFake(),
             preferencesRepository: existing.PreferencesFake(),
             savedJourneyRepository: existing.SavedFake(),
@@ -49,7 +53,10 @@ void main() {
       expect(find.text('My Travel Profile'), findsNothing);
       expect(find.text('Plan a Journey'), findsOneWidget);
       expect(find.text("Today's Transit"), findsNothing);
-      final actions = tester.widget<AppBar>(find.byType(AppBar)).actions!;
+      await tester.tap(find.byKey(const Key('passenger-nav-Live')));
+      await tester.pumpAndSettle();
+      expect(find.text('Government Transit Collector'), findsOneWidget);
+      final actions = tester.widget<ResponsiveAppShell>(find.byType(ResponsiveAppShell)).actions;
       expect((actions[0] as IconButton).tooltip, 'My Travel Profile');
       expect((actions[1] as IconButton).tooltip, 'Sign out');
       await tester.tap(find.byTooltip('My Travel Profile'));
@@ -62,6 +69,8 @@ void main() {
       await tester.tap(find.text('Update Name'));
       await tester.pumpAndSettle();
       await tester.pageBack();
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('passenger-nav-Home')));
       await tester.pumpAndSettle();
       expect(find.textContaining(', Updated Rider'), findsOneWidget);
       await tester.tap(find.byTooltip('Sign out'));

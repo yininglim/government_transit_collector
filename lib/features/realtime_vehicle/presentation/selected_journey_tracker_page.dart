@@ -1,3 +1,4 @@
+import 'package:government_transit_collector/core/widgets/readable_app_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:government_transit_collector/core/time/transit_service_time.dart';
 import 'package:government_transit_collector/features/journey_map/data/journey_map_models.dart';
@@ -369,7 +370,7 @@ class _SelectedJourneyTrackerPageState extends State<SelectedJourneyTrackerPage>
     final details = _buildDetails();
     final map = _buildMap();
     return Scaffold(
-      appBar: AppBar(
+      appBar: readableAppBar(context, 
         title: const Text('Track Journey'),
         actions: [
           IconButton(

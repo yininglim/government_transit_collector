@@ -1,3 +1,4 @@
+import 'package:government_transit_collector/core/widgets/readable_app_bar.dart';
 import '../data/favourite_stop_repository.dart';
 import 'dart:async';
 
@@ -463,7 +464,7 @@ class _StopSelectionPageState extends State<StopSelectionPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(widget.title)),
+      appBar: readableAppBar(context, title: Text(widget.title)),
       body: SafeArea(
         child: SingleChildScrollView(
           physics: const ClampingScrollPhysics(),

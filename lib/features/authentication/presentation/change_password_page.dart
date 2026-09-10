@@ -1,3 +1,4 @@
+import 'package:government_transit_collector/core/widgets/readable_app_bar.dart';
 import 'package:flutter/material.dart';
 import '../data/auth_repository.dart';
 import 'auth_validation.dart';
@@ -110,7 +111,7 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
               widget.repository.hasGoogleIdentity,
         )
       : Scaffold(
-          appBar: AppBar(title: const Text('Change Email Password')),
+          appBar: readableAppBar(context, title: const Text('Change Email Password')),
           body: SafeArea(
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(24),

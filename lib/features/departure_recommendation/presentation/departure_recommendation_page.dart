@@ -1,3 +1,4 @@
+import 'package:government_transit_collector/core/widgets/readable_app_bar.dart';
 import 'package:government_transit_collector/features/tracked_journeys/tracked_journey_repository.dart';
 import 'package:government_transit_collector/features/tracked_journeys/tracked_journey_widgets.dart';
 import 'package:government_transit_collector/features/tracked_journeys/tracked_journey.dart';
@@ -990,7 +991,7 @@ class DepartureRecommendationPageState
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: widget.showPageHeader
-          ? AppBar(title: const Text('Departure Recommendation'))
+          ? readableAppBar(context, title: const Text('Departure Recommendation'))
           : null,
       body: SafeArea(
         child: LayoutBuilder(

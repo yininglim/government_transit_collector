@@ -1,3 +1,4 @@
+import 'package:government_transit_collector/core/widgets/readable_app_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:government_transit_collector/features/authentication/data/auth_repository.dart';
 import 'package:government_transit_collector/features/authentication/presentation/auth_validation.dart';
@@ -64,7 +65,7 @@ class _ResetPasswordPageState extends State<ResetPasswordPage> {
   Widget build(BuildContext context) => PopScope(
     canPop: false,
     child: Scaffold(
-      appBar: AppBar(
+      appBar: readableAppBar(context, 
         automaticallyImplyLeading: false,
         title: const Text('Reset Password'),
       ),

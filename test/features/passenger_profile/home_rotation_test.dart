@@ -43,12 +43,14 @@ void main() {
 
   Future<void> pressNav(WidgetTester tester, String label) async {
     await revealHeader(tester);
+    await tester.ensureVisible(find.byKey(Key('passenger-nav-$label')));
     await press(tester, find.byKey(Key('passenger-nav-$label')));
   }
 
   Future<void> expectSelected(WidgetTester tester, String label) async {
     await revealHeader(tester);
     final target = find.byKey(Key('passenger-nav-$label'));
+    await tester.ensureVisible(target);
     expect(
       tester
           .widgetList<Semantics>(
@@ -73,27 +75,20 @@ void main() {
     ),
   );
 
-  Future<void> checkCollapse(WidgetTester tester) async {
-    await revealHeader(tester);
-    final header = find.byKey(const Key('passenger-scrolling-header'));
-    final before = tester.getSize(find.byType(Scrollable).first).height;
-    await tester.drag(find.byType(Scrollable).first, const Offset(0, -300));
+  Future<void> checkFixedHeader(WidgetTester tester) async {
+    final header = find.byKey(const Key('app-header'));
+    final before = tester.getRect(header);
+    final contentScroll = find.descendant(
+      of: find.byType(IndexedStack), matching: find.byType(Scrollable),
+    ).first;
+    await tester.drag(contentScroll, const Offset(0, -300));
     await tester.pumpAndSettle();
-    expect(tester.getSize(header).height, 0);
-    expect(
-      find.byKey(const Key('passenger-nav-Home')).hitTestable(),
-      findsNothing,
-    );
-    expect(
-      tester.getSize(find.byType(Scrollable).first).height,
-      greaterThan(before),
-    );
-    await tester.drag(find.byType(Scrollable).first, const Offset(0, 300));
+    expect(tester.getRect(header), before);
+    expect(find.text('Government Transit Collector'), findsOneWidget);
+    expect(find.byTooltip('My Travel Profile').hitTestable(), findsOneWidget);
+    expect(find.byTooltip('Sign out').hitTestable(), findsOneWidget);
+    await tester.drag(contentScroll, const Offset(0, 300));
     await tester.pumpAndSettle();
-    expect(
-      find.byKey(const Key('passenger-nav-Home')).hitTestable(),
-      findsOneWidget,
-    );
     expect(tester.takeException(), isNull);
   }
 
@@ -219,6 +214,7 @@ void main() {
             home: PassengerHomePage(
               profile: profile.profile,
               repository: PageAuth(),
+              trackedJourneyRepository: MemoryJourneys(),
               recentSearchRepository: profile.RecentFake(),
               preferencesRepository: profile.PreferencesFake(),
               savedJourneyRepository: profile.SavedFake(),
@@ -238,9 +234,13 @@ void main() {
         ]) {
           tester.view.physicalSize = size;
           await tester.pumpAndSettle();
-          expect(find.byType(AppBar), findsOneWidget);
+          expect(find.byKey(const Key('app-header')), findsOneWidget);
+          final landscape = size.width > size.height;
+          expect(find.byKey(const Key('app-side-navigation')), landscape ? findsOneWidget : findsNothing);
+          expect(find.byKey(const Key('app-bottom-navigation')), landscape ? findsNothing : findsOneWidget);
           await revealHeader(tester);
           for (final label in ['Home', 'Plan', 'Live', 'Reports', 'My Trips']) {
+            await tester.ensureVisible(find.byKey(Key('passenger-nav-$label')));
             expect(
               find.byKey(Key('passenger-nav-$label')).hitTestable(),
               findsOneWidget,
@@ -257,15 +257,15 @@ void main() {
                 .every((s) => s.axisDirection == AxisDirection.down),
             isTrue,
           );
-          await checkCollapse(tester);
+          await checkFixedHeader(tester);
           await pressNav(tester, 'Reports');
           await expectSelected(tester, 'Reports');
           expect(find.text('Report a Transit Issue'), findsOneWidget);
-          await checkCollapse(tester);
+          await checkFixedHeader(tester);
           await tester.scrollUntilVisible(
             find.text('My Reports'),
             150,
-            scrollable: find.byType(Scrollable).first,
+            scrollable: find.descendant(of: find.byType(IndexedStack), matching: find.byType(Scrollable)).first,
           );
           await tester.pumpAndSettle();
           expect(find.text('My Reports'), findsOneWidget);
@@ -278,12 +278,14 @@ void main() {
           );
           await tester.pumpAndSettle();
           await expectSelected(tester, 'Reports');
+          expect(find.byKey(const Key('app-header')), findsNothing);
+          expect(find.byType(BackButton), findsOneWidget);
           Navigator.of(reportsContext).pop();
           await tester.pumpAndSettle();
           await tester.scrollUntilVisible(
             find.text('My Reports'),
             150,
-            scrollable: find.byType(Scrollable).first,
+            scrollable: find.descendant(of: find.byType(IndexedStack), matching: find.byType(Scrollable)).first,
           );
           await tester.pumpAndSettle();
           expect(find.text('My Reports'), findsOneWidget);
@@ -310,12 +312,12 @@ void main() {
           await press(tester, find.text('Plan a Journey'));
           await expectSelected(tester, 'Plan');
           expect(find.text('Departure Recommendation'), findsOneWidget);
-          await checkCollapse(tester);
+          await checkFixedHeader(tester);
           await pressNav(tester, 'Home');
           await pressNav(tester, 'Live');
           await expectSelected(tester, 'Live');
           expect(find.text('Module 3'), findsOneWidget);
-          await checkCollapse(tester);
+          await checkFixedHeader(tester);
           await pressNav(tester, 'Home');
           await expectSelected(tester, 'Home');
           if (upcoming) {
@@ -338,7 +340,7 @@ void main() {
             await tester.scrollUntilVisible(
               find.text('Nothing scheduled yet'),
               150,
-              scrollable: find.byType(Scrollable).first,
+              scrollable: find.descendant(of: find.byType(IndexedStack), matching: find.byType(Scrollable)).first,
             );
             expect(find.text('Upcoming Journey'), findsOneWidget);
             expect(find.text('Nothing scheduled yet'), findsOneWidget);

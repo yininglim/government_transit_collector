@@ -1,10 +1,17 @@
+import 'package:government_transit_collector/core/widgets/readable_app_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:government_transit_collector/features/saved_operational_reports/data/saved_operational_report.dart';
 import 'package:government_transit_collector/features/saved_operational_reports/data/saved_operational_report_repository.dart';
 import 'package:government_transit_collector/features/saved_operational_reports/presentation/saved_operational_report_detail_page.dart';
 
 class SavedOperationalReportsPage extends StatefulWidget {
-  const SavedOperationalReportsPage({this.repository, super.key});
+  const SavedOperationalReportsPage({
+    this.repository,
+    this.showPageHeader = true,
+    super.key,
+  });
+
+  final bool showPageHeader;
 
   final SavedOperationalReportRepository? repository;
 
@@ -83,19 +90,24 @@ class _SavedOperationalReportsPageState
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(
-      title: const Text('Saved Operational Reports'),
-      actions: [
-        IconButton(
-          tooltip: 'Refresh',
-          onPressed: _loading || _refreshing
-              ? null
-              : () => _load(refresh: true),
-          icon: const Icon(Icons.refresh),
-        ),
-      ],
-    ),
-    body: SafeArea(
+    appBar: widget.showPageHeader
+        ? readableAppBar(context, 
+            title: const Text('Saved Operational Reports'),
+            actions: [_refreshAction()],
+          )
+        : null,
+    body: Column(
+      children: [
+        if (!widget.showPageHeader)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 8, 0),
+            child: Row(children: [
+              Expanded(child: Text('Saved Operational Reports',
+                  style: Theme.of(context).textTheme.titleLarge)),
+              _refreshAction(),
+            ]),
+          ),
+        Expanded(child: SafeArea(
       child: Stack(
         children: [
           if (_loading)
@@ -134,7 +146,15 @@ class _SavedOperationalReportsPageState
             const LinearProgressIndicator(key: Key('reports-refresh-progress')),
         ],
       ),
+    )),
+      ],
     ),
+  );
+
+  Widget _refreshAction() => IconButton(
+    tooltip: 'Refresh',
+    onPressed: _loading || _refreshing ? null : () => _load(refresh: true),
+    icon: const Icon(Icons.refresh),
   );
 
   Widget _filters() => LayoutBuilder(

@@ -1,3 +1,4 @@
+import 'package:government_transit_collector/core/widgets/readable_app_bar.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -101,7 +102,7 @@ class _RegisterPageState extends State<RegisterPage> {
       );
     }
     return Scaffold(
-      appBar: AppBar(title: const Text('Create account')),
+      appBar: readableAppBar(context, title: const Text('Create account')),
       body: SafeArea(
         child: GestureDetector(
           onTap: _loading
@@ -349,67 +350,132 @@ class _EmailVerificationPageState extends State<EmailVerificationPage> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(
-      title: Text(
-        widget.unverifiedSignIn ? 'Email Not Verified' : 'Verify Your Email',
-      ),
-    ),
-    body: SafeArea(
-      child: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 440),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (widget.unverifiedSignIn) ...[
-                  const Text('Your email address has not been verified.'),
-                  const SizedBox(height: 8),
-                  const Text('Please verify your email before signing in.'),
-                ] else ...[
-                  const Text('We sent a verification link to:'),
-                  const SizedBox(height: 8),
-                  Text(
-                    widget.email,
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Please check your email and verify your account before signing in.',
-                  ),
-                ],
-                const SizedBox(height: 24),
-                FilledButton(
-                  onPressed: _busy || _remaining > 0 ? null : _resend,
-                  child: const Text('Resend Verification Email'),
-                ),
-                if (_remaining > 0)
-                  Text(
-                    'Resend available in $_remaining seconds.',
-                    textAlign: TextAlign.center,
-                  ),
-                if (_message != null)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    child: Text(_message!),
-                  ),
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Back to Sign In'),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  'Check your Spam/Junk folder if you cannot find the email.',
-                  style: Theme.of(context).textTheme.bodySmall,
-                  textAlign: TextAlign.center,
-                ),
-              ],
-            ),
-          ),
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Scaffold(
+      appBar: readableAppBar(context, 
+        title: Text(
+          widget.unverifiedSignIn ? 'Email Not Verified' : 'Verify Your Email',
         ),
       ),
-    ),
-  );
+      body: SafeArea(
+        child: LayoutBuilder(builder: (context, constraints) {
+          final topPadding = (constraints.maxHeight * 0.06).clamp(16.0, 40.0).toDouble();
+          return SingleChildScrollView(
+            padding: EdgeInsets.fromLTRB(24, topPadding, 24, 24),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 440),
+                child: Column(
+                  key: const Key('email-verification-content'),
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Icon(Icons.mark_email_unread_outlined,
+                      key: const Key('email-verification-icon'),
+                      size: 48, color: theme.colorScheme.primary,
+                    ),
+                    const SizedBox(height: 20),
+                    Text(
+                      widget.unverifiedSignIn
+                          ? 'Your email address has not been verified.'
+                          : 'We sent a verification link to:',
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    if (widget.email.isNotEmpty) ...[
+                      const SizedBox(height: 16),
+                      Container(
+                        key: const Key('verification-email-card'),
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.surfaceContainerLow,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Row(crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(Icons.email_outlined, size: 20,
+                              color: theme.colorScheme.primary),
+                            const SizedBox(width: 12),
+                            Expanded(child: Text(widget.email,
+                              style: theme.textTheme.bodyLarge,
+                            )),
+                          ],
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 16),
+                    Text(
+                      widget.unverifiedSignIn
+                          ? 'Please verify your email before signing in.'
+                          : 'Please check your email and verify your account before signing in.',
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    FilledButton(
+                      onPressed: _busy || _remaining > 0 ? null : _resend,
+                      style: FilledButton.styleFrom(
+                        minimumSize: const Size.fromHeight(48),
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      ),
+                      child: const Text('Resend Verification Email',
+                        textAlign: TextAlign.center),
+                    ),
+                    if (_remaining > 0)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Text(
+                          'Resend available in $_remaining seconds.',
+                          textAlign: TextAlign.center,
+                          style: theme.textTheme.bodySmall,
+                        ),
+                      ),
+                    if (_message != null)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        child: Text(_message!, textAlign: TextAlign.center),
+                      ),
+                    const SizedBox(height: 8),
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      style: TextButton.styleFrom(
+                        minimumSize: const Size.fromHeight(48),
+                      ),
+                      child: const Text('Back to Sign In'),
+                    ),
+                    const SizedBox(height: 16),
+                    Container(
+                      key: const Key('verification-spam-info'),
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.surfaceContainerLow,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(Icons.info_outline, size: 18,
+                            color: theme.colorScheme.onSurfaceVariant),
+                          const SizedBox(width: 10),
+                          Expanded(child: Text(
+                            'Check your Spam/Junk folder if you cannot find the email.',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          )),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }),
+      ),
+    );
+  }
 }

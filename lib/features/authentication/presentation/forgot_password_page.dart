@@ -1,3 +1,4 @@
+import 'package:government_transit_collector/core/widgets/readable_app_bar.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -86,7 +87,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
         widget.repository.hasGoogleIdentity &&
         !widget.repository.supportsEmailPassword) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Forgot Password')),
+        appBar: readableAppBar(context, title: const Text('Forgot Password')),
         body: Padding(
           padding: const EdgeInsets.all(24),
           child: Column(
@@ -106,7 +107,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
   }
 
   Widget _requestForm(BuildContext context) => Scaffold(
-    appBar: AppBar(
+    appBar: readableAppBar(context, 
       title: Text(
         widget.accountEmail == null
             ? 'Forgot Password'

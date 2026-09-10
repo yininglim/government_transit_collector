@@ -1,3 +1,4 @@
+import '../admin_home/ai_recommendation_home_fakes.dart' as overview;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:government_transit_collector/features/admin_home/presentation/admin_home_page.dart';
@@ -112,6 +113,8 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: AiRecommendationDashboardPage(
+          routeRepository: overview.FakeRoutesRepository(),
+          managementRepository: overview.FakeManagementRepository(),
           sessionStore: store,
           preloadBusFrequency: false,
           preloadRouteStops: false,
@@ -132,6 +135,7 @@ void main() {
     );
     await tester.pump();
 
+    await tester.ensureVisible(find.text('Bus Frequency Recommendation'));
     await tester.tap(find.text('Bus Frequency Recommendation'));
     await tester.pumpAndSettle();
     expect(busSession, same(store.busFrequency));

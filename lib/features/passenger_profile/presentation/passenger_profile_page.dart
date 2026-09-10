@@ -1,3 +1,4 @@
+import 'package:government_transit_collector/core/widgets/readable_app_bar.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/favourite_stop_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/departure_stop_repository.dart';
 import 'package:government_transit_collector/features/tracked_journeys/tracked_journey_repository.dart';
@@ -293,7 +294,7 @@ class _PassengerProfilePageState extends State<PassengerProfilePage> {
       );
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('My Travel Profile')),
+    appBar: readableAppBar(context, title: const Text('My Travel Profile')),
     body: SafeArea(
       child: Center(
         child: ConstrainedBox(

@@ -1,3 +1,4 @@
+import 'package:government_transit_collector/core/widgets/readable_app_bar.dart';
 import 'package:flutter/material.dart';
 import '../data/bus_feedback_repository.dart';
 import '../data/feedback_reference_repository.dart';
@@ -40,7 +41,7 @@ class _PassengerReportsPageState extends State<PassengerReportsPage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: widget.showPageHeader ? AppBar(title: const Text('Reports')) : null,
+    appBar: widget.showPageHeader ? readableAppBar(context, title: const Text('Reports')) : null,
     body: SafeArea(
       child: Center(
         child: ConstrainedBox(

@@ -1,3 +1,4 @@
+import 'package:government_transit_collector/core/widgets/readable_app_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/timetable_recommendation_repository.dart';
@@ -54,7 +55,7 @@ class _RouteMapPageState extends State<RouteMapPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Journey Route')),
+      appBar: readableAppBar(context, title: const Text('Journey Route')),
       body: SafeArea(child: _buildBody()),
     );
   }

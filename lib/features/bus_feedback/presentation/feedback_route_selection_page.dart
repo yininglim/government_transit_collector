@@ -1,3 +1,4 @@
+import 'package:government_transit_collector/core/widgets/readable_app_bar.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -145,7 +146,7 @@ class _FeedbackRouteSelectionPageState
       BuildContext context,
       ) {
     return Scaffold(
-      appBar: AppBar(
+      appBar: readableAppBar(context, 
         title: const Text(
           'Select Route',
         ),

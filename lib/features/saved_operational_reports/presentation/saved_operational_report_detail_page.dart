@@ -1,3 +1,4 @@
+import 'package:government_transit_collector/core/widgets/readable_app_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:government_transit_collector/features/saved_operational_reports/data/saved_operational_report.dart';
 import 'package:government_transit_collector/features/saved_operational_reports/data/saved_operational_report_repository.dart';
@@ -140,7 +141,7 @@ class _SavedOperationalReportDetailPageState
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(
+    appBar: readableAppBar(context, 
       title: const Text('Operational Report'),
       actions: [
         IconButton(

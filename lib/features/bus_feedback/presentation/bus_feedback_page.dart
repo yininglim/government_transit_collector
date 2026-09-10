@@ -1,3 +1,4 @@
+import 'package:government_transit_collector/core/widgets/readable_app_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:government_transit_collector/core/time/transit_service_time.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -377,6 +378,8 @@ class _BusFeedbackPageState extends State<BusFeedbackPage> {
         )
       else
         DropdownButtonFormField<String>(
+              itemHeight: null,
+              isDense: false,
           key: ValueKey('report-stop-$_selectedRouteId-${_selectedStop?.id}'),
           initialValue: _selectedStop?.id,
           isExpanded: true,
@@ -395,7 +398,6 @@ class _BusFeedbackPageState extends State<BusFeedbackPage> {
                 value: stop.id,
                 child: Text(
                   '${stop.name} (${stop.id})',
-                  overflow: TextOverflow.ellipsis,
                 ),
               ),
           ],
@@ -723,7 +725,7 @@ class _BusFeedbackPageState extends State<BusFeedbackPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Report Bus / Stop Issue')),
+      appBar: readableAppBar(context, title: const Text('Report Bus / Stop Issue')),
       body: SafeArea(
         child: SingleChildScrollView(
           keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,

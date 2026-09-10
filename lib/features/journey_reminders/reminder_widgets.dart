@@ -1,3 +1,4 @@
+import 'package:government_transit_collector/core/widgets/readable_app_bar.dart';
 import 'package:flutter/material.dart';
 import 'journey_reminder.dart';
 import 'reminder_controller.dart';
@@ -348,7 +349,7 @@ class _UpcomingJourneysState extends State<UpcomingJourneys>
                             context,
                             MaterialPageRoute<void>(
                               builder: (_) => Scaffold(
-                                appBar: AppBar(
+                                appBar: readableAppBar(context, 
                                   title: const Text('Journey Summary'),
                                 ),
                                 body: SafeArea(

@@ -1,3 +1,4 @@
+import 'package:government_transit_collector/core/widgets/readable_app_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:government_transit_collector/core/time/transit_service_time.dart';
 import 'package:government_transit_collector/features/route_performance/data/route_performance_calculator.dart';
@@ -13,11 +14,14 @@ class RoutePerformanceDashboardPage extends StatefulWidget {
     this.repository,
     this.savedReportRepository,
     this.now,
+    this.showPageHeader = true,
     super.key,
   });
   final RoutePerformanceRepository? repository;
   final SavedOperationalReportRepository? savedReportRepository;
   final DateTime Function()? now;
+
+  final bool showPageHeader;
 
   @override
   State<RoutePerformanceDashboardPage> createState() => _DashboardState();
@@ -204,7 +208,9 @@ class _DashboardState extends State<RoutePerformanceDashboardPage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Route Performance')),
+    appBar: widget.showPageHeader
+        ? readableAppBar(context, title: const Text('Route Performance'))
+        : null,
     body: SafeArea(
       child: Stack(
         children: [
@@ -272,6 +278,8 @@ class _DashboardState extends State<RoutePerformanceDashboardPage> {
   Widget _filters() => LayoutBuilder(
     builder: (context, constraints) {
       final route = DropdownButtonFormField<RoutePerformanceRoute>(
+              itemHeight: null,
+              isDense: false,
         key: ValueKey('route-selector-${_route?.routeId}'),
         initialValue: _route,
         isExpanded: true,
@@ -296,7 +304,10 @@ class _DashboardState extends State<RoutePerformanceDashboardPage> {
             .map(
               (item) => DropdownMenuItem(
                 value: item,
-                child: SizedBox(height: 48, child: _routeLabel(item)),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: _routeLabel(item),
+                ),
               ),
             )
             .toList(),
@@ -378,6 +389,7 @@ class _DashboardState extends State<RoutePerformanceDashboardPage> {
   );
 
   Widget _routeLabel(RoutePerformanceRoute route) => Column(
+    mainAxisSize: MainAxisSize.min,
     mainAxisAlignment: MainAxisAlignment.center,
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
@@ -385,15 +397,11 @@ class _DashboardState extends State<RoutePerformanceDashboardPage> {
         route.shortName?.trim().isNotEmpty == true
             ? route.shortName!
             : route.displayName,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
         style: const TextStyle(fontWeight: FontWeight.w700),
       ),
       if (route.longName?.trim().isNotEmpty == true)
         Text(
           route.longName!,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
           style: Theme.of(context).textTheme.bodySmall,
         ),
     ],

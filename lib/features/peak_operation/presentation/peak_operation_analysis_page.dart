@@ -1,3 +1,4 @@
+import 'package:government_transit_collector/core/widgets/readable_app_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:government_transit_collector/core/time/transit_service_time.dart';
 import 'package:government_transit_collector/features/peak_operation/data/peak_operation_calculator.dart';
@@ -13,11 +14,14 @@ class PeakOperationAnalysisPage extends StatefulWidget {
     this.repository,
     this.savedReportRepository,
     this.now,
+    this.showPageHeader = true,
     super.key,
   });
   final PeakOperationRepository? repository;
   final SavedOperationalReportRepository? savedReportRepository;
   final DateTime Function()? now;
+  final bool showPageHeader;
+
   @override
   State<PeakOperationAnalysisPage> createState() =>
       _PeakOperationAnalysisState();
@@ -208,7 +212,9 @@ class _PeakOperationAnalysisState extends State<PeakOperationAnalysisPage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Peak Operation Analysis')),
+    appBar: widget.showPageHeader
+        ? readableAppBar(context, title: const Text('Peak Operation Analysis'))
+        : null,
     body: SafeArea(
       child: Stack(
         children: [
@@ -277,6 +283,8 @@ class _PeakOperationAnalysisState extends State<PeakOperationAnalysisPage> {
       final scope = KeyedSubtree(
         key: const Key('peak-scope-selector'),
         child: DropdownButtonFormField<String?>(
+              itemHeight: null,
+              isDense: false,
           key: ValueKey('peak-scope-${_routeId ?? 'all'}-${_routes.length}'),
           initialValue: _routeId,
           isExpanded: true,
@@ -298,7 +306,6 @@ class _PeakOperationAnalysisState extends State<PeakOperationAnalysisPage> {
                       value: route.routeId,
                       child: Text(
                         route.displayName,
-                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
                   ),

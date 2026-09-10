@@ -1,3 +1,4 @@
+import 'package:government_transit_collector/core/widgets/responsive_app_shell.dart';
 import 'package:government_transit_collector/features/tracked_journeys/tracked_journey_repository.dart';
 import 'package:government_transit_collector/features/tracked_journeys/tracked_journey_widgets.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/selected_journey_tracking.dart';
@@ -69,6 +70,14 @@ class _PassengerHomePageState extends State<PassengerHomePage>
     with WidgetsBindingObserver {
   Timer? _homeTimer;
   final _tabNavigators = List.generate(5, (_) => GlobalKey<NavigatorState>());
+  final _detailTabs = List<bool>.filled(5, false);
+  late final _tabObservers = List.generate(5, (tab) => _TabHeaderObserver((detail) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _detailTabs[tab] != detail) {
+        setState(() => _detailTabs[tab] = detail);
+      }
+    });
+  }));
   final _planKey = GlobalKey<DepartureRecommendationPageState>();
   final Map<int, WidgetBuilder> _tabBuilders = {};
   int _activeTab = 0;
@@ -216,116 +225,59 @@ class _PassengerHomePageState extends State<PassengerHomePage>
     ),
   );
 
-  Widget _navigation(int active) => Row(
-    children: [
-      _navItem('Home', Icons.home_outlined, () {
+  void _selectTab(int index) {
+    if (index == _activeTab) return;
+    switch (index) {
+      case 0:
         setState(() => _activeTab = 0);
-      }, selected: active == 0),
-      _navItem(
-        'Plan',
-        Icons.route_outlined,
-        active == 1 ? () {} : _openDeparture,
-        selected: active == 1,
-      ),
-      _navItem(
-        'Live',
-        Icons.location_searching,
-        active == 2 ? () {} : _openLive,
-        selected: active == 2,
-      ),
-      _navItem(
-        'Reports',
-        Icons.feedback_outlined,
-        active == 3 ? () {} : _openReports,
-        selected: active == 3,
-      ),
-      _navItem(
-        'My Trips',
-        Icons.task_alt,
-        () => _pushTab(
-          4,
-          (_) => Scaffold(
-            body: SafeArea(
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 760),
-                  child: ListView(
-                    physics: const ClampingScrollPhysics(),
+      case 1:
+        _openDeparture();
+      case 2:
+        _openLive();
+      case 3:
+        _openReports();
+      case 4:
+        _openMyTrips();
+    }
+  }
+
+  void _openMyTrips() => _pushTab(
+    4,
+    (_) => Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 760),
+            child: ListView(
+              physics: const ClampingScrollPhysics(),
+              padding: const EdgeInsets.all(20),
+              children: [
+                Card(
+                  child: Padding(
                     padding: const EdgeInsets.all(20),
-                    children: [
-                      Card(
-                        child: Padding(
-                          padding: const EdgeInsets.all(20),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              Text(
-                                'My Trips',
-                                style: Theme.of(context).textTheme.titleLarge,
-                              ),
-                              const SizedBox(height: 8),
-                              const Text('Review your completed journeys.'),
-                              const SizedBox(height: 16),
-                              MyTripsSection(
-                                repository: _trackedJourneys,
-                                feedbackRepository: widget.feedbackRepository,
-                                onPlanAgain: (recent) =>
-                                    _openDeparture(null, recent),
-                              ),
-                            ],
-                          ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          'My Trips',
+                          style: Theme.of(context).textTheme.titleLarge,
                         ),
-                      ),
-                    ],
+                        const SizedBox(height: 8),
+                        const Text('Review your completed journeys.'),
+                        const SizedBox(height: 16),
+                        MyTripsSection(
+                          repository: _trackedJourneys,
+                          feedbackRepository: widget.feedbackRepository,
+                          onPlanAgain: (recent) =>
+                              _openDeparture(null, recent),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-              ),
+              ],
             ),
           ),
-        ),
-        selected: active == 4,
-      ),
-    ],
-  );
-
-  Widget _navItem(
-    String label,
-    IconData icon,
-    VoidCallback onTap, {
-    bool selected = false,
-  }) => Expanded(
-    child: Semantics(
-      selected: selected,
-      child: TextButton(
-        key: Key('passenger-nav-$label'),
-        onPressed: onTap,
-        style: TextButton.styleFrom(
-          padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
-          backgroundColor: selected
-              ? Theme.of(context).colorScheme.primaryContainer
-              : null,
-          foregroundColor: selected
-              ? Theme.of(context).colorScheme.primary
-              : Theme.of(context).colorScheme.onSurfaceVariant,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 22),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                color: selected
-                    ? Theme.of(context).colorScheme.primary
-                    : Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ],
         ),
       ),
     ),
@@ -358,69 +310,66 @@ class _PassengerHomePageState extends State<PassengerHomePage>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: SafeArea(
-        child: _ScrollingPassengerHeader(
-          header: AppBar(
-            primary: false,
-            title: const Text('Government Transit Collector'),
-            bottom: PreferredSize(
-              preferredSize: const Size.fromHeight(80),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.surfaceContainerLow,
-                    borderRadius: BorderRadius.circular(16),
+    return ResponsiveAppShell(
+      items: const [
+        AppNavigationItem(label: 'Home', icon: Icons.home_outlined),
+        AppNavigationItem(label: 'Plan', icon: Icons.route_outlined),
+        AppNavigationItem(label: 'Live', icon: Icons.location_searching),
+        AppNavigationItem(label: 'Reports', icon: Icons.feedback_outlined),
+        AppNavigationItem(label: 'My Trips', icon: Icons.task_alt),
+      ],
+      selectedIndex: _activeTab,
+      onSelected: _selectTab,
+      navigationKeyPrefix: 'passenger-nav',
+      showHeader: !_detailTabs[_activeTab],
+      actions: [
+        IconButton(
+          tooltip: 'My Travel Profile',
+          onPressed: _signingOut ? null : _openProfile,
+          icon: const Icon(Icons.person_outline),
+        ),
+        IconButton(
+          tooltip: 'Sign out',
+          onPressed: _signingOut ? null : _logout,
+          icon: _signingOut
+              ? const SizedBox.square(
+                  dimension: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
                   ),
-                  child: _navigation(_activeTab),
-                ),
+                )
+              : const Icon(Icons.logout),
+        ),
+      ],
+      child: ScrollConfiguration(
+        behavior: const _PassengerScrollBehavior(),
+        child: IndexedStack(
+          index: _activeTab,
+          children: List.generate(5, (tab) {
+            if (tab != 0 && !_tabBuilders.containsKey(tab)) {
+              return const SizedBox.shrink();
+            }
+            return NavigatorPopHandler<Object?>(
+              enabled: _activeTab == tab,
+              onPopWithResult: (_) => _tabNavigators[tab].currentState!.pop(),
+              child: Navigator(
+                key: _tabNavigators[tab],
+                observers: [_tabObservers[tab]],
+                onGenerateInitialRoutes: (_, _) => [
+                  MaterialPageRoute<void>(
+                    settings: RouteSettings(name: 'passenger-tab-$tab'),
+                    builder: tab == 0
+                        ? (_) => ValueListenableBuilder(
+                            valueListenable: _homeRevision,
+                            builder: (_, _, _) => _homeBody(),
+                          )
+                        : _tabBuilders[tab]!,
+                  ),
+                ],
               ),
-            ),
-            actions: [
-              IconButton(
-                tooltip: 'My Travel Profile',
-                onPressed: _signingOut ? null : _openProfile,
-                icon: const Icon(Icons.person_outline),
-              ),
-              IconButton(
-                tooltip: 'Sign out',
-                onPressed: _signingOut ? null : _logout,
-                icon: _signingOut
-                    ? const SizedBox.square(
-                        dimension: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.logout),
-              ),
-            ],
-          ),
-          child: IndexedStack(
-            index: _activeTab,
-            children: List.generate(5, (tab) {
-              if (tab != 0 && !_tabBuilders.containsKey(tab)) {
-                return const SizedBox.shrink();
-              }
-              return NavigatorPopHandler<Object?>(
-                enabled: _activeTab == tab,
-                onPopWithResult: (_) => _tabNavigators[tab].currentState!.pop(),
-                child: Navigator(
-                  key: _tabNavigators[tab],
-                  onGenerateInitialRoutes: (_, _) => [
-                    MaterialPageRoute<void>(
-                      settings: RouteSettings(name: 'passenger-tab-$tab'),
-                      builder: tab == 0
-                          ? (_) => ValueListenableBuilder(
-                              valueListenable: _homeRevision,
-                              builder: (_, _, _) => _homeBody(),
-                            )
-                          : _tabBuilders[tab]!,
-                    ),
-                  ],
-                ),
-              );
-            }),
-          ),
+            );
+          }),
         ),
       ),
     );
@@ -472,59 +421,13 @@ class _PassengerHomePageState extends State<PassengerHomePage>
   );
 }
 
-class _ScrollingPassengerHeader extends StatefulWidget {
-  const _ScrollingPassengerHeader({required this.header, required this.child});
-  final PreferredSizeWidget header;
-  final Widget child;
+class _TabHeaderObserver extends NavigatorObserver {
+  _TabHeaderObserver(this.onDetailChanged);
+  final ValueChanged<bool> onDetailChanged;
 
   @override
-  State<_ScrollingPassengerHeader> createState() =>
-      _ScrollingPassengerHeaderState();
-}
-
-class _ScrollingPassengerHeaderState extends State<_ScrollingPassengerHeader> {
-  double _collapsed = 0;
-
-  bool _scroll(ScrollNotification notification) {
-    if (notification.metrics.axis != Axis.vertical) return false;
-    final delta = switch (notification) {
-      ScrollUpdateNotification n when n.dragDetails != null =>
-        n.scrollDelta ?? 0,
-      OverscrollNotification n when n.dragDetails != null => n.overscroll,
-      _ => 0.0,
-    };
-    final next = (_collapsed + delta).clamp(
-      0.0,
-      widget.header.preferredSize.height,
-    );
-    if (next != _collapsed) setState(() => _collapsed = next);
-    return false;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final height = widget.header.preferredSize.height;
-    return Column(
-      children: [
-        ClipRect(
-          key: const Key('passenger-scrolling-header'),
-          child: Align(
-            alignment: Alignment.bottomCenter,
-            heightFactor: (height - _collapsed) / height,
-            child: SizedBox(height: height, child: widget.header),
-          ),
-        ),
-        Expanded(
-          child: NotificationListener<ScrollNotification>(
-            onNotification: _scroll,
-            child: ScrollConfiguration(
-              behavior: const _PassengerScrollBehavior(),
-              child: widget.child,
-            ),
-          ),
-        ),
-      ],
-    );
+  void didChangeTop(Route<dynamic> topRoute, Route<dynamic>? previousTopRoute) {
+    if (topRoute is PageRoute) onDetailChanged(!topRoute.isFirst);
   }
 }
 

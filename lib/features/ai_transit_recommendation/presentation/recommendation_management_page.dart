@@ -1,3 +1,4 @@
+import 'package:government_transit_collector/core/widgets/readable_app_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/recommendation_management_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/recommendation_management_repository.dart';
@@ -73,7 +74,7 @@ class _RecommendationManagementPageState
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Recommendation Management')),
+    appBar: readableAppBar(context, title: const Text('Recommendation Management')),
     body: SafeArea(
       child: ListView(
         padding: const EdgeInsets.all(16),
@@ -124,64 +125,119 @@ class _RecommendationManagementPageState
     ),
   );
 
-  Widget _filters() => Card(
-    child: Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text('Feature', style: Theme.of(context).textTheme.titleSmall),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final filter in _FeatureFilter.values)
-                FilterChip(
-                  key: Key('management-feature-${filter.name}'),
-                  label: Text(filter.label),
-                  selected: _featureFilter == filter,
-                  onSelected: (_) => setState(() => _featureFilter = filter),
-                ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Text('Status', style: Theme.of(context).textTheme.titleSmall),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final filter in _StatusFilter.values)
-                FilterChip(
-                  key: Key('management-status-${filter.name}'),
-                  label: Text(filter.label),
-                  selected: _statusFilter == filter,
-                  onSelected: (_) => setState(() => _statusFilter = filter),
-                ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Text('Priority', style: Theme.of(context).textTheme.titleSmall),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final filter in _PriorityFilter.values)
-                FilterChip(
-                  key: Key('management-priority-${filter.name}'),
-                  label: Text(filter.label),
-                  selected: _priorityFilter == filter,
-                  onSelected: (_) =>
-                      setState(() => _priorityFilter = filter),
-                ),
-            ],
-          ),
-        ],
+  Widget _filters() {
+    final colors = Theme.of(context).colorScheme;
+    return Card(
+      key: const Key('management-filters'),
+      color: colors.surface,
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: colors.outlineVariant),
       ),
-    ),
-  );
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('Feature', style: Theme.of(context).textTheme.titleSmall),
+            const SizedBox(height: 4),
+            Wrap(
+              spacing: 6,
+              runSpacing: 0,
+              children: [
+                for (final filter in _FeatureFilter.values)
+                  FilterChip(
+                    key: Key('management-feature-${filter.name}'),
+                    backgroundColor: colors.surface,
+                    selectedColor: colors.primaryContainer,
+                    checkmarkColor: colors.primary,
+                    showCheckmark: true,
+                    side: BorderSide(color: colors.outlineVariant),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    labelPadding: const EdgeInsets.symmetric(horizontal: 4),
+                    labelStyle: TextStyle(
+                      color: _featureFilter == filter
+                          ? colors.primary
+                          : colors.onSurface,
+                    ),
+                    label: Text(filter.label),
+                    selected: _featureFilter == filter,
+                    onSelected: (_) => setState(() => _featureFilter = filter),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text('Status', style: Theme.of(context).textTheme.titleSmall),
+            const SizedBox(height: 4),
+            Wrap(
+              spacing: 6,
+              runSpacing: 0,
+              children: [
+                for (final filter in _StatusFilter.values)
+                  FilterChip(
+                    key: Key('management-status-${filter.name}'),
+                    backgroundColor: colors.surface,
+                    selectedColor: colors.primaryContainer,
+                    checkmarkColor: colors.primary,
+                    showCheckmark: true,
+                    side: BorderSide(color: colors.outlineVariant),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    labelPadding: const EdgeInsets.symmetric(horizontal: 4),
+                    labelStyle: TextStyle(
+                      color: _statusFilter == filter
+                          ? colors.primary
+                          : colors.onSurface,
+                    ),
+                    label: Text(filter.label),
+                    selected: _statusFilter == filter,
+                    onSelected: (_) => setState(() => _statusFilter = filter),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text('Priority', style: Theme.of(context).textTheme.titleSmall),
+            const SizedBox(height: 4),
+            Wrap(
+              spacing: 6,
+              runSpacing: 0,
+              children: [
+                for (final filter in _PriorityFilter.values)
+                  FilterChip(
+                    key: Key('management-priority-${filter.name}'),
+                    backgroundColor: colors.surface,
+                    selectedColor: colors.primaryContainer,
+                    checkmarkColor: colors.primary,
+                    showCheckmark: true,
+                    side: BorderSide(color: colors.outlineVariant),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    labelPadding: const EdgeInsets.symmetric(horizontal: 4),
+                    labelStyle: TextStyle(
+                      color: _priorityFilter == filter
+                          ? colors.primary
+                          : colors.onSurface,
+                    ),
+                    label: Text(filter.label),
+                    selected: _priorityFilter == filter,
+                    onSelected: (_) =>
+                        setState(() => _priorityFilter = filter),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   Widget _recommendationCard(SavedRecommendation record) => Card(
     key: Key('saved-recommendation-${record.recommendationId}'),
@@ -219,7 +275,7 @@ class _RecommendationManagementPageState
           const SizedBox(height: 8),
           Text('Saved ${_dateTime(record.createdAt)}'),
           const SizedBox(height: 8),
-          Text(record.rationale, maxLines: 3, overflow: TextOverflow.ellipsis),
+          Text(record.rationale),
           const SizedBox(height: 12),
           Align(
             alignment: Alignment.centerLeft,
@@ -341,7 +397,7 @@ class _RecommendationManagementDetailPageState
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Saved Recommendation')),
+    appBar: readableAppBar(context, title: const Text('Saved Recommendation')),
     body: SafeArea(
       child: ListView(
         padding: const EdgeInsets.all(16),

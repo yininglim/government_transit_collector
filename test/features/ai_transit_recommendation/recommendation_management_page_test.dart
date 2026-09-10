@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:government_transit_collector/core/theme/app_theme.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_recommendation_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_evidence_models.dart';
@@ -12,6 +14,45 @@ import 'package:government_transit_collector/features/ai_transit_recommendation/
 import 'package:government_transit_collector/features/ai_transit_recommendation/presentation/recommendation_management_page.dart';
 
 void main() {
+  testWidgets('compact filters wrap and retain selections through rotation', (tester) async {
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(MaterialApp(
+      theme: AppTheme.light,
+      home: RecommendationManagementPage(repository: FakeManagementRepository()),
+    ));
+    await tester.pumpAndSettle();
+    for (final size in [const Size(320, 640), const Size(390, 844), const Size(844, 390)]) {
+      tester.view.physicalSize = size;
+      await tester.pumpAndSettle();
+      expect(find.byType(FilterChip), findsNWidgets(11));
+      for (final key in [
+        'management-feature-routeBusStop',
+        'management-status-pending',
+        'management-priority-high',
+      ]) {
+        final finder = find.byKey(Key(key));
+        await tester.ensureVisible(finder);
+        await tester.tap(finder);
+        await tester.pumpAndSettle();
+        final chip = tester.widget<FilterChip>(finder);
+        expect(chip.selected, isTrue);
+        expect(chip.selectedColor, AppTheme.light.colorScheme.primaryContainer);
+        expect(chip.checkmarkColor, AppTheme.contentBlue);
+        expect(chip.showCheckmark, isTrue);
+        expect(chip.labelStyle!.color, AppTheme.contentBlue);
+        final text = find.descendant(of: finder, matching: find.byType(Text));
+        expect(tester.renderObject<RenderParagraph>(text).didExceedMaxLines, isFalse);
+        final bounds = tester.getRect(finder);
+        expect(bounds.contains(tester.getTopLeft(text)), isTrue);
+        expect(bounds.contains(tester.getBottomRight(text) - const Offset(1, 1)), isTrue);
+      }
+      expect(tester.widget<FilterChip>(find.byKey(const Key('management-feature-routeBusStop'))).selected, isTrue);
+      expect(tester.widget<FilterChip>(find.byKey(const Key('management-status-pending'))).selected, isTrue);
+      expect(tester.takeException(), isNull);
+    }
+  });
+
   testWidgets('shows loading and empty states', (tester) async {
     final gate = Completer<List<SavedRecommendation>>();
     final repository = FakeManagementRepository(loadGate: gate);

@@ -1,3 +1,4 @@
+import 'package:government_transit_collector/core/widgets/readable_app_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/cost_dashboard_coordinator.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/cost_recommendation_models.dart';
@@ -265,7 +266,7 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Cost Estimation Report')),
+    appBar: readableAppBar(context, title: const Text('Cost Estimation Report')),
     body: SafeArea(
       child: ListView(
         padding: const EdgeInsets.all(16),
@@ -462,6 +463,8 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
             ),
             const SizedBox(height: 8),
             DropdownButtonFormField<String>(
+              itemHeight: null,
+              isDense: false,
               value: selectedRecommendation?.routeId,
               menuMaxHeight: 240,
               isExpanded: true,
@@ -474,8 +477,6 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
                     value: record.routeId,
                     child: Text(
                       '${_routeName(record.routeId)} \u2014 ${_frequencyActionLabel(record.action)}',
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
               ],

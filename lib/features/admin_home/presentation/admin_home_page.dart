@@ -1,3 +1,9 @@
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/recommendation_management_models.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/recommendation_priority.dart';
+import 'package:government_transit_collector/features/saved_operational_reports/data/saved_operational_report.dart';
+import 'dart:async';
+import 'package:government_transit_collector/core/widgets/responsive_app_shell.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/recommendation_management_repository.dart';
 import 'package:flutter/material.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/ai_recommendation_analysis_session_store.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/presentation/ai_recommendation_dashboard_page.dart';
@@ -17,10 +23,12 @@ class AdminHomePage extends StatefulWidget {
     this.peakOperationRepository,
     this.savedOperationalReportRepository,
     this.aiRecommendationSessionStore,
+    this.recommendationManagementRepository,
     this.aiRecommendationDashboardBuilder,
     super.key,
   });
 
+  final RecommendationManagementRepository? recommendationManagementRepository;
   final AppProfile profile;
   final AuthRepository repository;
   final RoutePerformanceRepository? routePerformanceRepository;
@@ -73,26 +81,34 @@ class _AdminHomePageState extends State<AdminHomePage> {
 
   Widget _buildDestination(int index) => switch (index) {
     0 => _AdminDashboard(
+      key: ValueKey(widget.profile.userId),
       profile: widget.profile,
-      signingOut: _signingOut,
-      onLogout: _logout,
+      routeRepository: widget.routePerformanceRepository,
+      reportRepository: widget.savedOperationalReportRepository,
+      recommendationRepository: widget.recommendationManagementRepository,
+      onOpenAnalysis: () => _selectDestination(1),
+      active: _selectedIndex == 0,
     ),
     1 =>
       widget.aiRecommendationDashboardBuilder?.call(
             _aiRecommendationSessionStore,
           ) ??
           AiRecommendationDashboardPage(
+            showPageHeader: false,
             sessionStore: _aiRecommendationSessionStore,
           ),
     2 => RoutePerformanceDashboardPage(
+      showPageHeader: false,
       repository: widget.routePerformanceRepository,
       savedReportRepository: widget.savedOperationalReportRepository,
     ),
     3 => PeakOperationAnalysisPage(
+      showPageHeader: false,
       repository: widget.peakOperationRepository,
       savedReportRepository: widget.savedOperationalReportRepository,
     ),
     4 => SavedOperationalReportsPage(
+      showPageHeader: false,
       repository: widget.savedOperationalReportRepository,
     ),
     _ => throw RangeError.index(index, _destinations),
@@ -103,6 +119,7 @@ class _AdminHomePageState extends State<AdminHomePage> {
     setState(() {
       _selectedIndex = index;
       _destinations[index] ??= _buildDestination(index);
+      _destinations[0] = _buildDestination(0);
     });
   }
 
@@ -139,62 +156,133 @@ class _AdminHomePageState extends State<AdminHomePage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: IndexedStack(
+    return ResponsiveAppShell(
+      items: const [
+        AppNavigationItem(label: 'Home', icon: Icons.home_outlined, selectedIcon: Icons.home_rounded),
+        AppNavigationItem(label: 'AI', icon: Icons.auto_awesome_outlined, selectedIcon: Icons.auto_awesome),
+        AppNavigationItem(label: 'Performance', icon: Icons.analytics_outlined, selectedIcon: Icons.analytics),
+        AppNavigationItem(label: 'Peak', icon: Icons.query_stats_outlined, selectedIcon: Icons.query_stats),
+        AppNavigationItem(label: 'Reports', icon: Icons.description_outlined, selectedIcon: Icons.description),
+      ],
+      selectedIndex: _selectedIndex,
+      onSelected: _selectDestination,
+      navigationKeyPrefix: 'admin-nav',
+      actions: [
+        const IconButton(
+          tooltip: 'Admin profile',
+          onPressed: null,
+          icon: Icon(Icons.account_circle_outlined),
+        ),
+        IconButton(
+          tooltip: 'Sign out',
+          onPressed: _signingOut ? null : _logout,
+          icon: _signingOut
+              ? const SizedBox.square(
+                  dimension: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+              : const Icon(Icons.logout),
+        ),
+      ],
+      child: IndexedStack(
         index: _selectedIndex,
         children: List<Widget>.generate(
           _destinationCount,
           (index) => _destinations[index] ?? const SizedBox.shrink(),
         ),
       ),
-      bottomNavigationBar: SafeArea(
-        top: false,
-        child: NavigationBar(
-          selectedIndex: _selectedIndex,
-          onDestinationSelected: _selectDestination,
-          destinations: const [
-            NavigationDestination(
-              icon: Icon(Icons.home_outlined),
-              selectedIcon: Icon(Icons.home_rounded),
-              label: 'Home',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.auto_awesome_outlined),
-              selectedIcon: Icon(Icons.auto_awesome),
-              label: 'AI',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.analytics_outlined),
-              selectedIcon: Icon(Icons.analytics),
-              label: 'Performance',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.query_stats_outlined),
-              selectedIcon: Icon(Icons.query_stats),
-              label: 'Peak',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.description_outlined),
-              selectedIcon: Icon(Icons.description),
-              label: 'Reports',
-            ),
-          ],
-        ),
-      ),
     );
   }
 }
 
-class _AdminDashboard extends StatelessWidget {
+class _AdminDashboard extends StatefulWidget {
   const _AdminDashboard({
     required this.profile,
-    required this.signingOut,
-    required this.onLogout,
+    required this.onOpenAnalysis,
+    required this.active,
+    this.routeRepository,
+    this.reportRepository,
+    this.recommendationRepository,
+    super.key,
   });
 
   final AppProfile profile;
-  final bool signingOut;
-  final VoidCallback onLogout;
+  final VoidCallback onOpenAnalysis;
+  final bool active;
+  final RoutePerformanceRepository? routeRepository;
+  final SavedOperationalReportRepository? reportRepository;
+  final RecommendationManagementRepository? recommendationRepository;
+
+  @override
+  State<_AdminDashboard> createState() => _AdminDashboardState();
+}
+
+class _AdminDashboardState extends State<_AdminDashboard> {
+  int? _routeCount;
+  List<SavedOperationalReport>? _reports;
+  List<SavedRecommendation>? _recommendations;
+  bool _routesLoading = true;
+  bool _reportsLoading = true;
+  bool _recommendationsLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadRoutes());
+    unawaited(_loadReports());
+    unawaited(_loadRecommendations());
+  }
+
+  @override
+  void didUpdateWidget(covariant _AdminDashboard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.active && !oldWidget.active) {
+      if (!_reportsLoading) unawaited(_loadReports());
+      if (!_recommendationsLoading) unawaited(_loadRecommendations());
+    }
+  }
+
+  Future<void> _loadRoutes() async {
+    try {
+      final repository = widget.routeRepository ?? DefaultRoutePerformanceRepository();
+      final routes = await repository.loadRoutes();
+      if (mounted) setState(() => _routeCount = routes.length);
+    } on Object {
+      if (mounted) setState(() => _routeCount = null);
+    } finally {
+      if (mounted) setState(() => _routesLoading = false);
+    }
+  }
+
+  Future<void> _loadReports() async {
+    setState(() => _reportsLoading = true);
+    try {
+      final repository = widget.reportRepository ?? DefaultSavedOperationalReportRepository();
+      final reports = [...await repository.loadReports()];
+      reports.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      if (mounted) setState(() => _reports = reports);
+    } on Object {
+      if (mounted) setState(() => _reports = null);
+    } finally {
+      if (mounted) setState(() => _reportsLoading = false);
+    }
+  }
+
+  Future<void> _loadRecommendations() async {
+    setState(() => _recommendationsLoading = true);
+    try {
+      final repository = widget.recommendationRepository ?? DefaultRecommendationManagementRepository();
+      final recommendations = await repository.loadSavedRecommendations();
+      if (mounted) setState(() => _recommendations = recommendations);
+    } on Object {
+      if (mounted) setState(() => _recommendations = null);
+    } finally {
+      if (mounted) setState(() => _recommendationsLoading = false);
+    }
+  }
 
   String get _greeting {
     final hour = DateTime.now().hour;
@@ -207,26 +295,6 @@ class _AdminDashboard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Government Transit Collector'),
-        actions: [
-          IconButton(
-            tooltip: 'Admin profile',
-            onPressed: null,
-            icon: const Icon(Icons.account_circle_outlined),
-          ),
-          IconButton(
-            tooltip: 'Sign out',
-            onPressed: signingOut ? null : onLogout,
-            icon: signingOut
-                ? const SizedBox.square(
-                    dimension: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.logout),
-          ),
-        ],
-      ),
       body: SafeArea(
         child: LayoutBuilder(
           builder: (context, constraints) => SingleChildScrollView(
@@ -241,7 +309,7 @@ class _AdminDashboard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Text(
-                      '$_greeting, ${profile.displayName}',
+                      '$_greeting, ${widget.profile.displayName}',
                       style: theme.textTheme.headlineMedium?.copyWith(
                         fontWeight: FontWeight.bold,
                       ),
@@ -253,40 +321,74 @@ class _AdminDashboard extends StatelessWidget {
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
                     ),
-                    const SizedBox(height: 28),
-                    Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(24),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Icon(
-                              Icons.directions_bus_filled_outlined,
-                              size: 36,
-                              color: theme.colorScheme.primary,
-                            ),
-                            const SizedBox(width: 20),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    'Operations overview',
-                                    style: theme.textTheme.titleLarge?.copyWith(
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  const Text(
-                                    'Use the navigation below to review recommendations, performance, peak activity, and saved reports.',
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
+                    const SizedBox(height: 24),
+                    Text('Network Snapshot', style: theme.textTheme.titleMedium),
+                    const SizedBox(height: 12),
+                    IntrinsicHeight(
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(child: _HomeMetric(
+                            icon: Icons.alt_route,
+                            label: 'Routes',
+                            value: _routeCount,
+                            loading: _routesLoading,
+                          )),
+                          const SizedBox(width: 12),
+                          Expanded(child: _HomeMetric(
+                            icon: Icons.description_outlined,
+                            label: 'Saved Reports',
+                            value: _reports?.length,
+                            loading: _reportsLoading,
+                          )),
+                        ],
                       ),
                     ),
+                    const SizedBox(height: 24),
+                    LayoutBuilder(builder: (context, constraints) {
+                      final attention = _attention();
+                      final planning = _planning();
+                      if (constraints.maxWidth >= 600) {
+                        return Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(child: attention),
+                            const SizedBox(width: 24),
+                            Expanded(child: planning),
+                          ],
+                        );
+                      }
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          attention,
+                          const SizedBox(height: 24),
+                          planning,
+                        ],
+                      );
+                    }),
+                    if (_reports?.isNotEmpty == true) ...[
+                      const SizedBox(height: 24),
+                      _HomeSection(
+                        title: 'Recent Activity',
+                        children: [
+                          Text(
+                            'Recently saved operational reports',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          for (final entry in _reports!.take(2).toList().asMap().entries) ...[
+                            if (entry.key > 0) const Divider(height: 24),
+                            _ReportPreview(
+                              report: entry.value,
+                              subtitle: '${entry.value.reportType.label} report saved / ${_savedAt(entry.value.createdAt)}',
+                            ),
+                          ],
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -294,6 +396,183 @@ class _AdminDashboard extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+
+  String _savedAt(DateTime instant) {
+    final local = instant.toLocal();
+    final labels = MaterialLocalizations.of(context);
+    return '${labels.formatMediumDate(local)} ${labels.formatTimeOfDay(TimeOfDay.fromDateTime(local))}';
+  }
+
+  Widget _attention() {
+    final theme = Theme.of(context);
+    final reports = _reports;
+    final attention = reports?.where((report) =>
+        report.status == SavedOperationalReportStatus.needsAttention).toList();
+    attention?.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    return _HomeSection(
+      key: const Key('home-needs-attention'),
+      title: 'Needs Attention',
+      children: [
+        if (reports == null)
+          Text(_reportsLoading
+              ? 'Checking saved report statuses...'
+              : 'Operational report status is unavailable.')
+        else if (attention!.isEmpty)
+          const Text('No immediate operational issues to review.')
+        else
+          for (final report in attention!.take(2))
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: _ReportPreview(
+                report: report,
+                subtitle: '${report.reportType.label} / ${report.status.label}',
+                showRoute: true,
+              ),
+            ),
+        if (reports != null) ...[
+          const SizedBox(height: 8),
+          Text('Based on saved report review statuses.',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _planning() {
+    final theme = Theme.of(context);
+    final recommendations = _recommendations;
+    return _HomeSection(
+      key: const Key('home-ai-planning'),
+      title: 'AI Planning',
+      children: [
+        if (recommendations == null)
+          Text(_recommendationsLoading
+              ? 'Loading planning summary...'
+              : 'Planning summary is unavailable.')
+        else if (recommendations.isEmpty)
+          const Text('Ready for analysis')
+        else ...[
+          Text('Pending Recommendations: ${recommendations.where((record) => record.status == RecommendationReviewStatus.pending).length}',
+            style: theme.textTheme.titleSmall,
+          ),
+          const SizedBox(height: 8),
+          Text('High Priority: ${recommendations.where((record) => record.priorityLevel == RecommendationPriorityLevel.high).length}'),
+        ],
+        const SizedBox(height: 8),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton(
+            onPressed: widget.onOpenAnalysis,
+            child: const Text('Open AI Analysis'),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _HomeMetric extends StatelessWidget {
+  const _HomeMetric({required this.icon, required this.label, required this.value, required this.loading});
+  final IconData icon;
+  final String label;
+  final int? value;
+  final bool loading;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      key: ValueKey('home-metric-$label'),
+      margin: EdgeInsets.zero,
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: theme.colorScheme.outlineVariant),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(children: [
+          Icon(icon, size: 20, color: theme.colorScheme.primary),
+          const SizedBox(height: 8),
+          Text(value?.toString() ?? (loading ? 'Loading...' : 'Unavailable'),
+            textAlign: TextAlign.center,
+            style: value == null ? theme.textTheme.bodySmall
+                : theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 4),
+          Text(label, textAlign: TextAlign.center, style: theme.textTheme.bodySmall),
+        ]),
+      ),
+    );
+  }
+}
+
+class _ReportPreview extends StatelessWidget {
+  const _ReportPreview({required this.report, required this.subtitle, this.showRoute = false});
+  final SavedOperationalReport report;
+  final String subtitle;
+  final bool showRoute;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final route = report.routeNameSnapshot.trim();
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(Icons.description_outlined, size: 20, color: theme.colorScheme.primary),
+        const SizedBox(width: 12),
+        Expanded(child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(showRoute && route.isNotEmpty ? route : report.title,
+              style: theme.textTheme.titleSmall,
+            ),
+            const SizedBox(height: 4),
+            Text(subtitle, style: theme.textTheme.bodySmall,
+            ),
+          ],
+        )),
+      ],
+    );
+  }
+}
+
+class _HomeSection extends StatelessWidget {
+  const _HomeSection({required this.title, required this.children, super.key});
+
+  final String title;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(title, style: theme.textTheme.titleMedium),
+        const SizedBox(height: 12),
+        Card(
+          margin: EdgeInsets.zero,
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: theme.colorScheme.outlineVariant),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: children,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

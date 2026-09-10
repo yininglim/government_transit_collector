@@ -1,3 +1,4 @@
+import 'package:government_transit_collector/core/widgets/readable_app_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_dashboard_coordinator.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_evidence_models.dart';
@@ -158,7 +159,7 @@ class _BusFrequencyRecommendationPageState
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Bus Frequency Recommendations')),
+    appBar: readableAppBar(context, title: const Text('Bus Frequency Recommendations')),
     body: SafeArea(
       child: ListView(
         padding: const EdgeInsets.all(16),

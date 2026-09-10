@@ -1,3 +1,4 @@
+import 'package:government_transit_collector/core/widgets/readable_app_bar.dart';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -182,7 +183,7 @@ class _RouteBusStopRecommendationPageState
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Route & Bus Stop Recommendations')),
+    appBar: readableAppBar(context, title: const Text('Route & Bus Stop Recommendations')),
     body: SafeArea(
       child: ListView(
         padding: const EdgeInsets.all(16),
@@ -455,6 +456,8 @@ class _RouteBusStopRecommendationPageState
             ),
             const SizedBox(height: 12),
             DropdownButtonFormField<String>(
+              itemHeight: null,
+              isDense: false,
               key: const Key('route-map-selector'),
               initialValue: _session.selectedRouteId,
               isExpanded: true,
@@ -468,7 +471,6 @@ class _RouteBusStopRecommendationPageState
                     value: candidate.route.routeId,
                     child: Text(
                       candidate.route.displayName,
-                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
               ],

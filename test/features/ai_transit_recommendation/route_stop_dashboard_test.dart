@@ -1,3 +1,4 @@
+import '../admin_home/ai_recommendation_home_fakes.dart' as overview;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -256,7 +257,7 @@ void main() {
     );
   });
 
-  testWidgets('dashboard preload is deduplicated and reused on page entry', (
+  testWidgets('dashboard defers preparation until feature entry and reuses it', (
     tester,
   ) async {
     final gate = Completer<void>();
@@ -269,12 +270,15 @@ void main() {
       MaterialApp(
         home: AiRecommendationDashboardPage(
           routeStopCoordinator: coordinator,
+          routeRepository: overview.FakeRoutesRepository(),
+          managementRepository: overview.FakeManagementRepository(),
           now: () => DateTime(2026, 8, 28),
           routeStopPageBuilder: (session) {
             captured = session;
             return RouteBusStopRecommendationPage(
               session: session,
               coordinator: coordinator,
+              managementRepository: overview.FakeManagementRepository(),
               now: () => DateTime(2026, 8, 28),
               baseMapEnabled: false,
             );
@@ -283,7 +287,8 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(coordinator.screenCalls, 1);
+    expect(coordinator.screenCalls, 0);
+    await tester.ensureVisible(find.text('Route & Bus Stop Recommendation'));
     await tester.tap(find.text('Route & Bus Stop Recommendation'));
     await tester.pump();
     expect(captured, isNotNull);
