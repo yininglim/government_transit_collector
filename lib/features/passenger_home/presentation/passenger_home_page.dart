@@ -1,3 +1,6 @@
+import 'package:government_transit_collector/features/tracked_journeys/tracked_journey_repository.dart';
+import 'package:government_transit_collector/features/tracked_journeys/tracked_journey_widgets.dart';
+import 'package:government_transit_collector/features/realtime_vehicle/data/selected_journey_tracking.dart';
 import 'dart:async';
 import 'package:government_transit_collector/features/bus_feedback/presentation/passenger_reports_page.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/recent_journey_search.dart';
@@ -37,6 +40,8 @@ class PassengerHomePage extends StatefulWidget {
     this.savedJourneyRepository,
     this.feedbackRepository,
     this.reminderController,
+    this.trackedJourneyRepository,
+    this.activeJourneyTrackerBuilder,
     this.departurePageBuilder,
     this.livePageBuilder,
     this.dataCheckPageBuilder,
@@ -44,6 +49,8 @@ class PassengerHomePage extends StatefulWidget {
     super.key,
   });
 
+  final TrackedJourneyRepository? trackedJourneyRepository;
+  final Widget Function(SelectedJourneyTracking)? activeJourneyTrackerBuilder;
   final DateTime Function()? now;
   final AppProfile profile;
   final WidgetBuilder? departurePageBuilder;
@@ -63,23 +70,17 @@ class PassengerHomePage extends StatefulWidget {
 class _PassengerHomePageState extends State<PassengerHomePage>
     with WidgetsBindingObserver {
   Timer? _homeTimer;
-  final _mainNavigator = GlobalKey<NavigatorState>();
+  final _tabNavigators = List.generate(6, (_) => GlobalKey<NavigatorState>());
+  final _planKey = GlobalKey<DepartureRecommendationPageState>();
+  final Map<int, WidgetBuilder> _tabBuilders = {};
   int _activeTab = 0;
   final _homeRevision = ValueNotifier(0);
-  late final _tabObserver = _MainTabObserver((tab) {
-    if (_activeTab == tab) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) setState(() => _activeTab = tab);
-    });
-  });
 
   void _pushTab(int tab, WidgetBuilder builder) {
-    _mainNavigator.currentState!.push(
-      MaterialPageRoute<void>(
-        settings: RouteSettings(name: 'passenger-tab-$tab'),
-        builder: builder,
-      ),
-    );
+    setState(() {
+      _tabBuilders.putIfAbsent(tab, () => builder);
+      _activeTab = tab;
+    });
   }
 
   @override
@@ -110,6 +111,9 @@ class _PassengerHomePageState extends State<PassengerHomePage>
     super.dispose();
   }
 
+  late final _trackedJourneys =
+      widget.trackedJourneyRepository ??
+      SupabaseTrackedJourneyRepository(userId: widget.profile.userId);
   bool _signingOut = false;
   late final _reminders = widget.reminderController ?? sharedReminderController;
   AppProfile? _updatedProfile;
@@ -123,13 +127,18 @@ class _PassengerHomePageState extends State<PassengerHomePage>
       widget.savedJourneyRepository ?? SupabaseSavedJourneyRepository();
 
   void _openDeparture([SavedJourney? journey, RecentJourneySearch? recent]) {
+    if (journey != null || recent != null) {
+      _planKey.currentState?.selectJourney(journey: journey, recent: recent);
+    }
     _pushTab(
       1,
       (context) =>
           widget.departurePageBuilder?.call(context) ??
           DepartureRecommendationPage(
+            key: _planKey,
             showPageHeader: false,
             reminderController: _reminders,
+            trackedJourneyRepository: _trackedJourneys,
             stopRepository: SupabaseDepartureStopRepository(),
             tripRepository: SupabaseDirectTripRepository(),
             transferRepository: SupabaseTransferJourneyRepository(),
@@ -148,6 +157,7 @@ class _PassengerHomePageState extends State<PassengerHomePage>
     final journey = await Navigator.of(context).push<Object>(
       MaterialPageRoute(
         builder: (_) => PassengerProfilePage(
+          trackedJourneyRepository: _trackedJourneys,
           profile: _updatedProfile ?? widget.profile,
           authRepository: widget.repository,
           savedRepository: _savedRepository,
@@ -222,7 +232,7 @@ class _PassengerHomePageState extends State<PassengerHomePage>
   Widget _navigation(int active) => Row(
     children: [
       _navItem('Home', Icons.home_outlined, () {
-        _mainNavigator.currentState!.popUntil((route) => route.isFirst);
+        setState(() => _activeTab = 0);
       }, selected: active == 0),
       _navItem(
         'Plan',
@@ -247,6 +257,27 @@ class _PassengerHomePageState extends State<PassengerHomePage>
         Icons.feedback_outlined,
         active == 4 ? () {} : _openReports,
         selected: active == 4,
+      ),
+      _navItem(
+        'My Trips',
+        Icons.task_alt,
+        () => _pushTab(
+          5,
+          (_) => Scaffold(
+            body: ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                Text('My Trips', style: Theme.of(context).textTheme.titleLarge),
+                MyTripsSection(
+                  repository: _trackedJourneys,
+                  feedbackRepository: widget.feedbackRepository,
+                  onPlanAgain: (recent) => _openDeparture(null, recent),
+                ),
+              ],
+            ),
+          ),
+        ),
+        selected: active == 5,
       ),
     ],
   );
@@ -282,7 +313,11 @@ class _PassengerHomePageState extends State<PassengerHomePage>
             Text(
               label,
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.labelMedium,
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                color: selected
+                    ? Theme.of(context).colorScheme.primary
+                    : Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
             ),
           ],
         ),
@@ -354,21 +389,31 @@ class _PassengerHomePageState extends State<PassengerHomePage>
               ),
             ],
           ),
-          child: NavigatorPopHandler<Object?>(
-            onPopWithResult: (_) => _mainNavigator.currentState!.pop(),
-            child: Navigator(
-              key: _mainNavigator,
-              observers: [_tabObserver],
-              onGenerateInitialRoutes: (_, _) => [
-                MaterialPageRoute<void>(
-                  settings: const RouteSettings(name: 'passenger-tab-0'),
-                  builder: (_) => ValueListenableBuilder(
-                    valueListenable: _homeRevision,
-                    builder: (_, _, _) => _homeBody(),
-                  ),
+          child: IndexedStack(
+            index: _activeTab,
+            children: List.generate(6, (tab) {
+              if (tab != 0 && !_tabBuilders.containsKey(tab)) {
+                return const SizedBox.shrink();
+              }
+              return NavigatorPopHandler<Object?>(
+                enabled: _activeTab == tab,
+                onPopWithResult: (_) => _tabNavigators[tab].currentState!.pop(),
+                child: Navigator(
+                  key: _tabNavigators[tab],
+                  onGenerateInitialRoutes: (_, _) => [
+                    MaterialPageRoute<void>(
+                      settings: RouteSettings(name: 'passenger-tab-$tab'),
+                      builder: tab == 0
+                          ? (_) => ValueListenableBuilder(
+                              valueListenable: _homeRevision,
+                              builder: (_, _, _) => _homeBody(),
+                            )
+                          : _tabBuilders[tab]!,
+                    ),
+                  ],
                 ),
-              ],
-            ),
+              );
+            }),
           ),
         ),
       ),
@@ -401,6 +446,12 @@ class _PassengerHomePageState extends State<PassengerHomePage>
               label: const Text('Plan a Journey'),
             ),
             const SizedBox(height: 32),
+            ActiveJourneySection(
+              key: ValueKey('active-journey-${widget.profile.userId}'),
+              repository: _trackedJourneys,
+              now: widget.now,
+              trackerBuilder: widget.activeJourneyTrackerBuilder,
+            ),
             if (_reminders != null)
               UpcomingJourneys(
                 controller: _reminders,
@@ -413,54 +464,6 @@ class _PassengerHomePageState extends State<PassengerHomePage>
       ),
     ),
   );
-}
-
-/// Child routes inherit the nearest main-tab route still on the stack.
-class _MainTabObserver extends NavigatorObserver {
-  _MainTabObserver(this.onChanged);
-  final ValueChanged<int> onChanged;
-  final List<Route<dynamic>> _routes = [];
-
-  void _notify() {
-    for (final route in _routes.reversed) {
-      final name = route.settings.name;
-      if (name != null && name.startsWith('passenger-tab-')) {
-        onChanged(int.parse(name.substring('passenger-tab-'.length)));
-        return;
-      }
-    }
-  }
-
-  @override
-  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
-    _routes.add(route);
-    _notify();
-  }
-
-  @override
-  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
-    _routes.remove(route);
-    _notify();
-  }
-
-  @override
-  void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) {
-    _routes.remove(route);
-    _notify();
-  }
-
-  @override
-  void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) {
-    final index = _routes.indexOf(oldRoute!);
-    if (index >= 0) {
-      if (newRoute == null) {
-        _routes.removeAt(index);
-      } else {
-        _routes[index] = newRoute;
-      }
-    }
-    _notify();
-  }
 }
 
 /// The header occupies layout space, which is returned to the page as it

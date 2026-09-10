@@ -1,3 +1,5 @@
+import 'package:government_transit_collector/features/tracked_journeys/tracked_journey_repository.dart';
+import 'package:government_transit_collector/features/tracked_journeys/tracked_journey_widgets.dart';
 import 'package:government_transit_collector/features/bus_feedback/data/bus_feedback_repository.dart';
 import 'package:flutter/material.dart';
 import 'package:government_transit_collector/features/authentication/data/auth_repository.dart';
@@ -17,7 +19,9 @@ class PassengerProfilePage extends StatefulWidget {
     required this.preferencesRepository,
     required this.onProfileUpdated,
     this.feedbackRepository,
+    this.trackedJourneyRepository,
   });
+  final TrackedJourneyRepository? trackedJourneyRepository;
   final AppProfile profile;
   final BusFeedbackRepository? feedbackRepository;
   final AuthRepository authRepository;
@@ -30,6 +34,9 @@ class PassengerProfilePage extends StatefulWidget {
 }
 
 class _PassengerProfilePageState extends State<PassengerProfilePage> {
+  late final _trackedJourneys =
+      widget.trackedJourneyRepository ??
+      SupabaseTrackedJourneyRepository(userId: widget.profile.userId);
   late final TextEditingController _name;
   late String _displayName;
   List<SavedJourney>? _saved;
@@ -352,6 +359,14 @@ class _PassengerProfilePageState extends State<PassengerProfilePage> {
                   ],
                 ),
                 if (_preferenceError != null) Text(_preferenceError!),
+              ]),
+              _section('My Trips', Icons.task_alt, [
+                MyTripsSection(
+                  key: ValueKey('my-trips-${widget.profile.userId}'),
+                  repository: _trackedJourneys,
+                  feedbackRepository: widget.feedbackRepository,
+                  onPlanAgain: (journey) => Navigator.pop(context, journey),
+                ),
               ]),
               _section('Saved Journeys', Icons.bookmark_outline, [
                 if (_savedError != null) ...[
