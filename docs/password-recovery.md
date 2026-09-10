@@ -43,12 +43,24 @@ and pop back to their caller (Sign In or Account Security). Errors stay on the
 form; the existing cooldown and server rate limits remain in effect.
 
 The browser removes the recovery fragment immediately and makes no Auth request
-until the user submits a valid matching new password. It sends the one-time
-token hash to Supabase Auth `POST /auth/v1/verify` with `type: recovery`, then uses
-the returned access token for `PUT /auth/v1/user`. Supabase validates the token,
+until the user chooses **Continue to password reset**. It sends the one-time
+token hash to Supabase Auth `POST /auth/v1/verify` with `type: recovery`, then
+checks the verified user's `identities` for an `email` identity before showing
+password fields. Google-only users receive Google Sign-In guidance and their
+recovery session is released without updating a password. Email-only and linked
+Email+Google users can submit a valid matching password using the returned
+access token for `PUT /auth/v1/user`. Supabase validates the token,
 expiry, password rules, and account ownership. Email/password equality is checked
 against the verified session's email before the update. The page never performs
 database/profile writes and does not change Google passwords.
+
+The signed-out request form stays neutral for all addresses, including unknown
+and Google-only addresses: it cannot safely discover account providers from an
+email address. Provider-specific rejection is limited to an authenticated user's
+own email or a verified recovery link. The app also checks identity eligibility
+before completing any app-based recovery. No identity is linked or created by
+this flow. Publish the updated HTML to the existing Pages site for the web guard
+to take effect; changing this workspace alone does not update the hosted page.
 
 Recovery credentials stay in memory only: no cookies, local/session storage,
 logs, or displayed tokens. The page has no external scripts or assets and sends

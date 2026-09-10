@@ -280,6 +280,7 @@ void main() {
   test(
     'PKCE recovery routes separately, updates password then signs out',
     () async {
+      backend.emailIdentity = true;
       await repository.sendPasswordReset('owner@example.test');
       await repository.handleAuthCallback(
         Uri.parse('$redirect?code=test-code'),
@@ -332,6 +333,7 @@ void main() {
   });
 
   test('server rejects expired recovery session with friendly error', () async {
+    backend.emailIdentity = true;
     await repository.sendPasswordReset('owner@example.test');
     await repository.handleAuthCallback(Uri.parse('$redirect?code=test-code'));
     backend.updateStatus = 401;

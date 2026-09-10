@@ -242,10 +242,24 @@ class AuthRepository extends ChangeNotifier {
       'https://looyien.github.io/government-transit-collector-site/reset-password.html';
 
   DateTime? _resetEmailRetryAt;
+  static const googleOnlyResetMessage =
+      'This account uses Google Sign-In. Please continue with Google.';
+  static const passwordResetUnavailableMessage =
+      'Password reset is not available for this sign-in method.';
+  static const passwordResetSentMessage =
+      'If eligible, a password reset link has been sent.';
 
   Future<void> sendPasswordReset(String email) async {
     final validation = AuthValidation.email(email);
     if (validation != null) throw AuthFlowException(validation);
+    // Only identify a provider for the authenticated user's own email. Never
+    // look up identities for an arbitrary address on the signed-out form.
+    if (_client.auth.currentUser?.email?.toLowerCase() ==
+            email.trim().toLowerCase() &&
+        hasGoogleIdentity &&
+        !supportsEmailPassword) {
+      throw const AuthFlowException(googleOnlyResetMessage);
+    }
     final redirect = passwordRecoveryRedirectUrl;
     // Keep the resend limit when the form closes or is reopened.
     final now = DateTime.now();
@@ -289,6 +303,13 @@ class AuthRepository extends ChangeNotifier {
   Future<void> resetPassword(String password) async {
     if (!hasValidRecoverySession) {
       throw const AuthFlowException(invalidRecoveryMessage);
+    }
+    if (!supportsEmailPassword) {
+      throw AuthFlowException(
+        hasGoogleIdentity
+            ? googleOnlyResetMessage
+            : passwordResetUnavailableMessage,
+      );
     }
     final validation = AuthValidation.newPassword(
       password,

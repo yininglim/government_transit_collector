@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:government_transit_collector/features/authentication/data/auth_repository.dart';
 import 'package:government_transit_collector/features/authentication/presentation/auth_validation.dart';
 
@@ -18,6 +19,10 @@ class _RegisterPageState extends State<RegisterPage> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
+  final _emailFocusNode = FocusNode();
+  static final _pendingInput = TextInputFormatter.withFunction(
+    (oldValue, newValue) => oldValue,
+  );
   bool _obscurePassword = true;
   bool _obscureConfirmation = true;
   bool _loading = false;
@@ -29,21 +34,35 @@ class _RegisterPageState extends State<RegisterPage> {
     _emailController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
+    _emailFocusNode.dispose();
     super.dispose();
   }
 
   Future<void> _register() async {
-    FocusManager.instance.primaryFocus?.unfocus();
-    if (_loading || !_formKey.currentState!.validate()) return;
+    if (_loading) return;
+    if (!_formKey.currentState!.validate()) {
+      _cancelRegistrationAutofill();
+      return;
+    }
 
     setState(() => _loading = true);
     try {
+      // A previous failure cancelled the native context. Reattach the populated
+      // group even when retrying unchanged credentials, and keep it attached
+      // until the server outcome is known. Disabling fields closes this client.
+      _emailFocusNode.requestFocus();
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return;
       final result = await widget.repository.register(
         fullName: _fullNameController.text,
         email: _emailController.text.trim(),
         password: _passwordController.text,
       );
       if (!mounted) return;
+      // Only a successful signup may offer to save these credentials. Commit
+      // before clearing the passwords or replacing the registration form.
+      TextInput.finishAutofillContext(shouldSave: true);
+      FocusManager.instance.primaryFocus?.unfocus();
       if (result.requiresEmailConfirmation) {
         setState(() {
           _verificationEmail = _emailController.text.trim();
@@ -56,12 +75,14 @@ class _RegisterPageState extends State<RegisterPage> {
       }
     } on AuthFlowException catch (error) {
       if (!mounted) return;
+      _cancelRegistrationAutofill();
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(error.message)));
       setState(() => _loading = false);
     } on Object {
       if (!mounted) return;
+      _cancelRegistrationAutofill();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Unable to create the account. Please try again.'),
@@ -69,6 +90,12 @@ class _RegisterPageState extends State<RegisterPage> {
       );
       setState(() => _loading = false);
     }
+  }
+
+  void _cancelRegistrationAutofill() {
+    // Cancel before focus loss can make Android infer that the form completed.
+    TextInput.finishAutofillContext(shouldSave: false);
+    FocusManager.instance.primaryFocus?.unfocus();
   }
 
   @override
@@ -83,15 +110,19 @@ class _RegisterPageState extends State<RegisterPage> {
       appBar: AppBar(title: const Text('Create account')),
       body: SafeArea(
         child: GestureDetector(
-          onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
+          onTap: _loading
+              ? null
+              : () => FocusManager.instance.primaryFocus?.unfocus(),
           behavior: HitTestBehavior.translucent,
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(24),
             keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            physics: _loading ? const NeverScrollableScrollPhysics() : null,
             child: Center(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 440),
                 child: AutofillGroup(
+                  onDisposeAction: AutofillContextAction.cancel,
                   child: Form(
                     key: _formKey,
                     child: Column(
@@ -109,7 +140,7 @@ class _RegisterPageState extends State<RegisterPage> {
                         const SizedBox(height: 24),
                         TextFormField(
                           controller: _fullNameController,
-                          enabled: !_loading,
+                          inputFormatters: [if (_loading) _pendingInput],
                           textCapitalization: TextCapitalization.words,
                           textInputAction: TextInputAction.next,
                           autofillHints: const [AutofillHints.name],
@@ -124,7 +155,8 @@ class _RegisterPageState extends State<RegisterPage> {
                         const SizedBox(height: 16),
                         TextFormField(
                           controller: _emailController,
-                          enabled: !_loading,
+                          focusNode: _emailFocusNode,
+                          inputFormatters: [if (_loading) _pendingInput],
                           keyboardType: TextInputType.emailAddress,
                           textInputAction: TextInputAction.next,
                           autofillHints: const [AutofillHints.email],
@@ -146,7 +178,7 @@ class _RegisterPageState extends State<RegisterPage> {
                               fontSize: 12,
                             ),
                           ),
-                          enabled: !_loading,
+                          inputFormatters: [if (_loading) _pendingInput],
                           obscureText: _obscurePassword,
                           textInputAction: TextInputAction.next,
                           autofillHints: const [AutofillHints.newPassword],
@@ -186,7 +218,7 @@ class _RegisterPageState extends State<RegisterPage> {
                               fontSize: 12,
                             ),
                           ),
-                          enabled: !_loading,
+                          inputFormatters: [if (_loading) _pendingInput],
                           obscureText: _obscureConfirmation,
                           textInputAction: TextInputAction.done,
                           autofillHints: const [AutofillHints.newPassword],
@@ -216,6 +248,8 @@ class _RegisterPageState extends State<RegisterPage> {
                             _passwordController.text,
                           ),
                           onFieldSubmitted: (_) => _register(),
+                          // Do not detach autofill on IME Done before signup.
+                          onEditingComplete: () {},
                         ),
                         const SizedBox(height: 24),
                         FilledButton(

@@ -26,8 +26,8 @@ void main() {
       );
       await tap(tester, find.text('Forgot Password?'));
       await tester.enterText(find.byType(TextFormField), ' user@example.com ');
-      await tester.tap(find.text('Send Reset Link'));
-      await tester.tap(find.text('Send Reset Link'));
+      await tester.tap(find.text('Send Password Reset Email'));
+      await tester.tap(find.text('Send Password Reset Email'));
       await tester.pumpAndSettle();
       expect(repository.resetEmailCalls, 1);
       pending.complete();
@@ -36,7 +36,7 @@ void main() {
       expect(find.byType(LoginPage), findsOneWidget);
       expect(
         find.text(
-          'If an account exists for this email, a password reset link has been sent.',
+          'If eligible, a password reset link has been sent.',
         ),
         findsOneWidget,
       );
