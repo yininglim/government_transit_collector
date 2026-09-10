@@ -39,6 +39,29 @@ void main() {
     },
   );
 
+  test('screening keeps four-worker concurrency and route order', () async {
+    final evidenceRepository = ConcurrentEvidence();
+    final coordinator = BusFrequencyDashboardCoordinator(
+      routeRepository: FakeRoutes(['E', 'D', 'C', 'B', 'A']),
+      evidenceRepository: evidenceRepository,
+      recommendationRepository: FakeRecommendations(),
+    );
+
+    final result = await coordinator.screenRoutes(
+      startUtc: start,
+      endExclusiveUtc: end,
+    );
+
+    expect(evidenceRepository.maximumActive, 4);
+    expect(result.candidates.map((candidate) => candidate.route.routeId), [
+      'A',
+      'B',
+      'C',
+      'D',
+      'E',
+    ]);
+  });
+
   test(
     'coordinator sends all retained evidence in one call and retry uses it',
     () async {
@@ -71,63 +94,72 @@ void main() {
     },
   );
 
-  test('same-period preparation reuses in-progress and completed work', () async {
-    final screenGate = Completer<void>();
-    final coordinator = FakeCoordinator(
-      candidates(1),
-      screenGate: screenGate,
-    );
-    final session = BusFrequencyDashboardSession();
-    final first = coordinator.prepareSession(
-      session: session,
-      startUtc: start,
-      endExclusiveUtc: end,
-    );
-    final second = coordinator.prepareSession(
-      session: session,
-      startUtc: start,
-      endExclusiveUtc: end,
-    );
-    expect(second, same(first));
-    expect(coordinator.screenCalls, 1);
-    screenGate.complete();
-    await first;
-    await coordinator.prepareSession(
-      session: session,
-      startUtc: start,
-      endExclusiveUtc: end,
-    );
-    expect(coordinator.screenCalls, 1);
-    expect(session.screeningComplete, isTrue);
-    expect(session.candidates, hasLength(1));
-  });
+  test(
+    'same-period preparation reuses in-progress and completed work',
+    () async {
+      final screenGate = Completer<void>();
+      final coordinator = FakeCoordinator(
+        candidates(1),
+        screenGate: screenGate,
+      );
+      final session = BusFrequencyDashboardSession();
+      final first = coordinator.prepareSession(
+        session: session,
+        startUtc: start,
+        endExclusiveUtc: end,
+      );
+      final second = coordinator.prepareSession(
+        session: session,
+        startUtc: start,
+        endExclusiveUtc: end,
+      );
+      expect(second, same(first));
+      expect(coordinator.screenCalls, 1);
+      screenGate.complete();
+      await first;
+      await coordinator.prepareSession(
+        session: session,
+        startUtc: start,
+        endExclusiveUtc: end,
+      );
+      expect(coordinator.screenCalls, 1);
+      expect(session.screeningComplete, isTrue);
+      expect(session.candidates, hasLength(1));
+    },
+  );
 
-  test('stale preparation completion cannot overwrite a newer period', () async {
-    final oldGate = Completer<void>();
-    final oldCoordinator = FakeCoordinator(
-      candidates(1),
-      screenGate: oldGate,
-    );
-    final newCoordinator = FakeCoordinator(candidates(2));
-    final session = BusFrequencyDashboardSession();
-    final oldWork = oldCoordinator.prepareSession(
-      session: session,
-      startUtc: start,
-      endExclusiveUtc: end,
-    );
-    final newStart = start.add(const Duration(days: 1));
-    final newEnd = end.add(const Duration(days: 1));
-    await newCoordinator.prepareSession(
-      session: session,
-      startUtc: newStart,
-      endExclusiveUtc: newEnd,
-    );
-    oldGate.complete();
-    await oldWork;
-    expect(session.matchesPeriod(newStart, newEnd), isTrue);
-    expect(session.candidates.map((item) => item.route.routeId), ['R1', 'R2']);
-    expect(session.routesAnalysed, 2);
-  });
+  test(
+    'stale preparation completion cannot overwrite a newer period',
+    () async {
+      final oldGate = Completer<void>();
+      final oldCoordinator = FakeCoordinator(
+        candidates(1),
+        screenGate: oldGate,
+      );
+      final newCoordinator = FakeCoordinator(candidates(2));
+      final session = BusFrequencyDashboardSession();
+      final oldWork = oldCoordinator.prepareSession(
+        session: session,
+        startUtc: start,
+        endExclusiveUtc: end,
+      );
+      final newStart = start.add(const Duration(days: 1));
+      final newEnd = end.add(const Duration(days: 1));
+      await newCoordinator.prepareSession(
+        session: session,
+        startUtc: newStart,
+        endExclusiveUtc: newEnd,
+      );
+      oldGate.complete();
+      await oldWork;
+      expect(session.matchesPeriod(newStart, newEnd), isTrue);
+      expect(session.candidates.map((item) => item.route.routeId), [
+        'R1',
+        'R2',
+      ]);
+      expect(session.routesAnalysed, 2);
+    },
+  );
 
   testWidgets('entry screens evidence and makes no recommendation request', (
     tester,
@@ -314,10 +346,7 @@ void main() {
   ) async {
     final screenGate = Completer<void>();
     final session = BusFrequencyDashboardSession();
-    final coordinator = FakeCoordinator(
-      candidates(1),
-      screenGate: screenGate,
-    );
+    final coordinator = FakeCoordinator(candidates(1), screenGate: screenGate);
     await pumpPage(tester, coordinator, session: session);
     expect(coordinator.screenCalls, 1);
     await tester.pumpWidget(const MaterialApp(home: SizedBox()));
@@ -723,6 +752,24 @@ class FakeEvidence implements BusFrequencyEvidenceRepository {
   }) async {
     if (failures.contains(routeId)) throw StateError('failure');
     return values[routeId]!;
+  }
+}
+
+class ConcurrentEvidence implements BusFrequencyEvidenceRepository {
+  int active = 0;
+  int maximumActive = 0;
+
+  @override
+  Future<BusFrequencyEvidence> loadEvidence({
+    required String routeId,
+    required DateTime startUtc,
+    required DateTime endExclusiveUtc,
+  }) async {
+    active++;
+    if (active > maximumActive) maximumActive = active;
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    active--;
+    return evidence(routeId);
   }
 }
 

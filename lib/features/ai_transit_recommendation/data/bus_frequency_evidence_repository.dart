@@ -4,6 +4,7 @@ import 'package:government_transit_collector/features/ai_transit_recommendation/
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/operational_evidence_repository.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/scheduled_service_evidence_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/scheduled_service_evidence_repository.dart';
+import 'package:government_transit_collector/features/route_performance/data/route_performance_repository.dart';
 
 abstract interface class BusFrequencyEvidenceRepository {
   Future<BusFrequencyEvidence> loadEvidence({
@@ -19,11 +20,18 @@ class DefaultBusFrequencyEvidenceRepository
     ScheduledServiceEvidenceRepository? scheduledServiceRepository,
     OperationalEvidenceRepository? operationalRepository,
     AdminFeedbackRepository? feedbackRepository,
+    RoutePerformanceRepository? routeRepository,
   }) : _scheduledServiceRepository =
            scheduledServiceRepository ??
-           DefaultScheduledServiceEvidenceRepository(useLeanRouteLoader: true),
+           DefaultScheduledServiceEvidenceRepository(
+             useLeanRouteLoader: true,
+             routeRepository: routeRepository,
+           ),
        _operationalRepository =
-           operationalRepository ?? DefaultOperationalEvidenceRepository(),
+           operationalRepository ??
+           DefaultOperationalEvidenceRepository(
+             routePerformanceRepository: routeRepository,
+           ),
        _feedbackRepository =
            feedbackRepository ?? DefaultAdminFeedbackRepository();
 

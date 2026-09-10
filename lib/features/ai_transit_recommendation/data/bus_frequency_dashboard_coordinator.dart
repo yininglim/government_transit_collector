@@ -99,17 +99,25 @@ class BusFrequencyDashboardCoordinator {
     RoutePerformanceRepository? routeRepository,
     BusFrequencyEvidenceRepository? evidenceRepository,
     BusFrequencyRecommendationRepository? recommendationRepository,
-  }) : _routeRepository =
-           routeRepository ?? DefaultRoutePerformanceRepository(),
-       _evidenceRepository =
-           evidenceRepository ?? DefaultBusFrequencyEvidenceRepository(),
-       _recommendationRepository =
-           recommendationRepository ??
-           DefaultBusFrequencyRecommendationRepository();
+  }) {
+    _recommendationRepository =
+        recommendationRepository ??
+        DefaultBusFrequencyRecommendationRepository();
+    final sharedRouteRepository = _SharedRoutePerformanceRepository(
+      routeRepository,
+    );
+    _routeRepository = sharedRouteRepository;
+    _evidenceRepository = evidenceRepository;
+  }
 
-  final RoutePerformanceRepository _routeRepository;
-  final BusFrequencyEvidenceRepository _evidenceRepository;
-  final BusFrequencyRecommendationRepository _recommendationRepository;
+  late final RoutePerformanceRepository _routeRepository;
+  BusFrequencyEvidenceRepository? _evidenceRepository;
+  late final BusFrequencyRecommendationRepository _recommendationRepository;
+
+  BusFrequencyEvidenceRepository get _resolvedEvidenceRepository =>
+      _evidenceRepository ??= DefaultBusFrequencyEvidenceRepository(
+        routeRepository: _routeRepository,
+      );
 
   Future<List<BusFrequencyDashboardCandidate>> screenCandidates({
     required DateTime startUtc,
@@ -128,12 +136,13 @@ class BusFrequencyDashboardCoordinator {
   }) async {
     final routes = await _routeRepository.loadRoutes();
     final ordered = [...routes]..sort(_compareRoutes);
-    final outcomes = List<
-      ({
-        BusFrequencyDashboardCandidate? candidate,
-        BusFrequencyDashboardExcludedRoute? excluded,
-      })?
-    >.filled(ordered.length, null);
+    final outcomes =
+        List<
+          ({
+            BusFrequencyDashboardCandidate? candidate,
+            BusFrequencyDashboardExcludedRoute? excluded,
+          })?
+        >.filled(ordered.length, null);
     var nextIndex = 0;
     Future<void> worker() async {
       while (true) {
@@ -141,7 +150,7 @@ class BusFrequencyDashboardCoordinator {
         if (index >= ordered.length) return;
         final route = ordered[index];
         try {
-          final evidence = await _evidenceRepository.loadEvidence(
+          final evidence = await _resolvedEvidenceRepository.loadEvidence(
             routeId: route.routeId,
             startUtc: startUtc,
             endExclusiveUtc: endExclusiveUtc,
@@ -169,13 +178,15 @@ class BusFrequencyDashboardCoordinator {
             candidate: null,
             excluded: BusFrequencyDashboardExcludedRoute(
               route: route,
-              reason: BusFrequencyDashboardExclusionReason.evidenceLoadingFailure,
+              reason:
+                  BusFrequencyDashboardExclusionReason.evidenceLoadingFailure,
               evidence: null,
             ),
           );
         }
       }
     }
+
     final workerCount = ordered.length < 4 ? ordered.length : 4;
     await Future.wait([for (var i = 0; i < workerCount; i++) worker()]);
     final candidates = <BusFrequencyDashboardCandidate>[];
@@ -253,6 +264,42 @@ class BusFrequencyDashboardCoordinator {
     required DateTime endExclusiveUtc,
   }) => _recommendationRepository.generate(
     evidence: candidates.map((candidate) => candidate.evidence).toList(),
+    startUtc: startUtc,
+    endExclusiveUtc: endExclusiveUtc,
+  );
+}
+
+class _SharedRoutePerformanceRepository implements RoutePerformanceRepository {
+  _SharedRoutePerformanceRepository(this._delegate);
+
+  RoutePerformanceRepository? _delegate;
+  Future<List<RoutePerformanceRoute>>? _routesFuture;
+
+  RoutePerformanceRepository get _resolvedDelegate =>
+      _delegate ??= DefaultRoutePerformanceRepository();
+
+  @override
+  Future<List<RoutePerformanceRoute>> loadRoutes() {
+    final existing = _routesFuture;
+    if (existing != null) return existing;
+    final future = _resolvedDelegate.loadRoutes();
+    _routesFuture = future;
+    future.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {
+        if (identical(_routesFuture, future)) _routesFuture = null;
+      },
+    );
+    return future;
+  }
+
+  @override
+  Future<RoutePerformanceData> loadRoutePerformance({
+    required String routeId,
+    required DateTime startUtc,
+    required DateTime endExclusiveUtc,
+  }) => _resolvedDelegate.loadRoutePerformance(
+    routeId: routeId,
     startUtc: startUtc,
     endExclusiveUtc: endExclusiveUtc,
   );
