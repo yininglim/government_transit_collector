@@ -264,6 +264,11 @@ class _RecommendationManagementPageState
                       : recommendationPriorityLabel(record.priorityLevel!),
                 ),
               ),
+              Chip(
+                label: Text(
+                  'Follow-up: ${record.followUp == null ? 'Not Created' : recommendationFollowUpStatusLabel(record.followUp!.status)}',
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 8),
@@ -378,8 +383,17 @@ class _RecommendationManagementDetailPageState
   late SavedRecommendation _recommendation;
   late RecommendationReviewStatus _status;
   late final TextEditingController _noteController;
+  late final TextEditingController _followUpActionController;
+  late final TextEditingController _followUpNoteController;
+  DateTime? _followUpDueDate;
+  RecommendationFollowUpStatus _followUpStatus =
+      RecommendationFollowUpStatus.pending;
+  String? _followUpActionError;
+  String? _followUpDueDateError;
   bool _saving = false;
   bool _deleting = false;
+  bool _savingFollowUp = false;
+  bool _followUpChanged = false;
 
   @override
   void initState() {
@@ -387,19 +401,36 @@ class _RecommendationManagementDetailPageState
     _recommendation = widget.recommendation;
     _status = _recommendation.status;
     _noteController = TextEditingController(text: _recommendation.adminNote);
+    final followUp = _recommendation.followUp;
+    _followUpActionController = TextEditingController(
+      text: followUp?.actionText,
+    );
+    _followUpNoteController = TextEditingController(text: followUp?.note);
+    _followUpDueDate = followUp?.dueDate;
+    _followUpStatus = followUp?.status ?? RecommendationFollowUpStatus.pending;
   }
 
   @override
   void dispose() {
     _noteController.dispose();
+    _followUpActionController.dispose();
+    _followUpNoteController.dispose();
     super.dispose();
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: readableAppBar(context, title: const Text('Saved Recommendation')),
-    body: SafeArea(
-      child: ListView(
+  Widget build(BuildContext context) => WillPopScope(
+    onWillPop: () async {
+      _closeDetails();
+      return false;
+    },
+    child: Scaffold(
+      appBar: readableAppBar(
+        context,
+        title: const Text('Saved Recommendation'),
+      ),
+      body: SafeArea(
+        child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           _section('Recommendation Details', [
@@ -469,40 +500,64 @@ class _RecommendationManagementDetailPageState
                 children: [
                   Text('Administrative Review', style: Theme.of(context).textTheme.titleMedium),
                   const SizedBox(height: 12),
-                  DropdownButtonFormField<RecommendationReviewStatus>(
-                    value: _status,
-                    decoration: const InputDecoration(labelText: 'Status'),
-                    items: [
-                      for (final status in RecommendationReviewStatus.values)
-                        DropdownMenuItem(
-                          value: status,
-                          child: Text(recommendationStatusLabel(status)),
-                        ),
-                    ],
-                    onChanged: _saving || _deleting
-                        ? null
-                        : (value) {
-                            if (value != null) setState(() => _status = value);
-                          },
-                  ),
+                  if (_recommendation.status ==
+                      RecommendationReviewStatus.pending)
+                    DropdownButtonFormField<RecommendationReviewStatus>(
+                      value: _status,
+                      decoration: const InputDecoration(labelText: 'Status'),
+                      items: [
+                        for (final status in RecommendationReviewStatus.values)
+                          DropdownMenuItem(
+                            value: status,
+                            child: Text(recommendationStatusLabel(status)),
+                          ),
+                      ],
+                      onChanged: _saving || _deleting || _savingFollowUp
+                          ? null
+                          : (value) {
+                              if (value != null) {
+                                setState(() => _status = value);
+                              }
+                            },
+                    )
+                  else
+                    InputDecorator(
+                      decoration: const InputDecoration(labelText: 'Status'),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.lock_outline, size: 18),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              '${recommendationStatusLabel(_recommendation.status)} (Final)',
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   const SizedBox(height: 12),
                   TextField(
                     key: const Key('admin-note'),
                     controller: _noteController,
                     minLines: 3,
                     maxLines: 6,
+                    enabled: !_saving && !_deleting && !_savingFollowUp,
                     decoration: const InputDecoration(labelText: 'Admin Note'),
                   ),
                   const SizedBox(height: 16),
                   FilledButton(
                     key: const Key('save-management-changes'),
-                    onPressed: _saving || _deleting ? null : _saveChanges,
+                    onPressed: _saving || _deleting || _savingFollowUp
+                        ? null
+                        : _saveChanges,
                     child: Text(_saving ? 'Saving...' : 'Save Changes'),
                   ),
                   const SizedBox(height: 8),
                   OutlinedButton.icon(
                     key: const Key('delete-saved-recommendation'),
-                    onPressed: _saving || _deleting ? null : _confirmDelete,
+                    onPressed: _saving || _deleting || _savingFollowUp
+                        ? null
+                        : _confirmDelete,
                     icon: const Icon(Icons.delete_outline),
                     label: Text(_deleting ? 'Deleting...' : 'Delete Recommendation'),
                   ),
@@ -510,12 +565,238 @@ class _RecommendationManagementDetailPageState
               ),
             ),
           ),
+          const SizedBox(height: 12),
+          _followUpSection(),
         ],
       ),
     ),
+    ),
   );
 
+  void _closeDetails() => Navigator.of(context).pop(
+    _followUpChanged
+        ? _DetailOutcome(recommendation: _recommendation)
+        : null,
+  );
+
+  Widget _followUpSection() {
+    final followUp = _recommendation.followUp;
+    if (followUp == null &&
+        _recommendation.status == RecommendationReviewStatus.rejected) {
+      return const SizedBox.shrink();
+    }
+    if (followUp == null &&
+        _recommendation.status == RecommendationReviewStatus.pending) {
+      return _section('Follow-up Action', [
+        const Text(
+          'A follow-up action can be created after this recommendation is Accepted.',
+        ),
+      ]);
+    }
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              followUp == null ? 'Create Follow-up Action' : 'Follow-up Action',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            if (followUp != null &&
+                _recommendation.status != RecommendationReviewStatus.accepted) ...[
+              const SizedBox(height: 8),
+              const Text(
+                'This follow-up is retained for history because the recommendation is no longer Accepted.',
+              ),
+            ],
+            const SizedBox(height: 12),
+            TextField(
+              key: const Key('follow-up-action'),
+              controller: _followUpActionController,
+              minLines: 2,
+              maxLines: 4,
+              enabled: !_savingFollowUp && !_saving && !_deleting,
+              decoration: InputDecoration(
+                labelText: 'Action / Task',
+                errorText: _followUpActionError,
+              ),
+            ),
+            const SizedBox(height: 12),
+            InkWell(
+              key: const Key('follow-up-due-date'),
+              onTap: _savingFollowUp || _saving || _deleting
+                  ? null
+                  : _selectFollowUpDueDate,
+              child: InputDecorator(
+                decoration: InputDecoration(
+                  labelText: 'Due Date',
+                  errorText: _followUpDueDateError,
+                  suffixIcon: const Icon(Icons.calendar_today_outlined),
+                ),
+                child: Text(
+                  _followUpDueDate == null
+                      ? 'Select a date'
+                      : _dateOnlyLabel(_followUpDueDate!),
+                ),
+              ),
+            ),
+            if (followUp != null) ...[
+              const SizedBox(height: 12),
+              DropdownButtonFormField<RecommendationFollowUpStatus>(
+                key: const Key('follow-up-status'),
+                value: _followUpStatus,
+                decoration: const InputDecoration(
+                  labelText: 'Follow-up Status',
+                ),
+                items: [
+                  for (final status in RecommendationFollowUpStatus.values)
+                    DropdownMenuItem(
+                      value: status,
+                      child: Text(recommendationFollowUpStatusLabel(status)),
+                    ),
+                ],
+                onChanged: _savingFollowUp || _saving || _deleting
+                    ? null
+                    : (value) {
+                        if (value != null) {
+                          setState(() => _followUpStatus = value);
+                        }
+                      },
+              ),
+            ],
+            const SizedBox(height: 12),
+            TextField(
+              key: const Key('follow-up-note'),
+              controller: _followUpNoteController,
+              minLines: 3,
+              maxLines: 6,
+              enabled: !_savingFollowUp && !_saving && !_deleting,
+              decoration: const InputDecoration(labelText: 'Follow-up Note'),
+            ),
+            if (followUp?.updatedAt case final updatedAt?) ...[
+              const SizedBox(height: 12),
+              Text('Last Updated ${_dateTime(updatedAt)}'),
+            ],
+            const SizedBox(height: 16),
+            FilledButton(
+              key: const Key('save-follow-up'),
+              onPressed: _savingFollowUp || _saving || _deleting
+                  ? null
+                  : _saveFollowUp,
+              child: Text(
+                _savingFollowUp
+                    ? 'Saving...'
+                    : followUp == null
+                    ? 'Create Follow-up Action'
+                    : 'Save Follow-up Changes',
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _selectFollowUpDueDate() async {
+    final now = DateTime.now();
+    final current = _followUpDueDate;
+    final creating = _recommendation.followUp == null;
+    final initialDate = current ?? DateTime(now.year, now.month, now.day);
+    final date = await showDatePicker(
+      context: context,
+      initialDate: initialDate,
+      firstDate: creating
+          ? DateTime(now.year, now.month, now.day)
+          : DateTime(2000),
+      lastDate: DateTime(now.year + 20, 12, 31),
+    );
+    if (date == null || !mounted) return;
+    setState(() {
+      _followUpDueDate = date;
+      _followUpDueDateError = null;
+    });
+  }
+
+  Future<void> _saveFollowUp() async {
+    final actionMissing = _followUpActionController.text.trim().isEmpty;
+    final dueDateMissing = _followUpDueDate == null;
+    final creating = _recommendation.followUp == null;
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final dueDatePast = creating &&
+        _followUpDueDate != null &&
+        DateTime(
+          _followUpDueDate!.year,
+          _followUpDueDate!.month,
+          _followUpDueDate!.day,
+        ).isBefore(today);
+    setState(() {
+      _followUpActionError = actionMissing ? 'Enter an action or task.' : null;
+      _followUpDueDateError = dueDateMissing
+          ? 'Select a due date.'
+          : dueDatePast
+          ? 'Due date cannot be earlier than today.'
+          : null;
+    });
+    if (actionMissing || dueDateMissing || dueDatePast) return;
+    setState(() => _savingFollowUp = true);
+    try {
+      final updated = creating
+          ? await widget.repository.createFollowUp(
+              recommendation: _recommendation,
+              actionText: _followUpActionController.text,
+              dueDate: _followUpDueDate!,
+              note: _followUpNoteController.text,
+            )
+          : await widget.repository.updateFollowUp(
+              recommendation: _recommendation,
+              actionText: _followUpActionController.text,
+              dueDate: _followUpDueDate!,
+              status: _followUpStatus,
+              note: _followUpNoteController.text,
+            );
+      if (!mounted) return;
+      setState(() {
+        _recommendation = updated;
+        _followUpStatus = updated.followUp!.status;
+        _followUpDueDate = updated.followUp!.dueDate;
+        _savingFollowUp = false;
+        _followUpChanged = true;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            creating ? 'Follow-up action created.' : 'Follow-up action updated.',
+          ),
+        ),
+      );
+    } on Object {
+      if (!mounted) return;
+      setState(() => _savingFollowUp = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            creating
+                ? 'Unable to create this follow-up action.'
+                : 'Unable to update this follow-up action.',
+          ),
+        ),
+      );
+    }
+  }
+
   Future<void> _saveChanges() async {
+    if (_recommendation.status == RecommendationReviewStatus.pending &&
+        _status != RecommendationReviewStatus.pending) {
+      final confirmed = await _confirmReviewDecision(_status);
+      if (confirmed != true || !mounted) {
+        if (mounted) {
+          setState(() => _status = _recommendation.status);
+        }
+        return;
+      }
+    }
     setState(() => _saving = true);
     try {
       final updated = await widget.repository.updateRecommendation(
@@ -541,13 +822,44 @@ class _RecommendationManagementDetailPageState
     }
   }
 
+  Future<bool?> _confirmReviewDecision(
+    RecommendationReviewStatus status,
+  ) => showDialog<bool>(
+    context: context,
+    builder: (context) {
+      final accepted = status == RecommendationReviewStatus.accepted;
+      return AlertDialog(
+        title: Text(
+          accepted ? 'Accept Recommendation?' : 'Reject Recommendation?',
+        ),
+        content: Text(
+          accepted
+              ? 'Once accepted, this recommendation decision cannot be changed. You may create a follow-up action after acceptance.'
+              : 'Once rejected, this recommendation decision cannot be changed and no follow-up action can be created.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text(accepted ? 'Accept' : 'Reject'),
+          ),
+        ],
+      );
+    },
+  );
+
   Future<void> _confirmDelete() async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Delete saved recommendation?'),
-        content: const Text(
-          'This removes the saved recommendation from Recommendation Management. It does not change the original generated result or any bus service data.',
+        content: Text(
+          _recommendation.followUp == null
+              ? 'This removes the saved recommendation from Recommendation Management. It does not change the original generated result or any bus service data.'
+              : 'This removes the saved recommendation and its follow-up action from Recommendation Management. It does not change the original generated result or any bus service data.',
         ),
         actions: [
           TextButton(
@@ -673,4 +985,9 @@ String _dateTime(DateTime value) {
   final date = '${local.year.toString().padLeft(4, '0')}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')}';
   final time = '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
   return '$date $time';
+}
+
+String _dateOnlyLabel(DateTime value) {
+  final local = value.toLocal();
+  return '${local.year.toString().padLeft(4, '0')}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')}';
 }

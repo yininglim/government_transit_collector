@@ -17,6 +17,13 @@ void main() {
       RecommendationReviewStatus.pending,
     );
     expect(RecommendationReviewStatus.fromDatabase('implemented'), isNull);
+    expect(RecommendationFollowUpStatus.pending.databaseValue, 'pending');
+    expect(
+      RecommendationFollowUpStatus.inProgress.databaseValue,
+      'in_progress',
+    );
+    expect(RecommendationFollowUpStatus.completed.databaseValue, 'completed');
+    expect(RecommendationFollowUpStatus.fromDatabase('unknown'), isNull);
   });
 
   test('maps Bus Frequency save to existing database values', () async {
@@ -53,6 +60,42 @@ void main() {
     expect(snapshot['priority_level'], 'medium');
     expect(snapshot['priority_reasons'], ['Service change recommended']);
     expect(saved.priorityLevel, RecommendationPriorityLevel.medium);
+  });
+
+  test('same route and action from a new analysis creates a fresh record', () async {
+    final dataSource = FakeManagementDataSource();
+    final repository = DefaultRecommendationManagementRepository(
+      dataSource: dataSource,
+    );
+    const recommendation = BusFrequencyRouteRecommendationRecord(
+      routeId: 'P101',
+      action: BusFrequencyRecommendationAction.increasePeakHourFrequency,
+      conciseRationale: 'Increase service based on validated evidence.',
+      evidenceRefs: ['route.P101.scheduled.summary'],
+      limitations: [],
+      source: BusFrequencyRecommendationSource.gemini,
+    );
+
+    final first = await repository.saveBusFrequencyRecommendation(
+      recommendation: recommendation,
+      routeDisplayLabel: 'P101',
+      periodStart: DateTime.utc(2026, 8, 1),
+      periodEnd: DateTime.utc(2026, 8, 31),
+      evidence: busPriorityEvidence(),
+    );
+    final second = await repository.saveBusFrequencyRecommendation(
+      recommendation: recommendation,
+      routeDisplayLabel: 'P101',
+      periodStart: DateTime.utc(2026, 9, 1),
+      periodEnd: DateTime.utc(2026, 10, 1),
+      evidence: busPriorityEvidence(),
+    );
+
+    expect(dataSource.insertCount, 2);
+    expect(second.recommendationId, isNot(first.recommendationId));
+    expect(second.status, RecommendationReviewStatus.pending);
+    expect(second.adminNote, isNull);
+    expect(second.followUp, isNull);
   });
 
   test('maps one multi-action Route and Stop record to one row', () async {
@@ -185,6 +228,273 @@ void main() {
     expect(malformed.priorityLevel, isNull);
     expect(malformed.priorityReasons, isEmpty);
   });
+
+  test('parses an optional follow-up relationship defensively', () {
+    final withFollowUp = SavedRecommendation.fromJson({
+      ...row(id: 'with-follow-up'),
+      'recommendation_follow_ups': [
+        {
+          'follow_up_id': 'follow-up-1',
+          'recommendation_id': 'with-follow-up',
+          'action_text': 'Review timetable',
+          'due_date': '2026-09-15',
+          'follow_up_status': 'in_progress',
+          'follow_up_notes': 'Coordinate review',
+          'created_at': '2026-09-11T00:00:00Z',
+          'updated_at': '2026-09-12T00:00:00Z',
+          'completed_at': null,
+        },
+      ],
+    });
+    final malformed = SavedRecommendation.fromJson({
+      ...row(id: 'malformed-follow-up'),
+      'recommendation_follow_ups': [
+        {'follow_up_status': 'unknown'},
+      ],
+    });
+
+    expect(withFollowUp.followUp!.actionText, 'Review timetable');
+    expect(
+      withFollowUp.followUp!.status,
+      RecommendationFollowUpStatus.inProgress,
+    );
+    expect(malformed.followUp, isNull);
+  });
+
+  test('only accepted recommendations can create one follow-up', () async {
+    final dataSource = FakeManagementDataSource();
+    final repository = DefaultRecommendationManagementRepository(
+      dataSource: dataSource,
+      now: () => DateTime(2026, 9, 11),
+    );
+    final pending = SavedRecommendation.fromJson(row(id: 'pending'));
+    final rejected = SavedRecommendation.fromJson({
+      ...row(id: 'rejected'),
+      'status': 'rejected',
+    });
+    final accepted = SavedRecommendation.fromJson({
+      ...row(id: 'accepted'),
+      'status': 'accepted',
+    });
+
+    await expectLater(
+      repository.createFollowUp(
+        recommendation: pending,
+        actionText: 'Review timetable',
+        dueDate: DateTime(2026, 9, 12),
+        note: null,
+      ),
+      throwsA(isA<RecommendationManagementException>()),
+    );
+    await expectLater(
+      repository.createFollowUp(
+        recommendation: rejected,
+        actionText: 'Review timetable',
+        dueDate: DateTime(2026, 9, 12),
+        note: null,
+      ),
+      throwsA(isA<RecommendationManagementException>()),
+    );
+    final withFollowUp = await repository.createFollowUp(
+      recommendation: accepted,
+      actionText: '  Review timetable  ',
+      dueDate: DateTime(2026, 9, 12),
+      note: '  Coordinate review  ',
+    );
+
+    expect(dataSource.followUpInsertCount, 1);
+    expect(withFollowUp.followUp!.actionText, 'Review timetable');
+    expect(withFollowUp.followUp!.note, 'Coordinate review');
+    expect(
+      withFollowUp.followUp!.status,
+      RecommendationFollowUpStatus.pending,
+    );
+    expect(withFollowUp.priorityLevel, accepted.priorityLevel);
+    await expectLater(
+      repository.createFollowUp(
+        recommendation: withFollowUp,
+        actionText: 'Another task',
+        dueDate: DateTime(2026, 9, 13),
+        note: null,
+      ),
+      throwsA(isA<RecommendationManagementException>()),
+    );
+    expect(dataSource.followUpInsertCount, 1);
+  });
+
+  test('follow-up validation requires action and a current or future date', () async {
+    final repository = DefaultRecommendationManagementRepository(
+      dataSource: FakeManagementDataSource(),
+      now: () => DateTime(2026, 9, 11, 18),
+    );
+    final accepted = SavedRecommendation.fromJson({
+      ...row(id: 'accepted'),
+      'status': 'accepted',
+    });
+
+    await expectLater(
+      repository.createFollowUp(
+        recommendation: accepted,
+        actionText: '   ',
+        dueDate: DateTime(2026, 9, 11),
+        note: null,
+      ),
+      throwsA(isA<RecommendationManagementException>()),
+    );
+    await expectLater(
+      repository.createFollowUp(
+        recommendation: accepted,
+        actionText: 'Review timetable',
+        dueDate: DateTime(2026, 9, 10),
+        note: null,
+      ),
+      throwsA(isA<RecommendationManagementException>()),
+    );
+  });
+
+  test('follow-up updates preserve priority and manage completed timestamp', () async {
+    final dataSource = FakeManagementDataSource();
+    final repository = DefaultRecommendationManagementRepository(
+      dataSource: dataSource,
+      now: () => DateTime.utc(2026, 9, 11, 8),
+    );
+    final accepted = SavedRecommendation.fromJson({
+      ...row(id: 'accepted'),
+      'status': 'accepted',
+      'supporting_metrics': {
+        ...(row(id: 'accepted')['supporting_metrics'] as Map),
+        'priority_rule_version': 1,
+        'priority_level': 'high',
+        'priority_reasons': ['Deterministic reason'],
+      },
+    });
+    final created = await repository.createFollowUp(
+      recommendation: accepted,
+      actionText: 'Review timetable',
+      dueDate: DateTime(2026, 9, 12),
+      note: null,
+    );
+    final completed = await repository.updateFollowUp(
+      recommendation: created,
+      actionText: 'Review revised timetable',
+      dueDate: DateTime(2026, 9, 10),
+      status: RecommendationFollowUpStatus.completed,
+      note: 'Done',
+    );
+    final reopened = await repository.updateFollowUp(
+      recommendation: completed,
+      actionText: 'Review revised timetable',
+      dueDate: DateTime(2026, 9, 10),
+      status: RecommendationFollowUpStatus.inProgress,
+      note: 'Reopened',
+    );
+
+    expect(completed.followUp!.completedAt, isNotNull);
+    expect(reopened.followUp!.completedAt, isNull);
+    expect(reopened.followUp!.status, RecommendationFollowUpStatus.inProgress);
+    expect(reopened.followUp!.note, 'Reopened');
+    expect(reopened.priorityLevel, RecommendationPriorityLevel.high);
+  });
+
+  test('same final status note update preserves an existing follow-up', () async {
+    final dataSource = FakeManagementDataSource();
+    final repository = DefaultRecommendationManagementRepository(
+      dataSource: dataSource,
+    );
+    final accepted = SavedRecommendation.fromJson({
+      ...row(id: 'accepted'),
+      'status': 'accepted',
+      'recommendation_follow_ups': [
+        {
+          'follow_up_id': 'follow-up-1',
+          'recommendation_id': 'accepted',
+          'action_text': 'Review timetable',
+          'due_date': '2026-09-10',
+          'follow_up_status': 'pending',
+          'follow_up_notes': null,
+          'created_at': '2026-09-01T00:00:00Z',
+          'updated_at': '2026-09-01T00:00:00Z',
+          'completed_at': null,
+        },
+      ],
+    });
+
+    final updated = await repository.updateRecommendation(
+      recommendation: accepted,
+      status: RecommendationReviewStatus.accepted,
+      adminNote: 'Follow-up remains active',
+    );
+
+    expect(updated.status, RecommendationReviewStatus.accepted);
+    expect(updated.followUp!.actionText, 'Review timetable');
+    expect(updated.followUp!.status, RecommendationFollowUpStatus.pending);
+    expect(dataSource.updateCount, 1);
+  });
+
+  test('final recommendation decisions reject every status transition', () async {
+    final dataSource = FakeManagementDataSource();
+    final repository = DefaultRecommendationManagementRepository(
+      dataSource: dataSource,
+    );
+    final accepted = SavedRecommendation.fromJson({
+      ...row(id: 'accepted'),
+      'status': 'accepted',
+    });
+    final rejected = SavedRecommendation.fromJson({
+      ...row(id: 'rejected'),
+      'status': 'rejected',
+    });
+    final transitions = [
+      (accepted, RecommendationReviewStatus.pending),
+      (accepted, RecommendationReviewStatus.rejected),
+      (rejected, RecommendationReviewStatus.pending),
+      (rejected, RecommendationReviewStatus.accepted),
+    ];
+
+    for (final transition in transitions) {
+      await expectLater(
+        repository.updateRecommendation(
+          recommendation: transition.$1,
+          status: transition.$2,
+          adminNote: null,
+        ),
+        throwsA(
+          isA<RecommendationManagementException>().having(
+            (error) => error.message,
+            'message',
+            'This recommendation decision is final and cannot be changed.',
+          ),
+        ),
+      );
+    }
+    expect(dataSource.updateCount, 0);
+  });
+
+  test('pending review may be saved as accepted or rejected', () async {
+    final acceptedSource = FakeManagementDataSource();
+    final rejectedSource = FakeManagementDataSource();
+    final pending = SavedRecommendation.fromJson(row(id: 'pending'));
+
+    final accepted = await DefaultRecommendationManagementRepository(
+      dataSource: acceptedSource,
+    ).updateRecommendation(
+      recommendation: pending,
+      status: RecommendationReviewStatus.accepted,
+      adminNote: null,
+    );
+    final rejected = await DefaultRecommendationManagementRepository(
+      dataSource: rejectedSource,
+    ).updateRecommendation(
+      recommendation: pending,
+      status: RecommendationReviewStatus.rejected,
+      adminNote: null,
+    );
+
+    expect(accepted.status, RecommendationReviewStatus.accepted);
+    expect(rejected.status, RecommendationReviewStatus.rejected);
+    expect(acceptedSource.updateCount, 1);
+    expect(rejectedSource.updateCount, 1);
+  });
 }
 
 class FakeManagementDataSource implements RecommendationManagementDataSource {
@@ -192,6 +502,8 @@ class FakeManagementDataSource implements RecommendationManagementDataSource {
   Map<String, dynamic> recommendation = {};
   List<Map<String, dynamic>> rows = [];
   int insertCount = 0;
+  int followUpInsertCount = 0;
+  int updateCount = 0;
 
   @override
   Future<Map<String, dynamic>> insertRecommendation({
@@ -215,15 +527,59 @@ class FakeManagementDataSource implements RecommendationManagementDataSource {
   Future<List<Map<String, dynamic>>> fetchRecommendations() async => rows;
 
   @override
+  Future<Map<String, dynamic>> insertFollowUp({
+    required String recommendationId,
+    required String actionText,
+    required String dueDate,
+    required String? note,
+  }) async {
+    followUpInsertCount++;
+    return {
+      'follow_up_id': 'follow-up-$followUpInsertCount',
+      'recommendation_id': recommendationId,
+      'action_text': actionText,
+      'due_date': dueDate,
+      'follow_up_status': 'pending',
+      'follow_up_notes': note,
+      'created_at': '2026-09-11T00:00:00Z',
+      'updated_at': '2026-09-11T00:00:00Z',
+      'completed_at': null,
+    };
+  }
+
+  @override
+  Future<Map<String, dynamic>> updateFollowUp({
+    required String followUpId,
+    required String actionText,
+    required String dueDate,
+    required String status,
+    required String? note,
+    required String? completedAt,
+  }) async => {
+    'follow_up_id': followUpId,
+    'recommendation_id': 'accepted',
+    'action_text': actionText,
+    'due_date': dueDate,
+    'follow_up_status': status,
+    'follow_up_notes': note,
+    'created_at': '2026-09-11T00:00:00Z',
+    'updated_at': '2026-09-11T01:00:00Z',
+    'completed_at': completedAt,
+  };
+
+  @override
   Future<Map<String, dynamic>> updateRecommendation({
     required String recommendationId,
     required String status,
     required String? adminNote,
-  }) async => {
-    ...row(id: recommendationId),
-    'status': status,
-    'admin_notes': adminNote,
-  };
+  }) async {
+    updateCount++;
+    return {
+      ...row(id: recommendationId),
+      'status': status,
+      'admin_notes': adminNote,
+    };
+  }
 
   @override
   Future<void> deleteRecommendation(String recommendationId) async {}

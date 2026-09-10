@@ -31,6 +31,21 @@ abstract interface class RecommendationManagementRepository {
     required String? adminNote,
   });
 
+  Future<SavedRecommendation> createFollowUp({
+    required SavedRecommendation recommendation,
+    required String actionText,
+    required DateTime dueDate,
+    required String? note,
+  });
+
+  Future<SavedRecommendation> updateFollowUp({
+    required SavedRecommendation recommendation,
+    required String actionText,
+    required DateTime dueDate,
+    required RecommendationFollowUpStatus status,
+    required String? note,
+  });
+
   Future<void> deleteRecommendation(String recommendationId);
 }
 
@@ -48,6 +63,22 @@ abstract interface class RecommendationManagementDataSource {
     required String? adminNote,
   });
 
+  Future<Map<String, dynamic>> insertFollowUp({
+    required String recommendationId,
+    required String actionText,
+    required String dueDate,
+    required String? note,
+  });
+
+  Future<Map<String, dynamic>> updateFollowUp({
+    required String followUpId,
+    required String actionText,
+    required String dueDate,
+    required String status,
+    required String? note,
+    required String? completedAt,
+  });
+
   Future<void> deleteRecommendation(String recommendationId);
 }
 
@@ -55,9 +86,12 @@ class DefaultRecommendationManagementRepository
     implements RecommendationManagementRepository {
   DefaultRecommendationManagementRepository({
     RecommendationManagementDataSource? dataSource,
-  }) : _dataSource = dataSource ?? SupabaseRecommendationManagementDataSource();
+    DateTime Function()? now,
+  }) : _dataSource = dataSource ?? SupabaseRecommendationManagementDataSource(),
+       _now = now ?? DateTime.now;
 
   final RecommendationManagementDataSource _dataSource;
+  final DateTime Function() _now;
 
   @override
   Future<SavedRecommendation> saveBusFrequencyRecommendation({
@@ -255,20 +289,110 @@ class DefaultRecommendationManagementRepository
     required RecommendationReviewStatus status,
     required String? adminNote,
   }) async {
+    if (recommendation.status != RecommendationReviewStatus.pending &&
+        status != recommendation.status) {
+      throw const RecommendationManagementException(
+        'This recommendation decision is final and cannot be changed.',
+      );
+    }
     final note = adminNote?.trim();
     try {
-      return SavedRecommendation.fromJson(
+      final updated = SavedRecommendation.fromJson(
         await _dataSource.updateRecommendation(
           recommendationId: recommendation.recommendationId,
           status: status.databaseValue,
           adminNote: note == null || note.isEmpty ? null : note,
         ),
       );
+      return updated.copyWith(followUp: recommendation.followUp);
     } on RecommendationManagementException {
       rethrow;
     } on Object {
       throw const RecommendationManagementException(
         'Unable to update this recommendation.',
+      );
+    }
+  }
+
+  @override
+  Future<SavedRecommendation> createFollowUp({
+    required SavedRecommendation recommendation,
+    required String actionText,
+    required DateTime dueDate,
+    required String? note,
+  }) async {
+    if (recommendation.status != RecommendationReviewStatus.accepted) {
+      throw const RecommendationManagementException(
+        'Only accepted recommendations can have a follow-up action.',
+      );
+    }
+    if (recommendation.followUp != null) {
+      throw const RecommendationManagementException(
+        'This recommendation already has a follow-up action.',
+      );
+    }
+    final task = _requiredFollowUpAction(actionText);
+    final date = _dateOnly(dueDate);
+    if (date.isBefore(_dateOnly(_now()))) {
+      throw const RecommendationManagementException(
+        'Due date cannot be earlier than today.',
+      );
+    }
+    try {
+      final followUp = RecommendationFollowUp.fromJson(
+        await _dataSource.insertFollowUp(
+          recommendationId: recommendation.recommendationId,
+          actionText: task,
+          dueDate: _databaseDate(date),
+          note: _nullableTrimmed(note),
+        ),
+      );
+      return recommendation.copyWith(followUp: followUp);
+    } on RecommendationManagementException {
+      rethrow;
+    } on Object {
+      throw const RecommendationManagementException(
+        'Unable to create this follow-up action.',
+      );
+    }
+  }
+
+  @override
+  Future<SavedRecommendation> updateFollowUp({
+    required SavedRecommendation recommendation,
+    required String actionText,
+    required DateTime dueDate,
+    required RecommendationFollowUpStatus status,
+    required String? note,
+  }) async {
+    final existing = recommendation.followUp;
+    if (existing == null) {
+      throw const RecommendationManagementException(
+        'No follow-up action is available to update.',
+      );
+    }
+    final task = _requiredFollowUpAction(actionText);
+    final date = _dateOnly(dueDate);
+    final completedAt = status == RecommendationFollowUpStatus.completed
+        ? (existing.completedAt ?? _now()).toUtc().toIso8601String()
+        : null;
+    try {
+      final followUp = RecommendationFollowUp.fromJson(
+        await _dataSource.updateFollowUp(
+          followUpId: existing.followUpId,
+          actionText: task,
+          dueDate: _databaseDate(date),
+          status: status.databaseValue,
+          note: _nullableTrimmed(note),
+          completedAt: completedAt,
+        ),
+      );
+      return recommendation.copyWith(followUp: followUp);
+    } on RecommendationManagementException {
+      rethrow;
+    } on Object {
+      throw const RecommendationManagementException(
+        'Unable to update this follow-up action.',
       );
     }
   }
@@ -331,10 +455,60 @@ class SupabaseRecommendationManagementDataSource
     _requireAdminSession();
     final rows = await _client
         .from('ai_recommendations')
-        .select()
+        .select('*, recommendation_follow_ups(*)')
         .order('created_at', ascending: false)
         .order('recommendation_id');
     return rows.map(Map<String, dynamic>.from).toList(growable: false);
+  }
+
+  @override
+  Future<Map<String, dynamic>> insertFollowUp({
+    required String recommendationId,
+    required String actionText,
+    required String dueDate,
+    required String? note,
+  }) async {
+    final adminId = _requireAdminSession();
+    return Map<String, dynamic>.from(
+      await _client
+          .from('recommendation_follow_ups')
+          .insert({
+            'recommendation_id': recommendationId,
+            'action_text': actionText,
+            'due_date': dueDate,
+            'follow_up_status': RecommendationFollowUpStatus.pending.databaseValue,
+            'follow_up_notes': note,
+            'created_by': adminId,
+          })
+          .select()
+          .single(),
+    );
+  }
+
+  @override
+  Future<Map<String, dynamic>> updateFollowUp({
+    required String followUpId,
+    required String actionText,
+    required String dueDate,
+    required String status,
+    required String? note,
+    required String? completedAt,
+  }) async {
+    _requireAdminSession();
+    return Map<String, dynamic>.from(
+      await _client
+          .from('recommendation_follow_ups')
+          .update({
+            'action_text': actionText,
+            'due_date': dueDate,
+            'follow_up_status': status,
+            'follow_up_notes': note,
+            'completed_at': completedAt,
+          })
+          .eq('follow_up_id', followUpId)
+          .select()
+          .single(),
+    );
   }
 
   @override
@@ -398,3 +572,21 @@ String _busFrequencyTitle(BusFrequencyRecommendationAction action) =>
       BusFrequencyRecommendationAction.insufficientEvidence =>
         'Frequency recommendation',
     };
+
+String _requiredFollowUpAction(String value) {
+  final result = value.trim();
+  if (result.isEmpty) {
+    throw const RecommendationManagementException('Enter an action or task.');
+  }
+  return result;
+}
+
+String? _nullableTrimmed(String? value) {
+  final result = value?.trim();
+  return result == null || result.isEmpty ? null : result;
+}
+
+DateTime _dateOnly(DateTime value) => DateTime(value.year, value.month, value.day);
+
+String _databaseDate(DateTime value) =>
+    '${value.year.toString().padLeft(4, '0')}-${value.month.toString().padLeft(2, '0')}-${value.day.toString().padLeft(2, '0')}';
