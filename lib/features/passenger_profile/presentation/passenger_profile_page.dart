@@ -1,3 +1,4 @@
+import 'package:government_transit_collector/features/tracked_journeys/tracked_journey_repository.dart';
 import 'package:government_transit_collector/features/bus_feedback/data/bus_feedback_repository.dart';
 import 'package:flutter/material.dart';
 import 'package:government_transit_collector/features/authentication/data/auth_repository.dart';
@@ -17,7 +18,9 @@ class PassengerProfilePage extends StatefulWidget {
     required this.preferencesRepository,
     required this.onProfileUpdated,
     this.feedbackRepository,
+    this.trackedJourneyRepository,
   });
+  final TrackedJourneyRepository? trackedJourneyRepository;
   final AppProfile profile;
   final BusFeedbackRepository? feedbackRepository;
   final AuthRepository authRepository;
@@ -33,6 +36,7 @@ class _PassengerProfilePageState extends State<PassengerProfilePage> {
   late final TextEditingController _name;
   late String _displayName;
   List<SavedJourney>? _saved;
+  bool _recentExpanded = false;
   List<RecentJourneySearch>? _recent;
   final Set<int> _deletingRecentSearchIds = {};
   String? _savedError, _recentError, _preferenceError;
@@ -406,7 +410,7 @@ class _PassengerProfilePageState extends State<PassengerProfilePage> {
                 else if (_recent!.isEmpty)
                   const Text('No recent searches.')
                 else
-                  for (final recent in _recent!)
+                  for (final recent in _recent!.take(_recentExpanded ? 10 : 3))
                     ListTile(
                       contentPadding: EdgeInsets.zero,
                       leading: const Icon(Icons.history),
@@ -447,6 +451,12 @@ class _PassengerProfilePageState extends State<PassengerProfilePage> {
                         ],
                       ),
                     ),
+                if (_recentError == null && (_recent?.length ?? 0) > 3)
+                  TextButton(
+                    onPressed: () =>
+                        setState(() => _recentExpanded = !_recentExpanded),
+                    child: Text(_recentExpanded ? 'Show Less' : 'View More'),
+                  ),
               ]),
             ],
           ),

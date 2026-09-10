@@ -2,30 +2,55 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/operational_evidence_repository.dart';
 import 'package:government_transit_collector/features/peak_operation/data/peak_operation_calculator.dart';
 import 'package:government_transit_collector/features/peak_operation/data/peak_operation_models.dart';
-import 'package:government_transit_collector/features/peak_operation/data/peak_operation_repository.dart';
 import 'package:government_transit_collector/features/route_performance/data/route_performance_calculator.dart';
 import 'package:government_transit_collector/features/route_performance/data/route_performance_models.dart';
 import 'package:government_transit_collector/features/route_performance/data/route_performance_repository.dart';
 
 void main() {
-  test('delegates route and date filters to teammate repositories', () async {
-    final peakRepository = FakePeakOperationRepository();
+  test('fetches route performance data exactly once for the period', () async {
     final performanceRepository = FakeRoutePerformanceRepository();
     final start = DateTime.utc(2026, 8, 20);
     final end = DateTime.utc(2026, 8, 27);
 
     await repository(
-      peakRepository: peakRepository,
       performanceRepository: performanceRepository,
     ).loadEvidence(routeId: 'J15', startUtc: start, endExclusiveUtc: end);
 
-    expect(peakRepository.routeId, 'J15');
-    expect(peakRepository.startUtc, start);
-    expect(peakRepository.endExclusiveUtc, end);
+    expect(performanceRepository.loadCalls, 1);
     expect(performanceRepository.routeId, 'J15');
     expect(performanceRepository.startUtc, start);
     expect(performanceRepository.endExclusiveUtc, end);
   });
+
+  test(
+    'maps shared historical observations exactly for Peak Operation',
+    () async {
+      final data = completePerformanceData();
+      final peakCalculator = RecordingPeakOperationCalculator();
+      final performanceCalculator = RecordingRoutePerformanceCalculator();
+
+      await repository(
+        peakCalculator: peakCalculator,
+        performanceCalculator: performanceCalculator,
+        performanceRepository: FakeRoutePerformanceRepository(data: data),
+      ).loadEvidence(
+        routeId: 'J15',
+        startUtc: DateTime.utc(2026, 8, 20),
+        endExclusiveUtc: DateTime.utc(2026, 8, 27),
+      );
+
+      expect(performanceCalculator.data, same(data));
+      expect(peakCalculator.observations, hasLength(data.observations.length));
+      for (var index = 0; index < data.observations.length; index++) {
+        final historical = data.observations[index];
+        final peak = peakCalculator.observations[index];
+        expect(peak.routeId, historical.routeId);
+        expect(peak.tripId, historical.tripId);
+        expect(peak.vehicleId, historical.vehicleId);
+        expect(peak.recordedAt, same(historical.recordedAt));
+      }
+    },
+  );
 
   test('delegates calculations and combines their exact summaries', () async {
     final peakCalculator = RecordingPeakOperationCalculator();
@@ -77,6 +102,113 @@ void main() {
     expect(evidence.routePerformanceSummary.averageTravelTime, isNull);
   });
 
+  test('preserves equivalent summaries from the shared observations', () async {
+    final data = completePerformanceData();
+    final start = DateTime.utc(2026, 8, 27);
+    final end = DateTime.utc(2026, 8, 28);
+    final expectedRoute = const RoutePerformanceCalculator().calculate(data);
+    final expectedPeak = const PeakOperationCalculator().calculate(
+      observations: data.observations
+          .map(
+            (item) => PeakOperationObservation(
+              routeId: item.routeId,
+              tripId: item.tripId,
+              vehicleId: item.vehicleId,
+              recordedAt: item.recordedAt,
+            ),
+          )
+          .toList(),
+      periodStart: start,
+      periodEnd: end,
+      routeId: 'J15',
+    );
+
+    final evidence = await repository(
+      performanceRepository: FakeRoutePerformanceRepository(data: data),
+    ).loadEvidence(routeId: 'J15', startUtc: start, endExclusiveUtc: end);
+
+    expect(
+      evidence.routePerformanceSummary.totalObservations,
+      expectedRoute.totalObservations,
+    );
+    expect(
+      evidence.routePerformanceSummary.completeTrips.length,
+      expectedRoute.completeTrips.length,
+    );
+    expect(
+      evidence.routePerformanceSummary.averageTravelTime,
+      expectedRoute.averageTravelTime,
+    );
+    expect(
+      evidence.routePerformanceSummary.delayFrequencyPercent,
+      expectedRoute.delayFrequencyPercent,
+    );
+    expect(
+      evidence.routePerformanceSummary.scheduleAdherencePercent,
+      expectedRoute.scheduleAdherencePercent,
+    );
+    expect(
+      evidence.peakOperationSummary.observationCount,
+      expectedPeak.observationCount,
+    );
+    expect(
+      evidence.peakOperationSummary.distinctTripOccurrences,
+      expectedPeak.distinctTripOccurrences,
+    );
+    expect(
+      evidence.peakOperationSummary.peakBucket?.startMinute,
+      expectedPeak.peakBucket?.startMinute,
+    );
+    expect(
+      evidence.peakOperationSummary.averageActivity,
+      expectedPeak.averageActivity,
+    );
+    expect(
+      evidence.peakOperationSummary.hasReliablePeak,
+      expectedPeak.hasReliablePeak,
+    );
+    expect(
+      evidence.peakOperationSummary.busiestRoute?.routeId,
+      expectedPeak.busiestRoute?.routeId,
+    );
+  });
+
+  test('handles empty shared historical observations', () async {
+    final evidence =
+        await repository(
+          performanceRepository: FakeRoutePerformanceRepository(
+            data: const RoutePerformanceData(
+              observations: [],
+              schedulesByTripId: {},
+            ),
+          ),
+        ).loadEvidence(
+          routeId: 'J15',
+          startUtc: DateTime.utc(2026, 8, 20),
+          endExclusiveUtc: DateTime.utc(2026, 8, 27),
+        );
+
+    expect(evidence.routePerformanceSummary.totalObservations, 0);
+    expect(evidence.peakOperationSummary.observationCount, 0);
+    expect(evidence.peakOperationSummary.hasReliablePeak, isFalse);
+  });
+
+  test('wraps a shared historical loading failure', () {
+    expect(
+      () =>
+          repository(
+            performanceRepository: FakeRoutePerformanceRepository(
+              failure: true,
+            ),
+          ).loadEvidence(
+            routeId: 'J15',
+            startUtc: DateTime.utc(2026, 8, 20),
+            endExclusiveUtc: DateTime.utc(2026, 8, 27),
+          ),
+      throwsA(isA<OperationalEvidenceReadException>()),
+    );
+  });
+
   test('rejects a route absent from the existing route repository', () {
     expect(
       () => repository().loadEvidence(
@@ -90,13 +222,11 @@ void main() {
 }
 
 DefaultOperationalEvidenceRepository repository({
-  FakePeakOperationRepository? peakRepository,
   PeakOperationCalculator? peakCalculator,
   FakeRoutePerformanceRepository? performanceRepository,
   RoutePerformanceCalculator? performanceCalculator,
 }) {
   return DefaultOperationalEvidenceRepository(
-    peakOperationRepository: peakRepository ?? FakePeakOperationRepository(),
     peakOperationCalculator: peakCalculator ?? const PeakOperationCalculator(),
     routePerformanceRepository:
         performanceRepository ?? FakeRoutePerformanceRepository(),
@@ -105,41 +235,15 @@ DefaultOperationalEvidenceRepository repository({
   );
 }
 
-class FakePeakOperationRepository implements PeakOperationRepository {
-  String? routeId;
-  DateTime? startUtc;
-  DateTime? endExclusiveUtc;
-
-  @override
-  Future<List<PeakOperationRoute>> loadRoutes() async => const [
-    PeakOperationRoute(routeId: 'J15', shortName: 'J15'),
-  ];
-
-  @override
-  Future<List<PeakOperationObservation>> loadObservations({
-    required DateTime startUtc,
-    required DateTime endExclusiveUtc,
-    String? routeId,
-  }) async {
-    this.routeId = routeId;
-    this.startUtc = startUtc;
-    this.endExclusiveUtc = endExclusiveUtc;
-    return [
-      PeakOperationObservation(
-        routeId: 'J15',
-        tripId: 'trip-1',
-        vehicleId: 'bus-1',
-        recordedAt: startUtc.add(const Duration(hours: 1)),
-      ),
-    ];
-  }
-}
-
 class FakeRoutePerformanceRepository implements RoutePerformanceRepository {
-  FakeRoutePerformanceRepository({RoutePerformanceData? data})
-    : data = data ?? completePerformanceData();
+  FakeRoutePerformanceRepository({
+    RoutePerformanceData? data,
+    this.failure = false,
+  }) : data = data ?? completePerformanceData();
 
   final RoutePerformanceData data;
+  final bool failure;
+  int loadCalls = 0;
   String? routeId;
   DateTime? startUtc;
   DateTime? endExclusiveUtc;
@@ -159,6 +263,8 @@ class FakeRoutePerformanceRepository implements RoutePerformanceRepository {
     required DateTime startUtc,
     required DateTime endExclusiveUtc,
   }) async {
+    loadCalls++;
+    if (failure) throw Exception('network');
     this.routeId = routeId;
     this.startUtc = startUtc;
     this.endExclusiveUtc = endExclusiveUtc;
@@ -169,6 +275,7 @@ class FakeRoutePerformanceRepository implements RoutePerformanceRepository {
 class RecordingPeakOperationCalculator extends PeakOperationCalculator {
   int calls = 0;
   PeakOperationSummary? result;
+  List<PeakOperationObservation> observations = const [];
 
   @override
   PeakOperationSummary calculate({
@@ -178,6 +285,7 @@ class RecordingPeakOperationCalculator extends PeakOperationCalculator {
     String? routeId,
   }) {
     calls++;
+    this.observations = observations;
     return result = super.calculate(
       observations: observations,
       periodStart: periodStart,
@@ -190,10 +298,12 @@ class RecordingPeakOperationCalculator extends PeakOperationCalculator {
 class RecordingRoutePerformanceCalculator extends RoutePerformanceCalculator {
   int calls = 0;
   RoutePerformanceSummary? result;
+  RoutePerformanceData? data;
 
   @override
   RoutePerformanceSummary calculate(RoutePerformanceData data) {
     calls++;
+    this.data = data;
     return result = super.calculate(data);
   }
 }

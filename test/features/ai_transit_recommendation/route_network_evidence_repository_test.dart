@@ -18,6 +18,80 @@ void main() {
     expect(trips.offsets, [0]);
   });
 
+  test('batches stop times by 100 trip IDs in deterministic order', () async {
+    final trips = ManyTripsDataSource(205);
+    final stopTimes = RecordingStopTimeDataSource();
+
+    final result = await repository(
+      routeTripDataSource: trips,
+      stopTimeDataSource: stopTimes,
+      mapDataSource: GeneratedMapDataSource(),
+    ).loadRoute('J15');
+
+    expect(stopTimes.batchSizes, [100, 100, 5]);
+    expect(stopTimes.offsets, [0, 0, 0]);
+    expect(result.trips.map((trip) => trip.tripId), trips.tripIds);
+    expect(
+      result.trips.every((trip) => trip.stops.first.stopSequence == 1),
+      isTrue,
+    );
+  });
+
+  test('paginates within a stop-time batch beyond 1000 rows', () async {
+    final stopTimes = PaginatedStopTimeDataSource();
+
+    final result = await repository(
+      routeTripDataSource: ManyTripsDataSource(2),
+      stopTimeDataSource: stopTimes,
+      mapDataSource: GeneratedMapDataSource(),
+    ).loadRoute('J15');
+
+    expect(stopTimes.offsets, [0, 1000]);
+    expect(result.trips.first.stops, hasLength(600));
+    expect(result.trips.last.stops, hasLength(401));
+    expect(result.trips.first.stops.first.stopSequence, 1);
+    expect(result.trips.first.stops.last.stopSequence, 600);
+  });
+
+  test(
+    'deduplicates shared stop and shape loads across concurrent routes',
+    () async {
+      final maps = CountingSharedMapDataSource();
+      final network = repository(mapDataSource: maps);
+
+      final results = await Future.wait([
+        network.loadRoute('J15'),
+        network.loadRoute('J16'),
+      ]);
+
+      expect(results.map((result) => result.trips.length), [2, 2]);
+      expect(maps.stopRequests, [
+        containsAll(['stop-a', 'stop-b']),
+      ]);
+      expect(maps.shapeRequests, [
+        containsAll(['shape-a', 'shape-b']),
+      ]);
+      expect(results.last.trips.first.stops.map((stop) => stop.stopSequence), [
+        1,
+        2,
+      ]);
+      expect(
+        results.last.trips.first.shapePoints.map((point) => point.sequence),
+        [1, 2],
+      );
+    },
+  );
+
+  test('a new static-cache context loads shared entities again', () async {
+    final maps = CountingSharedMapDataSource();
+
+    await repository(mapDataSource: maps).loadRoute('J15');
+    await repository(mapDataSource: maps).loadRoute('J15');
+
+    expect(maps.stopRequests, hasLength(2));
+    expect(maps.shapeRequests, hasLength(2));
+  });
+
   test('preserves ordered stops, identities, and coordinates', () async {
     final result = await repository().loadRoute('J15');
     final stops = result.trips.first.stops;
@@ -63,6 +137,7 @@ void main() {
     'keeps missing stop and shape details visible as null or empty',
     () async {
       final result = await repository(
+        routeTripDataSource: MissingShapeTripDataSource(),
         mapDataSource: IncompleteMapDataSource(),
       ).loadRoute('J15');
       final trip = result.trips.first;
@@ -80,12 +155,13 @@ void main() {
 DefaultRouteNetworkEvidenceRepository repository({
   RouteTripDataSource? routeTripDataSource,
   JourneyMapDataSource? mapDataSource,
+  RouteNetworkStopTimeDataSource? stopTimeDataSource,
 }) {
   return DefaultRouteNetworkEvidenceRepository(
     routeRepository: FakeRouteRepository(),
     routeTripDataSource: routeTripDataSource ?? FakeRouteTripDataSource(),
     mapDataSource: mapDataSource ?? FakeMapDataSource(),
-    stopTimeDataSource: FakeStopTimeDataSource(),
+    stopTimeDataSource: stopTimeDataSource ?? FakeStopTimeDataSource(),
   );
 }
 
@@ -96,6 +172,11 @@ class FakeRouteRepository implements RoutePerformanceRepository {
       routeId: 'J15',
       shortName: 'J15',
       longName: 'Johor route',
+    ),
+    RoutePerformanceRoute(
+      routeId: 'J16',
+      shortName: 'J16',
+      longName: 'Second Johor route',
     ),
   ];
 
@@ -114,15 +195,34 @@ class FakeRouteTripDataSource implements RouteTripDataSource {
   final offsets = <int>[];
 
   @override
-  Future<List<String>> fetchTripIds({
+  Future<List<TripShapeReference>> fetchTrips({
     required String routeId,
     required int offset,
     required int limit,
   }) async {
     routeIds.add(routeId);
     offsets.add(offset);
-    return offset == 0 ? ['trip-a', 'trip-b'] : const [];
+    return offset == 0
+        ? const [
+            TripShapeReference(tripId: 'trip-a', shapeId: 'shape-a'),
+            TripShapeReference(tripId: 'trip-b', shapeId: 'shape-b'),
+          ]
+        : const [];
   }
+}
+
+class MissingShapeTripDataSource implements RouteTripDataSource {
+  @override
+  Future<List<TripShapeReference>> fetchTrips({
+    required String routeId,
+    required int offset,
+    required int limit,
+  }) async => offset == 0
+      ? const [
+          TripShapeReference(tripId: 'trip-a', shapeId: null),
+          TripShapeReference(tripId: 'trip-b', shapeId: null),
+        ]
+      : const [];
 }
 
 class FakeMapDataSource implements JourneyMapDataSource {
@@ -185,22 +285,155 @@ class IncompleteMapDataSource implements JourneyMapDataSource {
   ) async => const {};
 }
 
-class FakeStopTimeDataSource implements TripProgressStopTimeDataSource {
+class CountingSharedMapDataSource extends FakeMapDataSource {
+  final stopRequests = <List<String>>[];
+  final shapeRequests = <List<String>>[];
+
   @override
-  Future<List<TripStopTimeRecord>> loadStopTimes(String tripId) async {
-    return const [
-      TripStopTimeRecord(
-        stopId: 'stop-b',
-        stopSequence: 2,
-        arrivalSeconds: 8 * 3600 + 30 * 60,
-        departureSeconds: 8 * 3600 + 30 * 60,
-      ),
-      TripStopTimeRecord(
-        stopId: 'stop-a',
-        stopSequence: 1,
-        arrivalSeconds: 8 * 3600,
-        departureSeconds: 8 * 3600,
-      ),
+  Future<List<MapStopRecord>> loadStops(List<String> stopIds) async {
+    stopRequests.add([...stopIds]);
+    await Future<void>.delayed(Duration.zero);
+    return super.loadStops(stopIds);
+  }
+
+  @override
+  Future<Map<String, List<ShapePoint>>> loadShapePoints(
+    List<String> shapeIds,
+  ) async {
+    shapeRequests.add([...shapeIds]);
+    await Future<void>.delayed(Duration.zero);
+    return super.loadShapePoints(shapeIds);
+  }
+}
+
+class FakeStopTimeDataSource implements RouteNetworkStopTimeDataSource {
+  @override
+  Future<List<RouteNetworkStopTimeRecord>> fetchStopTimes({
+    required List<String> tripIds,
+    required int offset,
+    required int limit,
+  }) async {
+    if (offset > 0) return const [];
+    return [
+      for (final tripId in tripIds) ...[
+        RouteNetworkStopTimeRecord(
+          tripId: tripId,
+          stopTime: const TripStopTimeRecord(
+            stopId: 'stop-b',
+            stopSequence: 2,
+            arrivalSeconds: 8 * 3600 + 30 * 60,
+            departureSeconds: 8 * 3600 + 30 * 60,
+          ),
+        ),
+        RouteNetworkStopTimeRecord(
+          tripId: tripId,
+          stopTime: const TripStopTimeRecord(
+            stopId: 'stop-a',
+            stopSequence: 1,
+            arrivalSeconds: 8 * 3600,
+            departureSeconds: 8 * 3600,
+          ),
+        ),
+      ],
     ];
   }
+}
+
+class ManyTripsDataSource implements RouteTripDataSource {
+  ManyTripsDataSource(int count)
+    : tripIds = List.generate(
+        count,
+        (index) => 'trip-${index.toString().padLeft(3, '0')}',
+      );
+
+  final List<String> tripIds;
+
+  @override
+  Future<List<TripShapeReference>> fetchTrips({
+    required String routeId,
+    required int offset,
+    required int limit,
+  }) async => [
+    for (final tripId in tripIds.skip(offset).take(limit))
+      TripShapeReference(tripId: tripId, shapeId: 'shape-$tripId'),
+  ];
+}
+
+class RecordingStopTimeDataSource implements RouteNetworkStopTimeDataSource {
+  final batchSizes = <int>[];
+  final offsets = <int>[];
+
+  @override
+  Future<List<RouteNetworkStopTimeRecord>> fetchStopTimes({
+    required List<String> tripIds,
+    required int offset,
+    required int limit,
+  }) async {
+    batchSizes.add(tripIds.length);
+    offsets.add(offset);
+    return [
+      for (final tripId in tripIds)
+        RouteNetworkStopTimeRecord(
+          tripId: tripId,
+          stopTime: TripStopTimeRecord(
+            stopId: 'stop-$tripId',
+            stopSequence: 1,
+            arrivalSeconds: null,
+            departureSeconds: null,
+          ),
+        ),
+    ];
+  }
+}
+
+class PaginatedStopTimeDataSource implements RouteNetworkStopTimeDataSource {
+  final offsets = <int>[];
+
+  @override
+  Future<List<RouteNetworkStopTimeRecord>> fetchStopTimes({
+    required List<String> tripIds,
+    required int offset,
+    required int limit,
+  }) async {
+    offsets.add(offset);
+    if (offset > 0) {
+      return [
+        RouteNetworkStopTimeRecord(
+          tripId: tripIds.last,
+          stopTime: const TripStopTimeRecord(
+            stopId: 'last-stop',
+            stopSequence: 401,
+            arrivalSeconds: null,
+            departureSeconds: null,
+          ),
+        ),
+      ];
+    }
+    return List.generate(1000, (index) {
+      final firstTrip = index < 600;
+      return RouteNetworkStopTimeRecord(
+        tripId: firstTrip ? tripIds.first : tripIds.last,
+        stopTime: TripStopTimeRecord(
+          stopId: 'stop-$index',
+          stopSequence: firstTrip ? index + 1 : index - 599,
+          arrivalSeconds: null,
+          departureSeconds: null,
+        ),
+      );
+    });
+  }
+}
+
+class GeneratedMapDataSource implements JourneyMapDataSource {
+  @override
+  Future<List<TripShapeReference>> loadTripShapes(List<String> tripIds) async =>
+      throw UnimplementedError();
+
+  @override
+  Future<List<MapStopRecord>> loadStops(List<String> stopIds) async => const [];
+
+  @override
+  Future<Map<String, List<ShapePoint>>> loadShapePoints(
+    List<String> shapeIds,
+  ) async => const {};
 }

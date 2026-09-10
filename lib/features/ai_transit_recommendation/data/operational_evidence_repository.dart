@@ -1,7 +1,6 @@
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/operational_evidence_models.dart';
 import 'package:government_transit_collector/features/peak_operation/data/peak_operation_calculator.dart';
 import 'package:government_transit_collector/features/peak_operation/data/peak_operation_models.dart';
-import 'package:government_transit_collector/features/peak_operation/data/peak_operation_repository.dart';
 import 'package:government_transit_collector/features/route_performance/data/route_performance_calculator.dart';
 import 'package:government_transit_collector/features/route_performance/data/route_performance_models.dart';
 import 'package:government_transit_collector/features/route_performance/data/route_performance_repository.dart';
@@ -17,20 +16,16 @@ abstract interface class OperationalEvidenceRepository {
 class DefaultOperationalEvidenceRepository
     implements OperationalEvidenceRepository {
   DefaultOperationalEvidenceRepository({
-    PeakOperationRepository? peakOperationRepository,
     PeakOperationCalculator? peakOperationCalculator,
     RoutePerformanceRepository? routePerformanceRepository,
     RoutePerformanceCalculator? routePerformanceCalculator,
-  }) : _peakOperationRepository =
-           peakOperationRepository ?? DefaultPeakOperationRepository(),
-       _peakOperationCalculator =
+  }) : _peakOperationCalculator =
            peakOperationCalculator ?? const PeakOperationCalculator(),
        _routePerformanceRepository =
            routePerformanceRepository ?? DefaultRoutePerformanceRepository(),
        _routePerformanceCalculator =
            routePerformanceCalculator ?? const RoutePerformanceCalculator();
 
-  final PeakOperationRepository _peakOperationRepository;
   final PeakOperationCalculator _peakOperationCalculator;
   final RoutePerformanceRepository _routePerformanceRepository;
   final RoutePerformanceCalculator _routePerformanceCalculator;
@@ -45,11 +40,6 @@ class DefaultOperationalEvidenceRepository
     try {
       final results = await Future.wait([
         _loadRoutes(),
-        _peakOperationRepository.loadObservations(
-          startUtc: startUtc,
-          endExclusiveUtc: endExclusiveUtc,
-          routeId: routeId,
-        ),
         _routePerformanceRepository.loadRoutePerformance(
           routeId: routeId,
           startUtc: startUtc,
@@ -63,8 +53,17 @@ class DefaultOperationalEvidenceRepository
           'The selected route is not available.',
         );
       }
-      final peakObservations = results[1] as List<PeakOperationObservation>;
-      final routePerformanceData = results[2] as RoutePerformanceData;
+      final routePerformanceData = results[1] as RoutePerformanceData;
+      final peakObservations = routePerformanceData.observations
+          .map(
+            (observation) => PeakOperationObservation(
+              routeId: observation.routeId,
+              tripId: observation.tripId,
+              vehicleId: observation.vehicleId,
+              recordedAt: observation.recordedAt,
+            ),
+          )
+          .toList(growable: false);
       final peakSummary = _peakOperationCalculator.calculate(
         observations: peakObservations,
         periodStart: startUtc,
@@ -97,7 +96,7 @@ class DefaultOperationalEvidenceRepository
     _routesFuture = future;
     future.then<void>(
       (_) {},
-      onError: (Object _, StackTrace __) {
+      onError: (Object _, StackTrace _) {
         if (identical(_routesFuture, future)) _routesFuture = null;
       },
     );

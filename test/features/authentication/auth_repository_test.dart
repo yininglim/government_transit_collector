@@ -14,12 +14,113 @@ void main() {
   const redirect = 'test-auth://callback';
   setUp(() {
     backend = AuthBackend();
-    repository = AuthRepository(client: backend.client, redirectUrl: redirect);
+    repository = AuthRepository(
+      client: backend.client,
+      emailVerificationRedirectUrl: 'https://example.test/verified/',
+      redirectUrl: redirect,
+    );
   });
   tearDown(() async {
     repository.dispose();
     await backend.client.dispose();
   });
+
+  test(
+    'email verification signup and resend use HTTPS without profile writes',
+    () async {
+      backend.google = false;
+      final result = await repository.register(
+        fullName: 'Rider',
+        email: ' rider@example.test ',
+        password: 'Password123!',
+      );
+      expect(result.requiresEmailConfirmation, isTrue);
+      expect(repository.currentSession, isNull);
+      await repository.resendVerificationEmail(' rider@example.test ');
+      expect(backend.requests.map((r) => r.url.path), [
+        '/auth/v1/signup',
+        '/auth/v1/resend',
+      ]);
+      for (final request in backend.requests) {
+        expect(
+          request.url.queryParameters['redirect_to'],
+          'https://example.test/verified/',
+        );
+        expect(jsonDecode(request.body)['email'], 'rider@example.test');
+      }
+      expect(jsonDecode(backend.requests.last.body)['type'], 'signup');
+    },
+  );
+
+  test(
+    'email verification rejects unconfirmed login and allows verified or Google',
+    () async {
+      backend.google = false;
+      backend.loginErrorCode = 'email_not_confirmed';
+      await expectLater(
+        repository.login(email: 'rider@example.test', password: 'Password123!'),
+        throwsA(isA<EmailNotVerifiedException>()),
+      );
+      expect(repository.currentSession, isNull);
+      backend.loginErrorCode = null;
+      backend.emailVerified = false;
+      await expectLater(
+        repository.login(email: 'rider@example.test', password: 'Password123!'),
+        throwsA(isA<EmailNotVerifiedException>()),
+      );
+      expect(repository.currentSession, isNull);
+      backend.emailVerified = true;
+      await repository.login(
+        email: 'rider@example.test',
+        password: 'Password123!',
+      );
+      expect(repository.currentSession, isNotNull);
+      await repository.logout();
+      backend.google = true;
+      backend.emailVerified = false;
+      await backend.signIn();
+      expect(repository.currentSession!.user.id, 'authenticated-owner');
+    },
+  );
+
+  test(
+    'signup respects returned confirmation state without inferring configuration',
+    () async {
+      backend.google = false;
+      for (final state in [(true, false), (false, false), (false, true)]) {
+        backend.confirmationRequired = state.$1;
+        backend.emailVerified = state.$2;
+        final result = await repository.register(
+          fullName: 'Rider',
+          email: 'rider@example.test',
+          password: 'Password123!',
+        );
+        expect(result.requiresEmailConfirmation, state.$1 || !state.$2);
+        expect(repository.currentSession != null, !state.$1 && state.$2);
+        if (!state.$2) expect(backend.client.auth.currentSession, isNull);
+      }
+    },
+  );
+
+  test(
+    'email verification uses the approved HTTPS default without environment configuration',
+    () async {
+      final auth = AuthRepository(client: backend.client);
+      addTearDown(auth.dispose);
+      await auth.register(
+        fullName: 'Rider',
+        email: 'rider@example.test',
+        password: 'Strong1!',
+      );
+      await auth.resendVerificationEmail('rider@example.test');
+      for (final request in backend.requests) {
+        expect(
+          request.url.queryParameters['redirect_to'],
+          'https://looyien.github.io/government-transit-collector-site/',
+        );
+      }
+    },
+  );
 
   for (final role in ['passenger', 'admin']) {
     test(
@@ -93,7 +194,7 @@ void main() {
     () async {
       await repository.login(
         email: ' owner@example.test ',
-        password: 'password123',
+        password: 'Password123!',
       );
       expect(
         backend.requests.last.url.queryParameters['grant_type'],
@@ -106,9 +207,9 @@ void main() {
       final result = await repository.register(
         fullName: ' Rider ',
         email: ' new@example.test ',
-        password: 'password123',
+        password: 'Password123!',
       );
-      expect(result.requiresEmailConfirmation, false);
+      expect(result.requiresEmailConfirmation, true);
       expect(jsonDecode(backend.requests.last.body)['data'], {
         'full_name': 'Rider',
       });
@@ -118,14 +219,14 @@ void main() {
   );
 
   test(
-    'forgot password sends recovery only with exact configured redirect',
+    'forgot password uses HTTPS recovery independently of the app callback',
     () async {
       await repository.sendPasswordReset(' owner@example.test ');
       expect(backend.requests, hasLength(1));
       expect(backend.requests.single.url.path, '/auth/v1/recover');
       expect(
         backend.requests.single.url.queryParameters['redirect_to'],
-        redirect,
+        AuthRepository.passwordRecoveryRedirectUrl,
       );
       expect(
         jsonDecode(backend.requests.single.body)['email'],
@@ -136,6 +237,29 @@ void main() {
         false,
       );
       expect(repository.currentSession, isNull);
+    },
+  );
+
+  test(
+    'reset email cooldown survives form navigation and preserves PKCE request',
+    () async {
+      await repository.sendPasswordReset('owner@example.test');
+      await expectLater(
+        repository.sendPasswordReset('owner@example.test'),
+        throwsA(isA<AuthFlowException>()),
+      );
+      expect(
+        backend.requests.where((r) => r.url.path == '/auth/v1/recover'),
+        hasLength(1),
+      );
+      expect(
+        backend.requests.single.url.queryParameters['redirect_to'],
+        AuthRepository.passwordRecoveryRedirectUrl,
+      );
+      expect(
+        jsonDecode(backend.requests.single.body)['code_challenge'],
+        isNotEmpty,
+      );
     },
   );
 
@@ -163,17 +287,20 @@ void main() {
       expect(repository.recoveryRequired, true);
       expect(repository.hasValidRecoverySession, true);
       backend.requests.clear();
-      await repository.resetPassword('new-password123');
+      await repository.resetPassword('New-password123!');
       expect(backend.requests.first.method, 'PUT');
       expect(backend.requests.first.url.path, '/auth/v1/user');
       expect(
         jsonDecode(backend.requests.first.body)['password'],
-        'new-password123',
+        'New-password123!',
       );
       expect(backend.requests.last.url.path, '/auth/v1/logout');
       expect(repository.currentSession, isNull);
       expect(repository.recoveryRequired, false);
-      expect(backend.storage.values.values, isNot(contains('new-password123')));
+      expect(
+        backend.storage.values.values,
+        isNot(contains('New-password123!')),
+      );
     },
   );
 
@@ -182,7 +309,7 @@ void main() {
     () async {
       await backend.signIn();
       await expectLater(
-        repository.resetPassword('new-password123'),
+        repository.resetPassword('New-password123!'),
         throwsA(isA<AuthFlowException>()),
       );
       expect(backend.requests, isEmpty);
@@ -197,7 +324,7 @@ void main() {
     expect(repository.hasValidRecoverySession, false);
     expect(repository.callbackMessage, AuthRepository.invalidRecoveryMessage);
     await expectLater(
-      repository.resetPassword('new-password123'),
+      repository.resetPassword('New-password123!'),
       throwsA(isA<AuthFlowException>()),
     );
     await repository.cancelRecovery();
@@ -209,7 +336,7 @@ void main() {
     await repository.handleAuthCallback(Uri.parse('$redirect?code=test-code'));
     backend.updateStatus = 401;
     await expectLater(
-      repository.resetPassword('new-password123'),
+      repository.resetPassword('New-password123!'),
       throwsA(
         isA<AuthFlowException>().having(
           (e) => e.message,
@@ -332,7 +459,7 @@ void main() {
   }
 
   test(
-    'missing redirect cannot fall back to an invented or dashboard site URL',
+    'missing app redirect blocks Google but not the dedicated web recovery flow',
     () async {
       final unconfigured = AuthRepository(
         client: backend.client,
@@ -343,11 +470,12 @@ void main() {
         unconfigured.signInWithGoogle(),
         throwsA(isA<AuthFlowException>()),
       );
-      await expectLater(
-        unconfigured.sendPasswordReset('owner@example.test'),
-        throwsA(isA<AuthFlowException>()),
-      );
       expect(backend.requests, isEmpty);
+      await unconfigured.sendPasswordReset('owner@example.test');
+      expect(
+        backend.requests.single.url.queryParameters['redirect_to'],
+        AuthRepository.passwordRecoveryRedirectUrl,
+      );
     },
   );
 

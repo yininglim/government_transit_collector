@@ -97,6 +97,97 @@ void main() {
       throwsA(isA<RoutePerformanceReadException>()),
     );
   });
+
+  test(
+    'screening shares one period fetch and partitions exact routes',
+    () async {
+      final source = FakePeriodSource()
+        ..periodObservations = [row('A'), row('B'), row('A')];
+      final start = DateTime.utc(2026, 8, 26);
+      final end = DateTime.utc(2026, 8, 27);
+      final repository = ScreeningRoutePerformanceRepository(
+        dataSource: source,
+        observationDataSource: source,
+        startUtc: start,
+        endExclusiveUtc: end,
+      );
+
+      final results = await Future.wait([
+        for (final routeId in ['A', 'B', 'C', 'D'])
+          repository.loadRoutePerformance(
+            routeId: routeId,
+            startUtc: start,
+            endExclusiveUtc: end,
+          ),
+      ]);
+
+      expect(source.periodFetches, 1);
+      expect(results[0].observations.map((item) => item.routeId), ['A', 'A']);
+      expect(results[1].observations.map((item) => item.routeId), ['B']);
+      expect(results[2].observations, isEmpty);
+      expect(results[3].observations, isEmpty);
+    },
+  );
+
+  test(
+    'independent screening repositories perform independent fetches',
+    () async {
+      final source = FakePeriodSource()..periodObservations = [row('A')];
+      final start = DateTime.utc(2026);
+      final end = DateTime.utc(2027);
+
+      for (var screening = 0; screening < 2; screening++) {
+        await ScreeningRoutePerformanceRepository(
+          dataSource: source,
+          observationDataSource: source,
+          startUtc: start,
+          endExclusiveUtc: end,
+        ).loadRoutePerformance(
+          routeId: 'A',
+          startUtc: start,
+          endExclusiveUtc: end,
+        );
+      }
+
+      expect(source.periodFetches, 2);
+    },
+  );
+
+  test('screening data preserves existing route performance input', () async {
+    final observations = [row('route')];
+    final legacySource = FakeSource()..observations = observations;
+    final screeningSource = FakePeriodSource()
+      ..periodObservations = observations;
+    final start = DateTime.utc(2026);
+    final end = DateTime.utc(2027);
+
+    final legacy =
+        await DefaultRoutePerformanceRepository(
+          dataSource: legacySource,
+        ).loadRoutePerformance(
+          routeId: 'route',
+          startUtc: start,
+          endExclusiveUtc: end,
+        );
+    final screening =
+        await ScreeningRoutePerformanceRepository(
+          dataSource: screeningSource,
+          observationDataSource: screeningSource,
+          startUtc: start,
+          endExclusiveUtc: end,
+        ).loadRoutePerformance(
+          routeId: 'route',
+          startUtc: start,
+          endExclusiveUtc: end,
+        );
+
+    expect(screening.observations, legacy.observations);
+    expect(screening.schedulesByTripId.keys, legacy.schedulesByTripId.keys);
+    expect(
+      screening.schedulesByTripId['trip']!.scheduledDuration,
+      legacy.schedulesByTripId['trip']!.scheduledDuration,
+    );
+  });
 }
 
 class FakeSource implements RoutePerformanceDataSource {
@@ -180,6 +271,26 @@ class FakeSource implements RoutePerformanceDataSource {
         longitude: 103,
       ),
     ];
+  }
+}
+
+class FakePeriodSource extends FakeSource
+    implements PeriodHistoricalObservationDataSource {
+  List<HistoricalVehicleObservation> periodObservations = [];
+  int periodFetches = 0;
+
+  @override
+  Future<List<HistoricalVehicleObservation>> fetchPeriodObservations({
+    required DateTime startUtc,
+    required DateTime endExclusiveUtc,
+    required int offset,
+    required int limit,
+  }) async {
+    periodFetches++;
+    await Future<void>.delayed(Duration.zero);
+    if (offset >= periodObservations.length) return const [];
+    final end = (offset + limit).clamp(0, periodObservations.length);
+    return periodObservations.sublist(offset, end);
   }
 }
 

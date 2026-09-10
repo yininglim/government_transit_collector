@@ -1,4 +1,6 @@
 abstract final class AuthValidation {
+  static const passwordRequirements =
+      'Password must be at least 8 characters and include uppercase, lowercase, number, and special character.';
   static final RegExp _emailPattern = RegExp(
     r"^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)+$",
   );
@@ -38,7 +40,7 @@ abstract final class AuthValidation {
     String? email,
     String? currentPassword,
   }) {
-    final error = password(value);
+    final error = requiredField(value, 'Password');
     if (error != null) return error;
     if (currentPassword != null && value == currentPassword) {
       return 'New password must be different from your current password.';
@@ -46,6 +48,13 @@ abstract final class AuthValidation {
     if (email?.trim().isNotEmpty == true &&
         value!.trim().toLowerCase() == email!.trim().toLowerCase()) {
       return 'Password cannot be the same as your email address.';
+    }
+    if (value!.length < 8 ||
+        !RegExp(r'[A-Z]').hasMatch(value) ||
+        !RegExp(r'[a-z]').hasMatch(value) ||
+        !RegExp(r'[0-9]').hasMatch(value) ||
+        !RegExp(r'[!-/:-@\[-`{-~]').hasMatch(value)) {
+      return passwordRequirements;
     }
     return null;
   }

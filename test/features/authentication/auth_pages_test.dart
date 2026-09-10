@@ -20,6 +20,13 @@ class PageAuth extends AuthRepository {
       );
   int googleCalls = 0;
   int loginCalls = 0;
+  int verificationEmails = 0;
+  bool unverified = false;
+  @override
+  Future<void> resendVerificationEmail(String email) async {
+    verificationEmails++;
+  }
+
   int registrationCalls = 0;
   String? sentEmail;
   String? updatedPassword;
@@ -61,6 +68,7 @@ class PageAuth extends AuthRepository {
   @override
   Future<void> login({required String email, required String password}) async {
     loginCalls++;
+    if (unverified) throw const EmailNotVerifiedException();
   }
 
   @override
@@ -172,12 +180,30 @@ void main() {
       find.byType(TextFormField).at(0),
       'rider@example.test',
     );
-    await tester.enterText(find.byType(TextFormField).at(1), 'password123');
+    await tester.enterText(find.byType(TextFormField).at(1), 'Password123!');
     await tester.ensureVisible(find.text('Sign In'));
     await tester.tap(find.text('Sign In'));
     await tester.pump();
     expect(repository.loginCalls, 1);
     expect(repository.googleCalls, 0);
+  });
+
+  testWidgets('email verification screen handles unverified sign in', (
+    tester,
+  ) async {
+    final repository = PageAuth()..unverified = true;
+    await show(tester, LoginPage(repository: repository));
+    await tester.enterText(
+      find.byType(TextFormField).at(0),
+      'rider@example.test',
+    );
+    await tester.enterText(find.byType(TextFormField).at(1), 'Password123!');
+    await tap(tester, find.text('Sign In'));
+    expect(find.text('Email Not Verified'), findsOneWidget);
+    await tap(tester, find.text('Resend Verification Email'));
+    expect(repository.verificationEmails, 1);
+    await tap(tester, find.text('Back to Sign In'));
+    expect(find.byType(LoginPage), findsOneWidget);
   });
 
   testWidgets('signup remains usable and returns email confirmation message', (
@@ -190,31 +216,36 @@ void main() {
     for (final entry in [
       'Rider',
       'rider@example.test',
-      'password123',
-      'password123',
+      'Password123!',
+      'Password123!',
     ].asMap().entries) {
       await tester.enterText(fields.at(entry.key), entry.value);
     }
     await tap(tester, find.text('Register'));
     expect(repository.registrationCalls, 1);
-    expect(find.byType(LoginPage), findsOneWidget);
+    expect(find.text('Verify Your Email'), findsOneWidget);
+    expect(find.text('rider@example.test'), findsOneWidget);
     expect(
-      find.text(
-        'Account created. Check your email to confirm it before signing in.',
-      ),
-      findsOneWidget,
+      tester
+          .widget<FilledButton>(
+            find.widgetWithText(FilledButton, 'Resend Verification Email'),
+          )
+          .onPressed,
+      isNull,
     );
+    await tester.pump(const Duration(seconds: 61));
+    await tap(tester, find.text('Resend Verification Email'));
+    expect(repository.verificationEmails, 1);
+    await tap(tester, find.text('Back to Sign In'));
+    expect(find.byType(LoginPage), findsOneWidget);
   });
 
   testWidgets(
     'forgot validates email and displays neutral success without updating password',
     (tester) async {
       final repository = PageAuth();
-      await show(
-        tester,
-        ForgotPasswordPage(repository: repository),
-        keyboard: true,
-      );
+      await show(tester, LoginPage(repository: repository), keyboard: true);
+      await tap(tester, find.text('Forgot Password?'));
       await tap(tester, find.text('Send Reset Link'));
       expect(find.text('Email is required.'), findsOneWidget);
       expect(repository.sentEmail, isNull);
@@ -262,20 +293,37 @@ void main() {
     expect(find.text('Password is required.'), findsOneWidget);
     expect(find.text('Confirm password is required.'), findsOneWidget);
     final fields = find.byType(TextFormField);
+    for (var index = 0; index < 2; index++) {
+      final editable = find.descendant(
+        of: fields.at(index),
+        matching: find.byType(EditableText),
+      );
+      final eye = find.descendant(
+        of: fields.at(index),
+        matching: find.byType(IconButton),
+      );
+      expect(tester.widget<EditableText>(editable).obscureText, isTrue);
+      await tap(tester, eye);
+      expect(tester.widget<EditableText>(editable).obscureText, isFalse);
+      await tap(tester, eye);
+      expect(tester.widget<EditableText>(editable).obscureText, isTrue);
+    }
     await tester.enterText(fields.at(0), 'short');
     await tap(tester, button);
     expect(
-      find.text('Password must be at least 8 characters.'),
+      find.text(
+        'Password must be at least 8 characters and include uppercase, lowercase, number, and special character.',
+      ),
       findsOneWidget,
     );
-    await tester.enterText(fields.at(0), 'password123');
+    await tester.enterText(fields.at(0), 'Password123!');
     await tester.enterText(fields.at(1), 'different');
     await tap(tester, button);
     expect(find.text('Passwords do not match.'), findsOneWidget);
     expect(repository.updatedPassword, isNull);
-    await tester.enterText(fields.at(1), 'password123');
+    await tester.enterText(fields.at(1), 'Password123!');
     await tap(tester, button);
-    expect(repository.updatedPassword, 'password123');
+    expect(repository.updatedPassword, 'Password123!');
     expect(
       find.text(
         'Password updated successfully. Please sign in with your new password.',
@@ -291,8 +339,8 @@ void main() {
       final repository = PageAuth();
       await show(tester, AuthGate(repository: repository));
       expect(find.byType(ResetPasswordPage), findsOneWidget);
-      await tester.enterText(find.byType(TextFormField).at(0), 'password123');
-      await tester.enterText(find.byType(TextFormField).at(1), 'password123');
+      await tester.enterText(find.byType(TextFormField).at(0), 'Password123!');
+      await tester.enterText(find.byType(TextFormField).at(1), 'Password123!');
       await tap(tester, find.widgetWithText(FilledButton, 'Reset Password'));
       expect(find.byType(LoginPage), findsOneWidget);
       expect(

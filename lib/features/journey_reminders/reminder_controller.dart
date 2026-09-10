@@ -57,9 +57,17 @@ class ReminderController extends ChangeNotifier {
         if (owner == null || owner != repository.userId) return;
         final records = await repository.load();
         if (owner != repository.userId) return;
+        final previous = _records;
         _records = records.where((r) => r.owner == owner).toList();
-        // Reconcile once on login/resume; no network or notification polling.
-        await notifications.cancelAll();
+        // Preserve due/delivered notifications during ordinary page/resume refresh.
+        // Only cancel future reminders removed from persistence.
+        final retainedIds = _records.map((r) => r.id).toSet();
+        for (final record in previous) {
+          if (record.reminderAt.isAfter(now()) &&
+              !retainedIds.contains(record.id)) {
+            await notifications.cancel(record.id);
+          }
+        }
         final permitted = await notifications.permission(request: false);
         if (permitted) {
           for (final record in upcoming) {

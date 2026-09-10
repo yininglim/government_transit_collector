@@ -3,7 +3,6 @@ import 'package:government_transit_collector/features/ai_transit_recommendation/
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_network_evidence_repository.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/scheduled_service_evidence_models.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/timetable_recommendation_repository.dart';
-import 'package:government_transit_collector/features/realtime_vehicle/data/trip_progress_repository.dart';
 import 'package:government_transit_collector/features/route_performance/data/route_performance_models.dart';
 import 'package:government_transit_collector/features/route_performance/data/route_performance_repository.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -21,9 +20,39 @@ class ScheduledTripMetadata {
   final int? directionId;
 }
 
+class ScheduledStopTimeRecord {
+  const ScheduledStopTimeRecord({
+    required this.tripId,
+    required this.stopId,
+    required this.stopSequence,
+    required this.arrivalSeconds,
+    required this.departureSeconds,
+  });
+
+  final String tripId;
+  final String stopId;
+  final int stopSequence;
+  final int? arrivalSeconds;
+  final int? departureSeconds;
+}
+
 abstract interface class ScheduledServiceDataSource {
   Future<List<ScheduledTripMetadata>> loadTripMetadata(List<String> tripIds);
   Future<List<GtfsServiceCalendar>> loadCalendars(List<String> serviceIds);
+}
+
+abstract interface class LeanScheduledServiceDataSource {
+  Future<List<ScheduledTripMetadata>> fetchRouteTripMetadata({
+    required String routeId,
+    required int offset,
+    required int limit,
+  });
+
+  Future<List<ScheduledStopTimeRecord>> fetchStopTimes({
+    required List<String> tripIds,
+    required int offset,
+    required int limit,
+  });
 }
 
 abstract interface class ScheduledServiceEvidenceRepository {
@@ -41,16 +70,14 @@ class DefaultScheduledServiceEvidenceRepository
     ScheduledServiceDataSource? dataSource,
     bool useLeanRouteLoader = false,
     RoutePerformanceRepository? routeRepository,
-    RouteTripDataSource? routeTripDataSource,
-    TripProgressStopTimeDataSource? stopTimeDataSource,
+    LeanScheduledServiceDataSource? leanDataSource,
   }) : _routeNetworkRepository = useLeanRouteLoader
            ? routeNetworkRepository
            : routeNetworkRepository ?? DefaultRouteNetworkEvidenceRepository(),
        _leanRouteLoader = useLeanRouteLoader
            ? _LeanScheduledRouteLoader(
                routeRepository: routeRepository,
-               routeTripDataSource: routeTripDataSource,
-               stopTimeDataSource: stopTimeDataSource,
+               dataSource: leanDataSource,
              )
            : null,
        _dataSource = dataSource ?? SupabaseScheduledServiceDataSource();
@@ -72,16 +99,18 @@ class DefaultScheduledServiceEvidenceRepository
     }
     try {
       final routeData = _leanRouteLoader != null
-          ? await _leanRouteLoader!.loadRoute(routeId)
+          ? await _leanRouteLoader.loadRoute(routeId)
           : _ScheduledRouteInput.fromNetwork(
               await _routeNetworkRepository!.loadRoute(routeId),
             );
       final tripIds = routeData.trips
           .map((trip) => trip.tripId)
           .toList(growable: false);
-      final metadata = tripIds.isEmpty
-          ? const <ScheduledTripMetadata>[]
-          : await _dataSource.loadTripMetadata(tripIds);
+      final metadata =
+          routeData.metadata ??
+          (tripIds.isEmpty
+              ? const <ScheduledTripMetadata>[]
+              : await _dataSource.loadTripMetadata(tripIds));
       final metadataByTrip = {for (final trip in metadata) trip.tripId: trip};
       final serviceIds = metadata
           .map((trip) => trip.serviceId)
@@ -292,7 +321,11 @@ class DefaultScheduledServiceEvidenceRepository
 }
 
 class _ScheduledRouteInput {
-  const _ScheduledRouteInput({required this.route, required this.trips});
+  const _ScheduledRouteInput({
+    required this.route,
+    required this.trips,
+    this.metadata,
+  });
 
   factory _ScheduledRouteInput.fromNetwork(AiRouteNetworkEvidence network) {
     return _ScheduledRouteInput(
@@ -306,6 +339,7 @@ class _ScheduledRouteInput {
 
   final RoutePerformanceRoute route;
   final List<_ScheduledTripInput> trips;
+  final List<ScheduledTripMetadata>? metadata;
 }
 
 class _ScheduledTripInput {
@@ -318,24 +352,22 @@ class _ScheduledTripInput {
 class _LeanScheduledRouteLoader {
   _LeanScheduledRouteLoader({
     RoutePerformanceRepository? routeRepository,
-    RouteTripDataSource? routeTripDataSource,
-    TripProgressStopTimeDataSource? stopTimeDataSource,
-  }) : _routeRepository = routeRepository ?? DefaultRoutePerformanceRepository(),
-       _routeTripDataSource =
-           routeTripDataSource ?? SupabaseRouteTripDataSource(),
-       _stopTimeDataSource =
-           stopTimeDataSource ?? SupabaseTripProgressStopTimeDataSource();
+    LeanScheduledServiceDataSource? dataSource,
+  }) : _routeRepository =
+           routeRepository ?? DefaultRoutePerformanceRepository(),
+       _dataSource = dataSource ?? SupabaseLeanScheduledServiceDataSource();
 
   static const _pageSize = 1000;
+  static const _tripBatchSize = 100;
 
   final RoutePerformanceRepository _routeRepository;
-  final RouteTripDataSource _routeTripDataSource;
-  final TripProgressStopTimeDataSource _stopTimeDataSource;
+  final LeanScheduledServiceDataSource _dataSource;
+  Future<List<RoutePerformanceRoute>>? _routesFuture;
 
   Future<_ScheduledRouteInput> loadRoute(String routeId) async {
     final results = await Future.wait([
-      _routeRepository.loadRoutes(),
-      _loadTripIds(routeId),
+      _loadRoutes(),
+      _loadTripMetadata(routeId),
     ]);
     final routes = results[0] as List<RoutePerformanceRoute>;
     final route = routes.where((item) => item.routeId == routeId).firstOrNull;
@@ -344,18 +376,19 @@ class _LeanScheduledRouteLoader {
         'The selected route is not available.',
       );
     }
-    final tripIds = results[1] as List<String>;
-    final stopTimes = await Future.wait([
-      for (final tripId in tripIds) _stopTimeDataSource.loadStopTimes(tripId),
-    ]);
+    final metadata = results[1] as List<ScheduledTripMetadata>;
+    final stopTimesByTrip = await _loadStopTimes(
+      metadata.map((trip) => trip.tripId).toList(growable: false),
+    );
     return _ScheduledRouteInput(
       route: route,
+      metadata: metadata,
       trips: [
-        for (var index = 0; index < tripIds.length; index++)
+        for (final trip in metadata)
           _ScheduledTripInput(
-            tripId: tripIds[index],
+            tripId: trip.tripId,
             stops: [
-              for (final stopTime in stopTimes[index])
+              for (final stopTime in stopTimesByTrip[trip.tripId] ?? const [])
                 AiRouteStopEvidence(
                   stopId: stopTime.stopId,
                   stopName: null,
@@ -370,17 +403,116 @@ class _LeanScheduledRouteLoader {
     );
   }
 
-  Future<List<String>> _loadTripIds(String routeId) async {
-    final tripIds = <String>[];
+  Future<List<RoutePerformanceRoute>> _loadRoutes() {
+    final existing = _routesFuture;
+    if (existing != null) return existing;
+    final future = _routeRepository.loadRoutes();
+    _routesFuture = future;
+    future.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {
+        if (identical(_routesFuture, future)) _routesFuture = null;
+      },
+    );
+    return future;
+  }
+
+  Future<List<ScheduledTripMetadata>> _loadTripMetadata(String routeId) async {
+    final trips = <ScheduledTripMetadata>[];
     for (var offset = 0; ; offset += _pageSize) {
-      final page = await _routeTripDataSource.fetchTripIds(
+      final page = await _dataSource.fetchRouteTripMetadata(
         routeId: routeId,
         offset: offset,
         limit: _pageSize,
       );
-      tripIds.addAll(page);
-      if (page.length < _pageSize) return tripIds;
+      trips.addAll(page);
+      if (page.length < _pageSize) return trips;
     }
+  }
+
+  Future<Map<String, List<ScheduledStopTimeRecord>>> _loadStopTimes(
+    List<String> tripIds,
+  ) async {
+    final grouped = <String, List<ScheduledStopTimeRecord>>{};
+    for (var start = 0; start < tripIds.length; start += _tripBatchSize) {
+      final end = (start + _tripBatchSize).clamp(0, tripIds.length);
+      final batch = tripIds.sublist(start, end);
+      for (var offset = 0; ; offset += _pageSize) {
+        final page = await _dataSource.fetchStopTimes(
+          tripIds: batch,
+          offset: offset,
+          limit: _pageSize,
+        );
+        for (final row in page) {
+          grouped.putIfAbsent(row.tripId, () => []).add(row);
+        }
+        if (page.length < _pageSize) break;
+      }
+    }
+    for (final rows in grouped.values) {
+      rows.sort((a, b) => a.stopSequence.compareTo(b.stopSequence));
+    }
+    return grouped;
+  }
+}
+
+class SupabaseLeanScheduledServiceDataSource
+    implements LeanScheduledServiceDataSource {
+  SupabaseLeanScheduledServiceDataSource({SupabaseClient? client})
+    : _client = client ?? Supabase.instance.client;
+
+  final SupabaseClient _client;
+
+  @override
+  Future<List<ScheduledTripMetadata>> fetchRouteTripMetadata({
+    required String routeId,
+    required int offset,
+    required int limit,
+  }) async {
+    final rows = await _client
+        .from('gtfs_trips')
+        .select('trip_id, service_id, direction_id')
+        .eq('route_id', routeId)
+        .order('trip_id')
+        .range(offset, offset + limit - 1);
+    return rows
+        .map(
+          (row) => ScheduledTripMetadata(
+            tripId: row['trip_id'] as String,
+            serviceId: row['service_id'] as String,
+            directionId: row['direction_id'] as int?,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  @override
+  Future<List<ScheduledStopTimeRecord>> fetchStopTimes({
+    required List<String> tripIds,
+    required int offset,
+    required int limit,
+  }) async {
+    if (tripIds.isEmpty) return const [];
+    final rows = await _client
+        .from('gtfs_stop_times')
+        .select(
+          'trip_id, stop_id, stop_sequence, arrival_seconds, departure_seconds',
+        )
+        .inFilter('trip_id', tripIds)
+        .order('trip_id')
+        .order('stop_sequence')
+        .range(offset, offset + limit - 1);
+    return rows
+        .map(
+          (row) => ScheduledStopTimeRecord(
+            tripId: row['trip_id'] as String,
+            stopId: row['stop_id'] as String,
+            stopSequence: (row['stop_sequence'] as num).toInt(),
+            arrivalSeconds: (row['arrival_seconds'] as num?)?.toInt(),
+            departureSeconds: (row['departure_seconds'] as num?)?.toInt(),
+          ),
+        )
+        .toList(growable: false);
   }
 }
 

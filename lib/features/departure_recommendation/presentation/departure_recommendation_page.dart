@@ -1,3 +1,7 @@
+import 'package:government_transit_collector/features/tracked_journeys/tracked_journey_repository.dart';
+import 'package:government_transit_collector/features/tracked_journeys/tracked_journey_widgets.dart';
+import 'package:government_transit_collector/features/tracked_journeys/tracked_journey.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'journey_comparison.dart';
 import 'dart:async';
 import 'package:government_transit_collector/features/journey_reminders/journey_reminder.dart';
@@ -105,9 +109,11 @@ class DepartureRecommendationPage extends StatefulWidget {
     this.feedbackRepository,
     this.feedbackReferenceRepository,
     this.reminderController,
+    this.trackedJourneyRepository,
     super.key,
   });
 
+  final TrackedJourneyRepository? trackedJourneyRepository;
   final DepartureStopRepository stopRepository;
   final ReminderController? reminderController;
   final DirectTripRepository tripRepository;
@@ -137,16 +143,62 @@ class DepartureRecommendationPage extends StatefulWidget {
 
   @override
   State<DepartureRecommendationPage> createState() =>
-      _DepartureRecommendationPageState();
+      DepartureRecommendationPageState();
 }
 
-class _DepartureRecommendationPageState
+class DepartureRecommendationPageState
     extends State<DepartureRecommendationPage> {
   late Future<List<SavedJourney>> _savedJourneys = _loadSavedJourneys();
 
   Future<List<SavedJourney>> _loadSavedJourneys() async =>
       (widget.savedJourneyRepository ?? SupabaseSavedJourneyRepository())
           .load();
+
+  void selectJourney({SavedJourney? journey, RecentJourneySearch? recent}) {
+    if (journey != null) _useSavedJourney(journey);
+    if (recent != null) _restoreRecentSearch(recent);
+  }
+
+  bool _hasSuccessfulSearch = false;
+
+  Future<void> _clearPlan() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Clear this journey plan?'),
+        content: const Text(
+          'Your selected route and current recommendations will be cleared.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Clear'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() {
+      _origin = null;
+      _destination = null;
+      _reachable = const [];
+      _destinationRequest++;
+      _destinationError = null;
+      _timeMode = TravelTimeMode.departAt;
+      final initial =
+          widget.initialDateTime ??
+          currentTransitServiceDateTime(now: widget.now);
+      _travelDate = DateTime(initial.year, initial.month, initial.day);
+      _travelTime = TimeOfDay.fromDateTime(initial);
+      _resetSearchState();
+      _hasSuccessfulSearch = false;
+    });
+    if (_scrollController.hasClients) _scrollController.jumpTo(0);
+  }
 
   Future<void> _useSavedJourney(SavedJourney journey) async {
     if (_inputsBusy || !journey.usable) return;
@@ -223,6 +275,7 @@ class _DepartureRecommendationPageState
       _searching || _restoringRecent || _loadingDestinations;
   final _scrollController = ScrollController();
 
+  bool _recentExpanded = false;
   List<RecentJourneySearch>? _recentSearches;
   final Set<int> _deletingRecentSearchIds = {};
   String? _historyError;
@@ -287,6 +340,34 @@ class _DepartureRecommendationPageState
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _restoreRecentSearch(recent);
       });
+    }
+  }
+
+  bool _startingJourney = false;
+  Future<bool> _startTracking(TrackedJourneySnapshot snapshot) async {
+    if (_startingJourney) return false;
+    _startingJourney = true;
+    try {
+      final repository =
+          widget.trackedJourneyRepository ??
+          SupabaseTrackedJourneyRepository(
+            userId: Supabase.instance.client.auth.currentUser?.id ?? '',
+          );
+      return await startPassengerJourney(context, repository, snapshot);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Journey history could not be saved. Try Track Journey again to save it.',
+            ),
+          ),
+        );
+      }
+      // Preserve access to the existing tracker even during a storage outage.
+      return true;
+    } finally {
+      _startingJourney = false;
     }
   }
 
@@ -597,6 +678,7 @@ class _DepartureRecommendationPageState
       _timetableError = timetableError;
 
       _recommendations = recommendations;
+      if (recommendations?.isNotEmpty == true) _hasSuccessfulSearch = true;
       _routeStructureFound = routeStructureFound;
 
       _searching = false;
@@ -919,10 +1001,24 @@ class _DepartureRecommendationPageState
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            Text(
-                              'Plan your journey',
-                              style: Theme.of(context).textTheme.titleLarge
-                                  ?.copyWith(fontWeight: FontWeight.w700),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    'Plan Your Journey',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleLarge
+                                        ?.copyWith(fontWeight: FontWeight.w700),
+                                  ),
+                                ),
+                                if (_hasSuccessfulSearch)
+                                  TextButton(
+                                    key: const Key('clear-journey-plan'),
+                                    onPressed: _inputsBusy ? null : _clearPlan,
+                                    child: const Text('Clear'),
+                                  ),
+                              ],
                             ),
                             const SizedBox(height: 4),
                             Text(
@@ -1234,6 +1330,7 @@ class _DepartureRecommendationPageState
             journeyMapRepository:
                 widget.journeyMapRepository ?? GtfsJourneyMapRepository(),
             selectedJourneyTrackerBuilder: widget.selectedJourneyTrackerBuilder,
+            onStartTracking: _startTracking,
             liveAvailability:
                 _liveAvailability[recommendationAvailabilityKey(
                   recommendation,
@@ -1290,6 +1387,7 @@ class _DepartureRecommendationPageState
             clipBehavior: Clip.antiAlias,
             child: Column(
               children: _recentSearches!
+                  .take(_recentExpanded ? 10 : 3)
                   .map(
                     (search) => ListTile(
                       key: Key(
@@ -1341,6 +1439,11 @@ class _DepartureRecommendationPageState
                   .toList(growable: false),
             ),
           ),
+        if (_historyError == null && (_recentSearches?.length ?? 0) > 3)
+          TextButton(
+            onPressed: () => setState(() => _recentExpanded = !_recentExpanded),
+            child: Text(_recentExpanded ? 'Show Less' : 'View More'),
+          ),
       ],
     );
   }
@@ -1359,6 +1462,7 @@ class _RecommendationCard extends StatelessWidget {
     required this.liveStatusLoading,
     required this.liveStatusUnavailable,
     required this.onReportProblem,
+    required this.onStartTracking,
     this.reminders,
     this.now,
     this.selectedJourneyTrackerBuilder,
@@ -1387,6 +1491,7 @@ class _RecommendationCard extends StatelessWidget {
   final bool liveStatusUnavailable;
 
   final VoidCallback onReportProblem;
+  final Future<bool> Function(TrackedJourneySnapshot) onStartTracking;
 
   String _routeLabel(String routeId, String? shortName) {
     final trimmed = shortName?.trim();
@@ -1688,7 +1793,7 @@ class _RecommendationCard extends StatelessWidget {
                             key: Key(
                               'track-journey-${recommendation.departureSeconds}',
                             ),
-                            onPressed: () {
+                            onPressed: () async {
                               final selected =
                                   SelectedJourneyTracking.fromRecommendation(
                                     recommendation: recommendation,
@@ -1696,6 +1801,16 @@ class _RecommendationCard extends StatelessWidget {
                                     destinationStopName: destinationStopName,
                                     travelDate: travelDate,
                                   );
+
+                              final started = await onStartTracking(
+                                TrackedJourneySnapshot(
+                                  recommendation: recommendation,
+                                  originName: originStopName,
+                                  destinationName: destinationStopName,
+                                  serviceDate: travelDate,
+                                ),
+                              );
+                              if (!context.mounted || !started) return;
 
                               Navigator.of(context).push(
                                 MaterialPageRoute<void>(

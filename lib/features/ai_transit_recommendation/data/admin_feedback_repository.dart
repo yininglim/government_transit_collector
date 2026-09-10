@@ -103,6 +103,65 @@ class DefaultAdminFeedbackRepository implements AdminFeedbackRepository {
   }
 }
 
+class ScreeningAdminFeedbackRepository implements AdminFeedbackRepository {
+  ScreeningAdminFeedbackRepository({
+    required AdminFeedbackRepository delegate,
+    required this.startUtc,
+    required this.endExclusiveUtc,
+  }) {
+    _delegate = delegate;
+  }
+
+  late final AdminFeedbackRepository _delegate;
+  final DateTime startUtc;
+  final DateTime endExclusiveUtc;
+  Future<_ScreeningFeedbackPeriod>? _feedbackFuture;
+
+  @override
+  Future<List<AdminFeedbackRecord>> loadFeedback({
+    String? routeId,
+    String? issueType,
+    DateTime? startUtc,
+    DateTime? endExclusiveUtc,
+  }) async {
+    if (startUtc != this.startUtc || endExclusiveUtc != this.endExclusiveUtc) {
+      throw const AdminFeedbackReadException(
+        'The screening period does not match the feedback context.',
+      );
+    }
+    final period = await (_feedbackFuture ??= _loadPeriod());
+    final records = routeId == null
+        ? period.records
+        : period.byRoute[routeId] ?? const <AdminFeedbackRecord>[];
+    if (issueType == null) return records.toList(growable: false);
+    return records
+        .where((record) => record.issueTypes.contains(issueType))
+        .toList(growable: false);
+  }
+
+  Future<_ScreeningFeedbackPeriod> _loadPeriod() async {
+    final records = await _delegate.loadFeedback(
+      startUtc: startUtc,
+      endExclusiveUtc: endExclusiveUtc,
+    );
+    final grouped = <String, List<AdminFeedbackRecord>>{};
+    for (final record in records) {
+      grouped.putIfAbsent(record.routeId, () => []).add(record);
+    }
+    return _ScreeningFeedbackPeriod(records: records, byRoute: grouped);
+  }
+}
+
+class _ScreeningFeedbackPeriod {
+  const _ScreeningFeedbackPeriod({
+    required this.records,
+    required this.byRoute,
+  });
+
+  final List<AdminFeedbackRecord> records;
+  final Map<String, List<AdminFeedbackRecord>> byRoute;
+}
+
 class SupabaseAdminFeedbackDataSource implements AdminFeedbackDataSource {
   SupabaseAdminFeedbackDataSource({SupabaseClient? client})
     : _client = client ?? Supabase.instance.client;
