@@ -38,6 +38,7 @@ class _BusFrequencyRecommendationPageState
   bool _screening = false;
   bool _analysing = false;
   final Set<String> _expandedGroups = <String>{};
+  _RecommendationActionFilter _actionFilter = _RecommendationActionFilter.all;
 
   @override
   void initState() {
@@ -84,7 +85,11 @@ class _BusFrequencyRecommendationPageState
   }
 
   Future<void> _startNewAnalysis() async {
-    _session.clear();
+    setState(() {
+      _actionFilter = _RecommendationActionFilter.all;
+      _expandedGroups.clear();
+      _session.clear();
+    });
     await _prepareEvidence();
   }
 
@@ -109,6 +114,7 @@ class _BusFrequencyRecommendationPageState
     if (!mounted) return;
     setState(() {
       _expandedGroups.clear();
+      _actionFilter = _RecommendationActionFilter.all;
       _session.recommendationResult = result;
       _analysing = false;
     });
@@ -127,6 +133,7 @@ class _BusFrequencyRecommendationPageState
     if (!mounted) return;
     setState(() {
       _expandedGroups.clear();
+      _actionFilter = _RecommendationActionFilter.all;
       _session.recommendationResult = result;
       _analysing = false;
     });
@@ -364,16 +371,33 @@ class _BusFrequencyRecommendationPageState
         ),
       );
     }
-    final actionableGroups = synthesis.recommendationGroups;
+    final actionableGroups = synthesis.recommendationGroups
+        .where(
+          (group) =>
+              group.action !=
+              BusFrequencyRecommendationAction.insufficientEvidence,
+        )
+        .toList(growable: false);
+    final increaseCount = _actionCount(
+      actionableGroups,
+      BusFrequencyRecommendationAction.increasePeakHourFrequency,
+    );
+    final maintainCount = _actionCount(
+      actionableGroups,
+      BusFrequencyRecommendationAction.maintainService,
+    );
+    final decreaseCount = _actionCount(
+      actionableGroups,
+      BusFrequencyRecommendationAction.decreaseService,
+    );
+    final actionableCount = increaseCount + maintainCount + decreaseCount;
+    final visibleGroups = actionableGroups
+        .where((group) => _actionFilter.includes(group.action))
+        .toList(growable: false);
     return Column(
       key: const Key('grouped-recommendation-result'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(
-          'Recommendation Results',
-          style: Theme.of(context).textTheme.titleLarge,
-        ),
-        const SizedBox(height: 12),
         Card(
           key: const Key('overall-ai-summary'),
           child: Padding(
@@ -392,16 +416,125 @@ class _BusFrequencyRecommendationPageState
           ),
         ),
         const SizedBox(height: 16),
+        _recommendationOverview(
+          actionableCount: actionableCount,
+          increaseCount: increaseCount,
+          maintainCount: maintainCount,
+          decreaseCount: decreaseCount,
+        ),
+        const SizedBox(height: 16),
+        _actionFilterControl(
+          allCount: actionableCount,
+          increaseCount: increaseCount,
+          maintainCount: maintainCount,
+          decreaseCount: decreaseCount,
+        ),
+        const SizedBox(height: 20),
+        Text(
+          'Recommendation Results',
+          style: Theme.of(context).textTheme.titleLarge,
+        ),
+        const SizedBox(height: 12),
         if (actionableGroups.isEmpty)
           const Text(
             'No actionable recommendations are available with the current evidence.',
             key: Key('no-actionable-frequency-recommendations'),
           )
+        else if (visibleGroups.isEmpty)
+          const Text('No recommendations match the selected action filter.')
         else
-          for (final group in actionableGroups) ...[
+          for (final group in visibleGroups) ...[
             _groupCard(context, group),
             const SizedBox(height: 12),
           ],
+      ],
+    );
+  }
+
+  Widget _recommendationOverview({
+    required int actionableCount,
+    required int increaseCount,
+    required int maintainCount,
+    required int decreaseCount,
+  }) => Card(
+    key: const Key('recommendation-overview'),
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Recommendation Overview',
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 16,
+            runSpacing: 12,
+            children: [
+              _metric(
+                'Actionable Recommendations',
+                displayCount(actionableCount),
+                key: const Key('overview-actionable'),
+              ),
+              _metric(
+                'Increase Frequency',
+                displayCount(increaseCount),
+                key: const Key('overview-increase'),
+              ),
+              _metric(
+                'Maintain Service',
+                displayCount(maintainCount),
+                key: const Key('overview-maintain'),
+              ),
+              _metric(
+                'Decrease Service',
+                displayCount(decreaseCount),
+                key: const Key('overview-decrease'),
+              ),
+              _metric(
+                'Routes Requiring Change',
+                displayCount(increaseCount + decreaseCount),
+                key: const Key('overview-requiring-change'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    ),
+  );
+
+  Widget _actionFilterControl({
+    required int allCount,
+    required int increaseCount,
+    required int maintainCount,
+    required int decreaseCount,
+  }) {
+    final counts = {
+      _RecommendationActionFilter.all: allCount,
+      _RecommendationActionFilter.increase: increaseCount,
+      _RecommendationActionFilter.maintain: maintainCount,
+      _RecommendationActionFilter.decrease: decreaseCount,
+    };
+    return Column(
+      key: const Key('recommendation-action-filter'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('Action Filter', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final filter in _RecommendationActionFilter.values)
+              FilterChip(
+                key: Key('action-filter-${filter.name}'),
+                label: Text('${filter.label} ${displayCount(counts[filter]!)}'),
+                selected: _actionFilter == filter,
+                onSelected: (_) => setState(() => _actionFilter = filter),
+              ),
+          ],
+        ),
       ],
     );
   }
@@ -586,7 +719,8 @@ class _BusFrequencyRecommendationPageState
       .where((candidate) => candidate.route.routeId == routeId)
       .firstOrNull;
 
-  Widget _metric(String label, String value) => ConstrainedBox(
+  Widget _metric(String label, String value, {Key? key}) => ConstrainedBox(
+    key: key,
     constraints: const BoxConstraints(minWidth: 135),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -784,6 +918,37 @@ class _BusFrequencyRecommendationPageState
     ),
   );
 }
+
+enum _RecommendationActionFilter {
+  all('All'),
+  increase('Increase'),
+  maintain('Maintain'),
+  decrease('Decrease');
+
+  const _RecommendationActionFilter(this.label);
+
+  final String label;
+
+  bool includes(BusFrequencyRecommendationAction action) => switch (this) {
+    _RecommendationActionFilter.all =>
+      action == BusFrequencyRecommendationAction.increasePeakHourFrequency ||
+          action == BusFrequencyRecommendationAction.maintainService ||
+          action == BusFrequencyRecommendationAction.decreaseService,
+    _RecommendationActionFilter.increase =>
+      action == BusFrequencyRecommendationAction.increasePeakHourFrequency,
+    _RecommendationActionFilter.maintain =>
+      action == BusFrequencyRecommendationAction.maintainService,
+    _RecommendationActionFilter.decrease =>
+      action == BusFrequencyRecommendationAction.decreaseService,
+  };
+}
+
+int _actionCount(
+  List<BusFrequencyRecommendationGroup> groups,
+  BusFrequencyRecommendationAction action,
+) => groups
+    .where((group) => group.action == action)
+    .fold(0, (count, group) => count + group.routeRecommendations.length);
 
 String _actionLabel(BusFrequencyRecommendationAction action) =>
     switch (action) {
