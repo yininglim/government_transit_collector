@@ -116,6 +116,8 @@ class _MyReportsSectionState extends State<MyReportsSection> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
     if (_error != null) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -141,9 +143,7 @@ class _MyReportsSectionState extends State<MyReportsSection> {
             clipBehavior: Clip.antiAlias,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(16),
-              side: BorderSide(
-                color: Theme.of(context).colorScheme.outlineVariant,
-              ),
+              side: BorderSide(color: colors.primary.withValues(alpha: 0.16)),
             ),
             child: ListTile(
               contentPadding: const EdgeInsets.symmetric(
@@ -155,23 +155,101 @@ class _MyReportsSectionState extends State<MyReportsSection> {
                   ?.copyWith(
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
-              title: Text(report.issueTypes.join('\n')),
-              subtitle: Text(
-                [
-                  '${report.routeLabel ?? report.routeId} · ${report.stopName ?? report.stopId}',
-                  if (report.serviceDate != null)
-                    'Service: ${_date(report.serviceDate!)}${report.scheduledDepartureSeconds == null ? '' : ' · ${feedbackDepartureLabel(report.scheduledDepartureSeconds!)}'}'
-                  else
-                    'Service date/time not recorded',
-                  'Submitted: ${_submitted(report.createdAt)}',
-                ].join('\n'),
+              title: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(5),
+                    decoration: BoxDecoration(
+                      color: colors.primary.withValues(alpha: 0.07),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(
+                      Icons.report_problem_outlined,
+                      size: 17,
+                      color: colors.primary,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      report.issueTypes.join('\n'),
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                        height: 1.35,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              subtitle: Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 4,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: colors.primary.withValues(alpha: 0.09),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            report.routeLabel ?? report.routeId,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: colors.primary,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        Text(report.stopName ?? report.stopId),
+                      ],
+                    ),
+                    const SizedBox(height: 5),
+                    _reportInformation(
+                      Icons.directions_bus_outlined,
+                      report.serviceDate != null
+                          ? 'Service: ${_date(report.serviceDate!)}${report.scheduledDepartureSeconds == null ? '' : ' · ${feedbackDepartureLabel(report.scheduledDepartureSeconds!)}'}'
+                          : 'Service date/time not recorded',
+                    ),
+                    const SizedBox(height: 3),
+                    _reportInformation(
+                      Icons.schedule_outlined,
+                      'Submitted: ${_submitted(report.createdAt)}',
+                    ),
+                  ],
+                ),
               ),
               isThreeLine: true,
-              trailing: const Icon(Icons.chevron_right),
+              horizontalTitleGap: 8,
+              trailing: Icon(Icons.chevron_right, color: colors.primary),
               onTap: () => _details(report),
             ),
           ),
       ],
     );
   }
+
+  Widget _reportInformation(IconData icon, String text) => Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Padding(
+        padding: const EdgeInsets.only(top: 1),
+        child: Icon(
+          icon,
+          size: 14,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
+      ),
+      const SizedBox(width: 6),
+      Expanded(child: Text(text)),
+    ],
+  );
 }
