@@ -50,3 +50,5 @@ app.*.map.json
 
 gtfs_mybas.zip
 vehicle-position-mybas-johor.proto
+
+supabase/.temp/
