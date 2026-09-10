@@ -145,7 +145,8 @@ class _DepartureRecommendationPageState
   late Future<List<SavedJourney>> _savedJourneys = _loadSavedJourneys();
 
   Future<List<SavedJourney>> _loadSavedJourneys() async =>
-      (widget.savedJourneyRepository ?? SupabaseSavedJourneyRepository()).load();
+      (widget.savedJourneyRepository ?? SupabaseSavedJourneyRepository())
+          .load();
 
   Future<void> _useSavedJourney(SavedJourney journey) async {
     if (_inputsBusy || !journey.usable) return;
@@ -166,14 +167,16 @@ class _DepartureRecommendationPageState
         builder: (context, snapshot) {
           if (snapshot.hasError) {
             return TextButton(
-              onPressed: () => setState(() => _savedJourneys = _loadSavedJourneys()),
+              onPressed: () =>
+                  setState(() => _savedJourneys = _loadSavedJourneys()),
               child: const Text('Unable to load saved journeys. Retry'),
             );
           }
           if (!snapshot.hasData) {
             return const Text('Loading saved journeys...');
           }
-          if (snapshot.data!.isEmpty) return const Text('No saved journeys yet.');
+          if (snapshot.data!.isEmpty)
+            return const Text('No saved journeys yet.');
           return Column(
             children: [
               for (final journey in snapshot.data!)
@@ -181,9 +184,11 @@ class _DepartureRecommendationPageState
                   contentPadding: EdgeInsets.zero,
                   leading: const Icon(Icons.bookmark_outline),
                   title: Text(journey.name),
-                  subtitle: Text(journey.usable
-                      ? '${journey.origin!.name} \u2192 ${journey.destination!.name}'
-                      : 'A saved stop is no longer available.'),
+                  subtitle: Text(
+                    journey.usable
+                        ? '${journey.origin!.name} \u2192 ${journey.destination!.name}'
+                        : 'A saved stop is no longer available.',
+                  ),
                   onTap: _inputsBusy || !journey.usable
                       ? null
                       : () => _useSavedJourney(journey),
@@ -222,6 +227,7 @@ class _DepartureRecommendationPageState
   final Set<int> _deletingRecentSearchIds = {};
   String? _historyError;
 
+  Timer? _departureExpiryTimer;
   late DateTime _travelDate;
   late TimeOfDay _travelTime;
 
@@ -240,6 +246,7 @@ class _DepartureRecommendationPageState
 
   @override
   void dispose() {
+    _departureExpiryTimer?.cancel();
     _scrollController.dispose();
     _reminders?.removeListener(_remindersChanged);
     super.dispose();
@@ -261,6 +268,19 @@ class _DepartureRecommendationPageState
 
     _travelTime = TimeOfDay.fromDateTime(initial);
 
+    _departureExpiryTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      final minimum = minimumCurrentDepartureSeconds(
+        _travelDate,
+        now: widget.now,
+      );
+      if (_recommendations?.any((j) => j.departureSeconds < minimum) == true) {
+        setState(() {
+          _recommendations = _recommendations!
+              .where((j) => j.departureSeconds >= minimum)
+              .toList();
+        });
+      }
+    });
     _loadRecentSearches();
     final recent = widget.initialRecentSearch;
     if (recent != null) {
@@ -887,47 +907,67 @@ class _DepartureRecommendationPageState
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       _buildSavedJourneys(),
-                      Text(
-                        'Where would you like to go?',
-                        style: Theme.of(context).textTheme.headlineSmall,
-                      ),
-
-                      const SizedBox(height: 8),
-
-                      const Text('Select an origin and destination stop.'),
-
-                      const SizedBox(height: 24),
-
-                      Text(
-                        'Your route',
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(height: 8),
-                      _buildStopFields(constraints.maxWidth),
-                      if (_loadingDestinations) const LinearProgressIndicator(),
-                      if (_destinationError != null)
-                        TextButton(
-                          onPressed: _refreshDestinations,
-                          child: Text(_destinationError!),
-                        ),
-                      TextButton.icon(
-                        onPressed: _inputsBusy
-                            ? null
-                            : () => _selectOrigin(nearby: true),
-                        icon: const Icon(Icons.my_location),
-                        label: const Text('Use My Current Location'),
-                      ),
-                      if (_origin != null &&
-                          _destination != null &&
-                          _origin!.id != _destination!.id)
-                        TextButton.icon(
-                          onPressed: _savingJourney ? null : _saveJourney,
-                          icon: const Icon(Icons.bookmark_add_outlined),
-                          label: Text(
-                            _savingJourney ? 'Saving journey…' : 'Save Journey',
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).colorScheme.surface,
+                          border: Border.all(
+                            color: Theme.of(context).colorScheme.outlineVariant,
                           ),
+                          borderRadius: BorderRadius.circular(16),
                         ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Text(
+                              'Plan your journey',
+                              style: Theme.of(context).textTheme.titleLarge
+                                  ?.copyWith(fontWeight: FontWeight.w700),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Choose your stops to find a departure.',
+                              style: Theme.of(context).textTheme.bodyMedium
+                                  ?.copyWith(
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onSurfaceVariant,
+                                  ),
+                            ),
+                            const SizedBox(height: 16),
+                            LayoutBuilder(
+                              builder: (context, routeConstraints) =>
+                                  _buildStopFields(routeConstraints.maxWidth),
+                            ),
+                            if (_loadingDestinations)
+                              const LinearProgressIndicator(),
+                            if (_destinationError != null)
+                              TextButton(
+                                onPressed: _refreshDestinations,
+                                child: Text(_destinationError!),
+                              ),
+                            TextButton.icon(
+                              onPressed: _inputsBusy
+                                  ? null
+                                  : () => _selectOrigin(nearby: true),
+                              icon: const Icon(Icons.my_location),
+                              label: const Text('Use My Current Location'),
+                            ),
+                            if (_origin != null &&
+                                _destination != null &&
+                                _origin!.id != _destination!.id)
+                              TextButton.icon(
+                                onPressed: _savingJourney ? null : _saveJourney,
+                                icon: const Icon(Icons.bookmark_add_outlined),
+                                label: Text(
+                                  _savingJourney
+                                      ? 'Saving journey…'
+                                      : 'Save Journey',
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
 
                       const SizedBox(height: 12),
 
@@ -1137,7 +1177,22 @@ class _DepartureRecommendationPageState
       );
     }
 
-    final recommendations = _recommendations ?? const [];
+    final minimumDeparture = minimumCurrentDepartureSeconds(
+      _travelDate,
+      now: widget.now,
+    );
+    final validRecommendations =
+        (_recommendations ?? const <JourneyRecommendation>[])
+            .where((journey) => journey.departureSeconds >= minimumDeparture)
+            .toList(growable: false);
+
+    validRecommendations.sort(
+      (a, b) => compareJourneyRecommendations(a, b, _timeMode),
+    );
+    final recommendations = selectJourneyAlternatives(
+      validRecommendations,
+      limit: validRecommendations.length,
+    );
 
     if (recommendations.isEmpty) {
       return _SectionMessage(

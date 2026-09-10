@@ -1,3 +1,4 @@
+import 'package:government_transit_collector/core/time/transit_service_time.dart';
 import 'package:flutter/material.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/direct_trip_repository.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/transfer_journey_repository.dart';
@@ -14,6 +15,51 @@ String _journeyIdentity(JourneyRecommendation journey) => switch (journey) {
   TransferJourneyRecommendation j =>
     'transfer|${j.firstTripId}|${j.secondTripId}|${j.transferStopId}|${j.originStopSequence}|${j.destinationStopSequence}',
 };
+
+/// Service-day seconds in Malaysia (UTC+8), including partial seconds.
+/// Other service dates retain their existing timetable behavior.
+int minimumCurrentDepartureSeconds(
+  DateTime travelDate, {
+  DateTime Function()? now,
+}) {
+  final current = currentTransitServiceDateTime(now: now);
+  if (travelDate.year != current.year ||
+      travelDate.month != current.month ||
+      travelDate.day != current.day)
+    return 0;
+  return current.hour * 3600 +
+      current.minute * 60 +
+      current.second +
+      (current.millisecond > 0 || current.microsecond > 0 ? 1 : 0);
+}
+
+/// Keep the ranked winner, then prefer actual distinct route combinations.
+List<JourneyRecommendation> selectJourneyAlternatives(
+  List<JourneyRecommendation> ranked, {
+  required int limit,
+}) {
+  if (ranked.isEmpty || limit <= 0) return [];
+  Object combination(JourneyRecommendation journey) => switch (journey) {
+    DirectJourneyRecommendation j => ('direct', j.routeId),
+    TransferJourneyRecommendation j => (
+      'transfer',
+      j.firstRouteId,
+      j.transferStopId,
+      j.secondRouteId,
+    ),
+  };
+  final selected = [ranked.first];
+  final seen = {combination(ranked.first)};
+  final repeated = <JourneyRecommendation>[];
+  for (final journey in ranked.skip(1)) {
+    if (seen.add(combination(journey))) {
+      selected.add(journey);
+    } else {
+      repeated.add(journey);
+    }
+  }
+  return [...selected, ...repeated].take(limit).toList(growable: false);
+}
 
 int compareJourneyRecommendations(
   JourneyRecommendation a,
@@ -234,7 +280,9 @@ List<JourneyRecommendation> buildTimetableRecommendations({
   required List<GtfsStopTimeValue> stopTimes,
   int minimumTransferSeconds = defaultMinimumTransferSeconds,
   int limit = defaultRecommendationLimit,
+  DateTime Function()? now,
 }) {
+  final currentDeparture = minimumCurrentDepartureSeconds(travelDate, now: now);
   final serviceByTrip = {
     for (final trip in tripServices) trip.tripId: trip.serviceId,
   };
@@ -255,8 +303,9 @@ List<JourneyRecommendation> buildTimetableRecommendations({
       final times = timesByTrip[tripId] ?? const [];
       DirectJourneyRecommendation? best;
       for (final origin in times.where((time) => time.stopId == originStopId)) {
-        if (mode == TravelTimeMode.departAt &&
-            origin.departureSeconds < travelTimeSeconds) {
+        if (origin.departureSeconds < currentDeparture ||
+            (mode == TravelTimeMode.departAt &&
+                origin.departureSeconds < travelTimeSeconds)) {
           continue;
         }
         for (final destination in times.where(
@@ -306,8 +355,9 @@ List<JourneyRecommendation> buildTimetableRecommendations({
       for (final origin in firstTimes.where(
         (time) => time.stopId == originStopId,
       )) {
-        if (mode == TravelTimeMode.departAt &&
-            origin.departureSeconds < travelTimeSeconds) {
+        if (origin.departureSeconds < currentDeparture ||
+            (mode == TravelTimeMode.departAt &&
+                origin.departureSeconds < travelTimeSeconds)) {
           continue;
         }
         for (final firstTransfer in firstTimes.where(
@@ -370,7 +420,7 @@ List<JourneyRecommendation> buildTimetableRecommendations({
 
   final pruned = pruneEquivalentRecommendations(recommendations, mode: mode);
   pruned.sort((a, b) => compareJourneyRecommendations(a, b, mode));
-  return pruned.take(limit).toList(growable: false);
+  return selectJourneyAlternatives(pruned, limit: limit);
 }
 
 List<JourneyRecommendation> pruneEquivalentRecommendations(

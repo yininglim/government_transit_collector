@@ -90,7 +90,10 @@ class JourneyComparison extends StatelessWidget {
                 child: Text('ALTERNATIVES'),
               ),
             ),
-            for (final journey in journeys.skip(1).take(3))
+            for (final journey in selectJourneyAlternatives(
+              journeys,
+              limit: 4,
+            ).skip(1))
               _journey(context, journey, false),
           ],
         ],

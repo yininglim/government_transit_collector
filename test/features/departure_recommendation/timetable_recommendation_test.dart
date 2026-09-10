@@ -74,6 +74,8 @@ GtfsStopTimeValue time(
 
 List<JourneyRecommendation> build({
   int selectedSeconds = 9 * 3600,
+  DateTime Function()? now,
+  TravelTimeMode mode = TravelTimeMode.departAt,
   List<DirectRouteResult> directRoutes = const [],
   List<OneTransferJourneyResult> transfers = const [],
   List<GtfsTripService> services = const [],
@@ -86,6 +88,8 @@ List<JourneyRecommendation> build({
     destinationStopId: 'destination',
     travelDate: monday,
     travelTimeSeconds: selectedSeconds,
+    now: now,
+    mode: mode,
     directRoutes: directRoutes,
     transferJourneys: transfers,
     tripServices: services,
@@ -152,6 +156,70 @@ DirectJourneyRecommendation directRecommendation({
 }
 
 void main() {
+  test('today filters past direct and transfer departures in both modes', () {
+    for (final mode in TravelTimeMode.values) {
+      List<JourneyRecommendation> search(DateTime instant, {int? selected}) =>
+          build(
+            now: () => instant,
+            mode: mode,
+            selectedSeconds:
+                selected ??
+                (mode == TravelTimeMode.departAt ? 9 * 3600 : 11 * 3600),
+            directRoutes: [direct],
+            transfers: [transfer],
+            services: const [
+              GtfsTripService(tripId: 'direct', serviceId: 'service'),
+              GtfsTripService(tripId: 'first', serviceId: 'service'),
+              GtfsTripService(tripId: 'second', serviceId: 'service'),
+            ],
+            times: [
+              time('direct', 'origin', 1, 10 * 3600),
+              time('direct', 'destination', 5, 11 * 3600),
+              time('first', 'origin', 1, 10 * 3600),
+              time('first', 'transfer', 5, 10 * 3600 + 1200),
+              time('second', 'transfer', 2, 10 * 3600 + 1500),
+              time('second', 'destination', 8, 11 * 3600),
+            ],
+          );
+      // 02:00 UTC is 10:00 Malaysia, regardless of the device timezone.
+      expect(search(DateTime.utc(2026, 8, 17, 2)), hasLength(2));
+      expect(search(DateTime.utc(2026, 8, 17, 2, 0, 0, 1)), isEmpty);
+      expect(
+        search(
+          DateTime.utc(2026, 8, 17, 1),
+          selected: mode == TravelTimeMode.departAt
+              ? 10 * 3600 + 1
+              : 11 * 3600 - 1,
+        ),
+        isEmpty,
+      );
+      expect(search(DateTime.utc(2026, 8, 16, 2)), hasLength(2));
+    }
+  });
+
+  test('alternatives prefer GTFS diversity before repeated departures', () {
+    final best = directRecommendation(tripId: 'best', arrivalSeconds: 40000);
+    final repeated = directRecommendation(
+      tripId: 'later',
+      departureSeconds: 37000,
+      arrivalSeconds: 41000,
+    );
+    final other = directRecommendation(
+      tripId: 'other',
+      routeId: 'J99',
+      arrivalSeconds: 42000,
+    );
+    final transfer = transferRecommendation();
+    expect(
+      selectJourneyAlternatives([best, repeated, other, transfer], limit: 3),
+      [best, other, transfer],
+    );
+    expect(selectJourneyAlternatives([best, repeated], limit: 3), [
+      best,
+      repeated,
+    ]);
+  });
+
   group('service calendar', () {
     test('accepts enabled weekday within date range', () {
       expect(calendar().operatesOn(monday), isTrue);
