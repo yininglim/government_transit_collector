@@ -6,8 +6,6 @@ abstract interface class PeakOperationDataSource {
   Future<List<String>> fetchObservedRouteIds({
     required DateTime startUtc,
     required DateTime endExclusiveUtc,
-    required int offset,
-    required int limit,
   });
   Future<List<PeakOperationObservation>> fetchObservations({
     required DateTime startUtc,
@@ -50,17 +48,10 @@ class DefaultPeakOperationRepository
     required DateTime endExclusiveUtc,
   }) async {
     try {
-      final observedRouteIds = <String>{};
-      for (var offset = 0; ; offset += pageSize) {
-        final page = await _dataSource.fetchObservedRouteIds(
-          startUtc: startUtc,
-          endExclusiveUtc: endExclusiveUtc,
-          offset: offset,
-          limit: pageSize,
-        );
-        observedRouteIds.addAll(page);
-        if (page.length < pageSize) break;
-      }
+      final observedRouteIds = (await _dataSource.fetchObservedRouteIds(
+        startUtc: startUtc,
+        endExclusiveUtc: endExclusiveUtc,
+      )).toSet();
       if (observedRouteIds.isEmpty) return const [];
       final routes = await _dataSource.fetchRoutes();
       return routes
@@ -138,20 +129,21 @@ class SupabasePeakOperationDataSource implements PeakOperationDataSource {
   Future<List<String>> fetchObservedRouteIds({
     required DateTime startUtc,
     required DateTime endExclusiveUtc,
-    required int offset,
-    required int limit,
   }) async {
     try {
-      final rows = await _client
-          .from('vehicle_positions')
-          .select('route_id, position_id')
-          .gte('recorded_at', startUtc.toUtc().toIso8601String())
-          .lt('recorded_at', endExclusiveUtc.toUtc().toIso8601String())
-          .order('route_id')
-          .order('position_id')
-          .range(offset, offset + limit - 1);
+      final rows =
+          await _client.rpc(
+                'get_vehicle_position_route_ids',
+                params: {
+                  'period_start': startUtc.toUtc().toIso8601String(),
+                  'period_end_exclusive': endExclusiveUtc
+                      .toUtc()
+                      .toIso8601String(),
+                },
+              )
+              as List<dynamic>;
       return rows
-          .map((row) => row['route_id'] as String)
+          .map((row) => (row as Map<String, dynamic>)['route_id'] as String)
           .toList(growable: false);
     } on Object {
       throw const PeakOperationReadException(
