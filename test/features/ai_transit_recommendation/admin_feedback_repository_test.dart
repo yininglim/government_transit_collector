@@ -65,6 +65,90 @@ void main() {
       throwsA(isA<AdminFeedbackReadException>()),
     );
   });
+
+  test(
+    'screening shares one period read and partitions exact routes',
+    () async {
+      final start = DateTime.utc(2026, 8, 1);
+      final end = DateTime.utc(2026, 9, 1);
+      final delegate = FakeAdminFeedbackRepository([
+        feedback(routeId: 'A'),
+        feedback(routeId: 'B', issueType: 'Bus overcrowded'),
+        feedback(routeId: 'A', issueType: 'Bus overcrowded'),
+      ]);
+      final repository = ScreeningAdminFeedbackRepository(
+        delegate: delegate,
+        startUtc: start,
+        endExclusiveUtc: end,
+      );
+
+      final results = await Future.wait([
+        for (final routeId in ['A', 'B', 'C', 'D'])
+          repository.loadFeedback(
+            routeId: routeId,
+            startUtc: start,
+            endExclusiveUtc: end,
+          ),
+      ]);
+
+      expect(delegate.calls, 1);
+      expect(delegate.routeIds, [null]);
+      expect(results[0].map((record) => record.routeId), ['A', 'A']);
+      expect(results[1].map((record) => record.routeId), ['B']);
+      expect(results[2], isEmpty);
+      expect(results[3], isEmpty);
+    },
+  );
+
+  test(
+    'screening preserves issue filtering and starts fresh per context',
+    () async {
+      final start = DateTime.utc(2026, 8, 1);
+      final end = DateTime.utc(2026, 9, 1);
+      final delegate = FakeAdminFeedbackRepository([
+        feedback(routeId: 'A', issueType: '["Bus was late","Bus overcrowded"]'),
+        feedback(routeId: 'A', issueType: 'Bus overcrowded'),
+      ]);
+
+      for (var screening = 0; screening < 2; screening++) {
+        final records =
+            await ScreeningAdminFeedbackRepository(
+              delegate: delegate,
+              startUtc: start,
+              endExclusiveUtc: end,
+            ).loadFeedback(
+              routeId: 'A',
+              issueType: 'Bus was late',
+              startUtc: start,
+              endExclusiveUtc: end,
+            );
+        expect(records.map((record) => record.feedbackId), ['feedback-A']);
+      }
+
+      expect(delegate.calls, 2);
+    },
+  );
+}
+
+class FakeAdminFeedbackRepository implements AdminFeedbackRepository {
+  FakeAdminFeedbackRepository(this.records);
+
+  final List<AdminFeedbackRecord> records;
+  int calls = 0;
+  final routeIds = <String?>[];
+
+  @override
+  Future<List<AdminFeedbackRecord>> loadFeedback({
+    String? routeId,
+    String? issueType,
+    DateTime? startUtc,
+    DateTime? endExclusiveUtc,
+  }) async {
+    calls++;
+    routeIds.add(routeId);
+    await Future<void>.delayed(Duration.zero);
+    return records;
+  }
 }
 
 class FakeAdminFeedbackDataSource implements AdminFeedbackDataSource {

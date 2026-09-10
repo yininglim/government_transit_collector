@@ -41,6 +41,15 @@ abstract interface class RoutePerformanceDataSource {
   });
 }
 
+abstract interface class PeriodHistoricalObservationDataSource {
+  Future<List<HistoricalVehicleObservation>> fetchPeriodObservations({
+    required DateTime startUtc,
+    required DateTime endExclusiveUtc,
+    required int offset,
+    required int limit,
+  });
+}
+
 abstract interface class RoutePerformanceRepository {
   Future<List<RoutePerformanceRoute>> loadRoutes();
   Future<RoutePerformanceData> loadRoutePerformance({
@@ -154,7 +163,7 @@ class DefaultRoutePerformanceRepository
     }
   }
 
-  Map<String, ScheduledTripReference> _buildSchedules(
+  static Map<String, ScheduledTripReference> _buildSchedules(
     List<RouteScheduleStopRecord> rows,
   ) {
     final grouped = <String, List<RouteScheduleStopRecord>>{};
@@ -183,7 +192,106 @@ class DefaultRoutePerformanceRepository
   }
 }
 
-class SupabaseRoutePerformanceDataSource implements RoutePerformanceDataSource {
+class ScreeningRoutePerformanceRepository
+    implements RoutePerformanceRepository {
+  ScreeningRoutePerformanceRepository({
+    required RoutePerformanceDataSource dataSource,
+    required PeriodHistoricalObservationDataSource observationDataSource,
+    required this.startUtc,
+    required this.endExclusiveUtc,
+  }) {
+    _dataSource = dataSource;
+    _observationDataSource = observationDataSource;
+  }
+
+  static const _pageSize = 1000;
+  static const _tripLookupBatchSize = 100;
+
+  late final RoutePerformanceDataSource _dataSource;
+  late final PeriodHistoricalObservationDataSource _observationDataSource;
+  final DateTime startUtc;
+  final DateTime endExclusiveUtc;
+  Future<List<RoutePerformanceRoute>>? _routesFuture;
+  Future<Map<String, List<HistoricalVehicleObservation>>>? _observationsFuture;
+
+  @override
+  Future<List<RoutePerformanceRoute>> loadRoutes() =>
+      _routesFuture ??= _dataSource.fetchRoutes();
+
+  @override
+  Future<RoutePerformanceData> loadRoutePerformance({
+    required String routeId,
+    required DateTime startUtc,
+    required DateTime endExclusiveUtc,
+  }) async {
+    if (startUtc != this.startUtc || endExclusiveUtc != this.endExclusiveUtc) {
+      throw const RoutePerformanceReadException(
+        'The screening period does not match the historical context.',
+      );
+    }
+    try {
+      final grouped = await (_observationsFuture ??= _loadObservations());
+      final observations = grouped[routeId] ?? const [];
+      final tripIds = observations.map((item) => item.tripId).toSet().toList();
+      final scheduleRows = <RouteScheduleStopRecord>[];
+      for (
+        var batchStart = 0;
+        batchStart < tripIds.length;
+        batchStart += _tripLookupBatchSize
+      ) {
+        final batchEnd = (batchStart + _tripLookupBatchSize).clamp(
+          0,
+          tripIds.length,
+        );
+        final batch = tripIds.sublist(batchStart, batchEnd);
+        for (var offset = 0; ; offset += _pageSize) {
+          final page = await _dataSource.fetchScheduleStops(
+            tripIds: batch,
+            offset: offset,
+            limit: _pageSize,
+          );
+          scheduleRows.addAll(page);
+          if (page.length < _pageSize) break;
+        }
+      }
+      return RoutePerformanceData(
+        observations: observations,
+        schedulesByTripId: DefaultRoutePerformanceRepository._buildSchedules(
+          scheduleRows,
+        ),
+      );
+    } on RoutePerformanceReadException {
+      rethrow;
+    } on Object {
+      throw const RoutePerformanceReadException(
+        'Unable to load route performance data.',
+      );
+    }
+  }
+
+  Future<Map<String, List<HistoricalVehicleObservation>>>
+  _loadObservations() async {
+    final grouped = <String, List<HistoricalVehicleObservation>>{};
+    for (var offset = 0; ; offset += _pageSize) {
+      final page = await _observationDataSource.fetchPeriodObservations(
+        startUtc: startUtc,
+        endExclusiveUtc: endExclusiveUtc,
+        offset: offset,
+        limit: _pageSize,
+      );
+      for (final observation in page) {
+        grouped.putIfAbsent(observation.routeId, () => []).add(observation);
+      }
+      if (page.length < _pageSize) break;
+    }
+    return grouped;
+  }
+}
+
+class SupabaseRoutePerformanceDataSource
+    implements
+        RoutePerformanceDataSource,
+        PeriodHistoricalObservationDataSource {
   SupabaseRoutePerformanceDataSource({SupabaseClient? client})
     : _client = client ?? Supabase.instance.client;
 
@@ -252,6 +360,42 @@ class SupabaseRoutePerformanceDataSource implements RoutePerformanceDataSource {
             'route_id, trip_id, vehicle_id, recorded_at, latitude, longitude',
           )
           .eq('route_id', routeId)
+          .gte('recorded_at', startUtc.toUtc().toIso8601String())
+          .lt('recorded_at', endExclusiveUtc.toUtc().toIso8601String())
+          .order('recorded_at')
+          .range(offset, offset + limit - 1);
+      return rows
+          .map(
+            (row) => HistoricalVehicleObservation(
+              routeId: row['route_id'] as String,
+              tripId: row['trip_id'] as String,
+              vehicleId: row['vehicle_id'] as String,
+              recordedAt: DateTime.parse(row['recorded_at'] as String).toUtc(),
+              latitude: (row['latitude'] as num).toDouble(),
+              longitude: (row['longitude'] as num).toDouble(),
+            ),
+          )
+          .toList(growable: false);
+    } on Object {
+      throw const RoutePerformanceReadException(
+        'Unable to load historical observations.',
+      );
+    }
+  }
+
+  @override
+  Future<List<HistoricalVehicleObservation>> fetchPeriodObservations({
+    required DateTime startUtc,
+    required DateTime endExclusiveUtc,
+    required int offset,
+    required int limit,
+  }) async {
+    try {
+      final rows = await _client
+          .from('vehicle_positions')
+          .select(
+            'route_id, trip_id, vehicle_id, recorded_at, latitude, longitude',
+          )
           .gte('recorded_at', startUtc.toUtc().toIso8601String())
           .lt('recorded_at', endExclusiveUtc.toUtc().toIso8601String())
           .order('recorded_at')
