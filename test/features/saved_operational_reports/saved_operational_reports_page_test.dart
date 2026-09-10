@@ -76,6 +76,48 @@ void main() {
     await pumpPage(tester, FakeRepository(reports()));
     await tester.tap(find.text('Network peak report'));
     await tester.pumpAndSettle();
+    expect(find.text('admin-1'), findsNothing);
+    final snapshotHeading = find.descendant(
+      of: find.byType(SavedOperationalReportDetailPage),
+      matching: find.text('Result snapshot'),
+    );
+    final detailList = find
+        .descendant(
+          of: find.descendant(
+            of: find.byType(SavedOperationalReportDetailPage),
+            matching: find.byType(ListView),
+          ),
+          matching: find.byType(Scrollable),
+        )
+        .first;
+    await tester.scrollUntilVisible(
+      find.text('Report source'),
+      200,
+      scrollable: detailList,
+    );
+    expect(find.text('Report source'), findsOneWidget);
+    expect(find.text('All Routes'), findsOneWidget);
+    expect(find.textContaining('1 Sep 2026, 12:00 AM'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      snapshotHeading,
+      300,
+      scrollable: detailList,
+    );
+    expect(find.text('Busiest Route'), findsOneWidget);
+    expect(find.text('J30'), findsOneWidget);
+    expect(find.text('3:30 PM – 4:00 PM'), findsOneWidget);
+    expect(find.text('54.8'), findsOneWidget);
+    expect(find.text('Custom Signal'), findsOneWidget);
+    expect(find.text('Administrator note'), findsOneWidget);
+    expect(find.textContaining('{'), findsNothing);
+  });
+
+  testWidgets('route snapshot promotes and formats operational metrics', (
+    tester,
+  ) async {
+    await pumpPage(tester, FakeRepository(reports()));
+    await tester.tap(find.text('Route travel report'));
+    await tester.pumpAndSettle();
     final snapshotHeading = find.descendant(
       of: find.byType(SavedOperationalReportDetailPage),
       matching: find.text('Result snapshot'),
@@ -94,11 +136,28 @@ void main() {
       300,
       scrollable: detailList,
     );
-    expect(find.text('Report source'), findsOneWidget);
-    expect(find.text('All Routes'), findsOneWidget);
-    expect(find.text('Busiest Route'), findsOneWidget);
-    expect(find.text('J30'), findsOneWidget);
-    expect(find.textContaining('{'), findsNothing);
+
+    expect(find.text('Average Travel Time'), findsOneWidget);
+    expect(find.text('54.8 min'), findsOneWidget);
+    expect(find.text('84.5%'), findsOneWidget);
+    expect(find.text('62.4%'), findsOneWidget);
+    expect(find.text('2,288'), findsOneWidget);
+    expect(find.text('Trip coverage and supporting details'), findsOneWidget);
+  });
+
+  testWidgets('detail opens in read-only management view', (tester) async {
+    await pumpPage(tester, FakeRepository(reports()));
+    await tester.tap(find.text('Network peak report'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Network peak report'), findsOneWidget);
+    expect(find.text('Needs Attention'), findsOneWidget);
+    expect(find.text('Review next week'), findsOneWidget);
+    expect(find.byKey(const Key('edit-report-metadata')), findsOneWidget);
+    expect(find.byKey(const Key('report-title-field')), findsNothing);
+    expect(find.byKey(const Key('report-status-field')), findsNothing);
+    expect(find.byKey(const Key('report-notes-field')), findsNothing);
+    expect(find.byKey(const Key('save-report-metadata')), findsNothing);
   });
 
   testWidgets('edits title, notes, and status and validates blank title', (
@@ -108,6 +167,23 @@ void main() {
     await pumpPage(tester, repository);
     await tester.tap(find.text('Network peak report'));
     await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('edit-report-metadata')));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('report-title-field')))
+          .controller!
+          .text,
+      'Network peak report',
+    );
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('report-notes-field')))
+          .controller!
+          .text,
+      'Review next week',
+    );
 
     await tester.enterText(find.byKey(const Key('report-title-field')), '   ');
     tester.testTextInput.hide();
@@ -170,6 +246,61 @@ void main() {
     expect(repository.lastNotes, 'Approved for planning');
     expect(repository.lastStatus, SavedOperationalReportStatus.reviewed);
     expect(find.text('Report updated successfully.'), findsOneWidget);
+    expect(find.text('Reviewed network peak'), findsOneWidget);
+    expect(find.text('Approved for planning'), findsOneWidget);
+    expect(find.byKey(const Key('report-title-field')), findsNothing);
+    expect(find.byKey(const Key('save-report-metadata')), findsNothing);
+  });
+
+  testWidgets('Cancel discards edits without updating the repository', (
+    tester,
+  ) async {
+    final repository = FakeRepository(reports());
+    await pumpPage(tester, repository);
+    await tester.tap(find.text('Network peak report'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('edit-report-metadata')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('report-title-field')),
+      'Unsaved title',
+    );
+    await tester.enterText(
+      find.byKey(const Key('report-notes-field')),
+      'Unsaved notes',
+    );
+    await tester.ensureVisible(find.byKey(const Key('cancel-report-metadata')));
+    await tester.tap(find.byKey(const Key('cancel-report-metadata')));
+    await tester.pumpAndSettle();
+    await tester.drag(
+      find.descendant(
+        of: find.byType(SavedOperationalReportDetailPage),
+        matching: find.byType(ListView),
+      ),
+      const Offset(0, 1000),
+    );
+    await tester.pumpAndSettle();
+
+    expect(repository.updateCount, 0);
+    expect(find.text('Network peak report'), findsOneWidget);
+    expect(find.text('Review next week'), findsOneWidget);
+    expect(find.text('Unsaved title'), findsNothing);
+    expect(find.text('Unsaved notes'), findsNothing);
+    expect(find.byKey(const Key('report-title-field')), findsNothing);
+  });
+
+  testWidgets('read-only view describes empty admin notes', (tester) async {
+    final report = SavedOperationalReport.fromJson({
+      ...sampleJson(routeId: null),
+      'report_id': 'empty-notes',
+      'title': 'No notes report',
+      'admin_notes': null,
+    });
+    await pumpPage(tester, FakeRepository([report]));
+    await tester.tap(find.text('No notes report'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('No admin notes.'), findsOneWidget);
   });
 
   testWidgets('confirms deletion and removes report from the list', (
@@ -250,6 +381,19 @@ List<SavedOperationalReport> reports() => [
     ...sampleJson(routeId: null),
     'report_id': 'peak',
     'title': 'Network peak report',
+    'result_snapshot': {
+      'peak_period': '3:30 PM – 4:00 PM',
+      'peak_average_active_trips': 54.7833333333333,
+      'peak_activity_level': 'high',
+      'average_activity': 31.25,
+      'activity_difference_percent': 75.306,
+      'total_observations': 2288,
+      'distinct_trip_occurrences': 412,
+      'observed_day_count': 7,
+      'routes_represented': 21,
+      'busiest_route_name': 'J30',
+      'custom_signal': 'Administrator note',
+    },
   }),
   SavedOperationalReport.fromJson({
     ...sampleJson(),
@@ -257,6 +401,17 @@ List<SavedOperationalReport> reports() => [
     'report_type': 'route_performance',
     'title': 'Route travel report',
     'status': 'reviewed',
+    'result_snapshot': {
+      'average_travel_time_minutes': 54.7833333333333,
+      'delay_frequency_percent': 84.5360824742268,
+      'schedule_adherence_percent': 62.4299938320557,
+      'trips_used_in_metrics': 2288,
+      'delayed_trip_count': 1934,
+      'on_time_trip_count': 354,
+      'partial_trip_occurrences': 18,
+      'total_observed_trip_occurrences': 2306,
+      'total_observations': 44000,
+    },
   }),
 ];
 

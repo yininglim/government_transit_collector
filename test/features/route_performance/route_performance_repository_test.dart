@@ -217,14 +217,10 @@ class FakeSource implements RoutePerformanceDataSource {
   Future<List<String>> fetchObservedRouteIds({
     required DateTime startUtc,
     required DateTime endExclusiveUtc,
-    required int offset,
-    required int limit,
   }) async {
     availabilityStart = startUtc;
     availabilityEnd = endExclusiveUtc;
-    if (offset >= observedRouteIds.length) return const [];
-    final end = (offset + limit).clamp(0, observedRouteIds.length);
-    return observedRouteIds.sublist(offset, end);
+    return observedRouteIds;
   }
 
   @override
