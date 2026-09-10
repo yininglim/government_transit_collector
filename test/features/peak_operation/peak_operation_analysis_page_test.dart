@@ -32,7 +32,7 @@ void main() {
         ),
       ),
     );
-    await tester.tap(find.text('Peak Operation Analysis'));
+    await tester.tap(find.text('Peak'));
     await tester.pumpAndSettle();
     expect(find.text('Observed bus operational activity'), findsOneWidget);
     await tester.pumpWidget(const SizedBox.shrink());

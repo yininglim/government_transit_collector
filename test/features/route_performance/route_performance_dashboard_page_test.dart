@@ -34,7 +34,7 @@ void main() {
         ),
       ),
     );
-    await tester.tap(find.text('Route Performance Dashboard'));
+    await tester.tap(find.text('Performance'));
     await tester.pumpAndSettle();
     expect(
       find.text('Based on collected realtime observations'),

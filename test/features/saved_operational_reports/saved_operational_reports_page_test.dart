@@ -31,7 +31,7 @@ void main() {
         ),
       ),
     );
-    await tester.tap(find.text('Saved Operational Reports'));
+    await tester.tap(find.text('Reports'));
     await tester.pumpAndSettle();
     expect(find.text('Historical analysis snapshots'), findsOneWidget);
     await tester.pumpWidget(const SizedBox.shrink());
