@@ -35,6 +35,13 @@ class _FeedbackRouteSelectionPageState
   int _requestId = 0;
 
   @override
+  void initState() {
+    super.initState();
+    _routes = null;
+    _search('', ++_requestId);
+  }
+
+  @override
   void dispose() {
     _debounce?.cancel();
     _controller.dispose();
@@ -52,15 +59,6 @@ class _FeedbackRouteSelectionPageState
 
     final requestId =
     ++_requestId;
-
-    if (query.isEmpty) {
-      setState(() {
-        _routes = const [];
-        _error = null;
-      });
-
-      return;
-    }
 
     setState(() {
       _routes = null;
@@ -128,10 +126,6 @@ class _FeedbackRouteSelectionPageState
     final query =
     _controller.text.trim();
 
-    if (query.isEmpty) {
-      return;
-    }
-
     final requestId =
     ++_requestId;
 
@@ -168,7 +162,7 @@ class _FeedbackRouteSelectionPageState
                 ),
                 controller:
                 _controller,
-                autofocus: true,
+                autofocus: false,
                 decoration:
                 const InputDecoration(
                   labelText:
@@ -254,7 +248,7 @@ class _FeedbackRouteSelectionPageState
           _controller.text
               .trim()
               .isEmpty
-              ? 'Search for a route'
+              ? 'No routes available'
               : 'No routes found',
         ),
       );

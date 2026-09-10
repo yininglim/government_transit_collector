@@ -1,3 +1,4 @@
+import '../data/favourite_stop_repository.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -18,6 +19,7 @@ class StopSelectionPage extends StatefulWidget {
     this.locationService,
     this.nearbyRepository,
     this.availableStops,
+    this.favouriteStopRepository,
     super.key,
   });
 
@@ -30,6 +32,7 @@ class StopSelectionPage extends StatefulWidget {
   final PassengerLocationService? locationService;
   final NearbyStopRepository? nearbyRepository;
   final List<DepartureStop>? availableStops;
+  final FavouriteStopRepository? favouriteStopRepository;
 
   @override
   State<StopSelectionPage> createState() => _StopSelectionPageState();
@@ -48,9 +51,172 @@ class _StopSelectionPageState extends State<StopSelectionPage> {
   PassengerLocationResult? _locationResult;
   late final PassengerLocationService _locationService;
 
+  late final _favouriteRepository =
+      widget.favouriteStopRepository ?? FavouriteStopRepository.currentUser();
+  List<DepartureStop>? _favourites;
+  String? _favouriteError;
+  bool _savingFavourite = false;
+  bool _usingFavourite = false;
+  int _favouriteRequest = 0;
+
+  Future<void> _loadFavourites() async {
+    final request = ++_favouriteRequest;
+    try {
+      final stops = await _favouriteRepository!.load();
+      if (mounted && request == _favouriteRequest)
+        setState(() {
+          _favourites = stops;
+          _favouriteError = null;
+        });
+    } on Object {
+      if (mounted && request == _favouriteRequest)
+        setState(() => _favouriteError = 'Unable to load favourite stops.');
+    }
+  }
+
+  Future<void> _toggleFavourite(DepartureStop stop) async {
+    if (_savingFavourite || _favourites == null) return;
+    setState(() => _savingFavourite = true);
+    try {
+      if (_favourites!.any((item) => item.id == stop.id)) {
+        await _favouriteRepository!.remove(stop.id);
+      } else {
+        await _favouriteRepository!.save(stop);
+      }
+    } on Object {
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Unable to update favourite stop. Please try again.'),
+          ),
+        );
+    } finally {
+      if (mounted) setState(() => _savingFavourite = false);
+    }
+  }
+
+  Widget? _favouriteStar(DepartureStop stop) {
+    if (_favouriteRepository == null) return null;
+    final saved = _favourites?.any((item) => item.id == stop.id) == true;
+    return IconButton(
+      key: ValueKey('favourite-stop-${stop.id}'),
+      tooltip: saved ? 'Remove favourite stop' : 'Favourite stop',
+      onPressed: _savingFavourite || _favourites == null
+          ? null
+          : () => _toggleFavourite(stop),
+      icon: Icon(
+        saved ? Icons.star : Icons.star_border,
+        color: Theme.of(context).colorScheme.primary,
+      ),
+    );
+  }
+
+  Future<void> _useFavourite(DepartureStop stop) async {
+    if (_usingFavourite) return;
+    setState(() => _usingFavourite = true);
+    try {
+      final available = widget.availableStops;
+      final current = available == null
+          ? await widget.repository.getStopById(stop.id)
+          : available.where((item) => item.id == stop.id).firstOrNull;
+      if (!mounted) return;
+      if (current == null || current.id == widget.excludedStopId) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('This stop is no longer available for selection.'),
+          ),
+        );
+        return;
+      }
+      Navigator.of(context).pop(current);
+    } on Object {
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Unable to load this stop. Please try again.'),
+          ),
+        );
+    } finally {
+      if (mounted) setState(() => _usingFavourite = false);
+    }
+  }
+
+  Widget _favouriteSection() => Card(
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+    margin: const EdgeInsets.symmetric(vertical: 12),
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Favourite Bus Stops',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 8),
+          if (_favouriteError != null)
+            TextButton(
+              onPressed: _loadFavourites,
+              child: Text('$_favouriteError Retry'),
+            )
+          else if (_favourites == null)
+            const LinearProgressIndicator()
+          else if (_favourites!.isEmpty)
+            const Text('Tap the star beside a stop to save it here.')
+          else
+            for (final stop in _favourites!)
+              Builder(
+                builder: (context) {
+                  final destination = widget.availableStops != null;
+                  final reachable =
+                      !destination ||
+                      widget.availableStops!.any((item) => item.id == stop.id);
+                  final usable = reachable && stop.id != widget.excludedStopId;
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(child: Text(stop.name)),
+                            _favouriteStar(stop)!,
+                          ],
+                        ),
+                        if (!reachable)
+                          const Text('Not reachable from selected origin')
+                        else if (!usable)
+                          const Text('Already selected'),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton(
+                            onPressed: !usable || _usingFavourite
+                                ? null
+                                : () => _useFavourite(stop),
+                            child: Text(
+                              destination
+                                  ? 'Use as Destination'
+                                  : 'Use as Origin',
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+        ],
+      ),
+    ),
+  );
+
   @override
   void initState() {
     super.initState();
+    if (_favouriteRepository != null) {
+      _favouriteRepository!.changes.addListener(_loadFavourites);
+      _loadFavourites();
+    }
     _stops = widget.availableStops ?? const [];
     _radius = [500, 1000, 2000].contains(widget.initialRadius)
         ? widget.initialRadius
@@ -224,6 +390,7 @@ class _StopSelectionPageState extends State<StopSelectionPage> {
           ListTile(
             key: Key('nearby-${nearby.stop.id}'),
             title: Text(nearby.stop.name),
+            trailing: _favouriteStar(nearby.stop),
             subtitle: Text(
               '${nearby.stop.id} · Approx. ${formatApproximateDistance(nearby.distanceMeters)} away',
             ),
@@ -238,6 +405,7 @@ class _StopSelectionPageState extends State<StopSelectionPage> {
 
   @override
   void dispose() {
+    _favouriteRepository?.changes.removeListener(_loadFavourites);
     _debounce?.cancel();
     _searchController.dispose();
     super.dispose();
@@ -332,6 +500,7 @@ class _StopSelectionPageState extends State<StopSelectionPage> {
                   icon: const Icon(Icons.my_location),
                   label: const Text('Use My Current Location'),
                 ),
+              if (_favouriteRepository != null) _favouriteSection(),
               _nearby ? _nearbyResults() : _buildResults(),
             ],
           ),
@@ -378,6 +547,7 @@ class _StopSelectionPageState extends State<StopSelectionPage> {
           key: Key('stop-${stop.id}'),
           leading: const Icon(Icons.directions_bus_outlined),
           title: Text(stop.name),
+          trailing: _favouriteStar(stop),
           subtitle: excluded ? const Text('Already selected') : null,
           enabled: !excluded,
           onTap: excluded ? null : () => Navigator.of(context).pop(stop),

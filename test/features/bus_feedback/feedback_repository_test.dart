@@ -27,6 +27,43 @@ BusFeedback report({
 
 void main() {
   test(
+    'scheduled reports enforce Malaysia departure boundary including overnight GTFS times',
+    () async {
+      var inserts = 0;
+      final client = await feedbackClient((request) async {
+        if (request.method == 'GET') return jsonResponse([]);
+        inserts++;
+        return jsonResponse(null, status: 201);
+      });
+      addTearDown(client.dispose);
+      // September 7 service at 25:00 is September 8, 01:00 Malaysia.
+      final departure = DateTime.utc(2026, 9, 7, 17);
+      var now = departure.subtract(const Duration(microseconds: 1));
+      final repository = SupabaseBusFeedbackRepository(
+        client: client,
+        now: () => now,
+      );
+      final feedback = report(seconds: 90000, issue: 'Bus overcrowded');
+      await expectLater(
+        repository.submitFeedback(feedback),
+        throwsA(
+          isA<BusFeedbackException>().having(
+            (e) => e.message,
+            'message',
+            feedbackNotStartedMessage,
+          ),
+        ),
+      );
+      expect(inserts, 0);
+      now = departure;
+      await repository.submitFeedback(feedback);
+      now = departure.add(const Duration(seconds: 1));
+      await repository.submitFeedback(feedback);
+      expect(inserts, 2);
+    },
+  );
+
+  test(
     'multiple issues persist through insert and historical strings still decode',
     () async {
       Map<String, dynamic>? stored;

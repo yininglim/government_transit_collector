@@ -134,22 +134,42 @@ class _MyReportsSectionState extends State<MyReportsSection> {
     return Column(
       children: [
         for (final report in _reports!)
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            title: Text(report.issueTypes.join('\n')),
-            subtitle: Text(
-              [
-                '${report.routeLabel ?? report.routeId} · ${report.stopName ?? report.stopId}',
-                if (report.serviceDate != null)
-                  'Service: ${_date(report.serviceDate!)}${report.scheduledDepartureSeconds == null ? '' : ' · ${feedbackDepartureLabel(report.scheduledDepartureSeconds!)}'}'
-                else
-                  'Service date/time not recorded',
-                'Submitted: ${_submitted(report.createdAt)}',
-              ].join('\n'),
+          Card(
+            margin: const EdgeInsets.only(top: 8),
+            elevation: 0,
+            color: Theme.of(context).colorScheme.surface,
+            clipBehavior: Clip.antiAlias,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: BorderSide(
+                color: Theme.of(context).colorScheme.outlineVariant,
+              ),
             ),
-            isThreeLine: true,
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => _details(report),
+            child: ListTile(
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 8,
+              ),
+              titleTextStyle: Theme.of(context).textTheme.titleSmall,
+              subtitleTextStyle: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+              title: Text(report.issueTypes.join('\n')),
+              subtitle: Text(
+                [
+                  '${report.routeLabel ?? report.routeId} · ${report.stopName ?? report.stopId}',
+                  if (report.serviceDate != null)
+                    'Service: ${_date(report.serviceDate!)}${report.scheduledDepartureSeconds == null ? '' : ' · ${feedbackDepartureLabel(report.scheduledDepartureSeconds!)}'}'
+                  else
+                    'Service date/time not recorded',
+                  'Submitted: ${_submitted(report.createdAt)}',
+                ].join('\n'),
+              ),
+              isThreeLine: true,
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => _details(report),
+            ),
           ),
       ],
     );
