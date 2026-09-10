@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/ai_recommendation_analysis_session_store.dart';
 import 'package:government_transit_collector/features/admin_home/presentation/admin_home_page.dart';
 import 'package:government_transit_collector/features/authentication/data/auth_repository.dart';
 import 'package:government_transit_collector/features/authentication/presentation/login_page.dart';
@@ -33,6 +34,7 @@ class _AuthGateState extends State<AuthGate> {
   String? _error;
   bool _loading = true;
   int _requestId = 0;
+  AiRecommendationAnalysisSessionStore? _aiRecommendationSessionStore;
 
   @override
   void initState() {
@@ -66,6 +68,7 @@ class _AuthGateState extends State<AuthGate> {
     final requestId = ++_requestId;
     if (widget.repository.handlingCallback ||
         widget.repository.recoveryRequired) {
+      _clearAiRecommendationSessions();
       if (mounted) {
         setState(() {
           _profile = null;
@@ -73,6 +76,12 @@ class _AuthGateState extends State<AuthGate> {
         });
       }
       return;
+    }
+    final authenticatedUserId = widget.repository.currentSession?.user.id;
+    final retainedStore = _aiRecommendationSessionStore;
+    if (retainedStore != null &&
+        authenticatedUserId != retainedStore.adminUserId) {
+      _clearAiRecommendationSessions();
     }
     if (mounted) {
       setState(() {
@@ -84,6 +93,7 @@ class _AuthGateState extends State<AuthGate> {
     }
 
     if (widget.repository.currentSession == null) {
+      _clearAiRecommendationSessions();
       if (!mounted || requestId != _requestId) return;
       setState(() {
         _profile = null;
@@ -95,6 +105,7 @@ class _AuthGateState extends State<AuthGate> {
     try {
       final profile = await widget.repository.loadCurrentProfile();
       if (!mounted || requestId != _requestId) return;
+      _synchronizeAiRecommendationSessions(profile);
       setState(() {
         _profile = profile;
         _loading = false;
@@ -120,6 +131,26 @@ class _AuthGateState extends State<AuthGate> {
         _loading = false;
       });
     }
+  }
+
+  void _synchronizeAiRecommendationSessions(AppProfile? profile) {
+    if (profile == null ||
+        destinationForRole(profile.role) != AuthDestination.admin) {
+      _clearAiRecommendationSessions();
+      return;
+    }
+    final current = _aiRecommendationSessionStore;
+    if (current == null || !current.belongsTo(profile.userId)) {
+      current?.clear();
+      _aiRecommendationSessionStore = AiRecommendationAnalysisSessionStore(
+        adminUserId: profile.userId,
+      );
+    }
+  }
+
+  void _clearAiRecommendationSessions() {
+    _aiRecommendationSessionStore?.clear();
+    _aiRecommendationSessionStore = null;
   }
 
   @override
@@ -164,6 +195,7 @@ class _AuthGateState extends State<AuthGate> {
       AuthDestination.admin => AdminHomePage(
         profile: _profile!,
         repository: widget.repository,
+        aiRecommendationSessionStore: _aiRecommendationSessionStore,
       ),
       AuthDestination.unsupported => _ProfileErrorPage(
         message: 'Your account has an unsupported role.',

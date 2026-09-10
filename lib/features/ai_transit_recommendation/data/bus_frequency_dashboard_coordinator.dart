@@ -51,6 +51,8 @@ class BusFrequencyDashboardScreeningResult {
 class BusFrequencyDashboardSession {
   final candidates = <BusFrequencyDashboardCandidate>[];
   final excludedRoutes = <BusFrequencyDashboardExcludedRoute>[];
+  final savingRecommendationIds = <String>{};
+  final savedRecommendationIds = <String>{};
   BusFrequencyRecommendationResult? recommendationResult;
   DateTime? periodStartUtc;
   DateTime? periodEndUtc;
@@ -71,6 +73,8 @@ class BusFrequencyDashboardSession {
     periodEndUtc = endExclusiveUtc;
     candidates.clear();
     excludedRoutes.clear();
+    savingRecommendationIds.clear();
+    savedRecommendationIds.clear();
     recommendationResult = null;
     empty = false;
     setupFailure = false;
@@ -85,6 +89,8 @@ class BusFrequencyDashboardSession {
     periodEndUtc = null;
     candidates.clear();
     excludedRoutes.clear();
+    savingRecommendationIds.clear();
+    savedRecommendationIds.clear();
     recommendationResult = null;
     empty = false;
     setupFailure = false;
