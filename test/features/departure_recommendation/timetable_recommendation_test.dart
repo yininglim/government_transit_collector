@@ -88,7 +88,7 @@ List<JourneyRecommendation> build({
     destinationStopId: 'destination',
     travelDate: monday,
     travelTimeSeconds: selectedSeconds,
-    now: now,
+    now: now ?? () => DateTime.utc(2026, 8, 16, 16),
     mode: mode,
     directRoutes: directRoutes,
     transferJourneys: transfers,
@@ -156,6 +156,62 @@ DirectJourneyRecommendation directRecommendation({
 }
 
 void main() {
+  test(
+    'review: past service dates expire and overnight departures survive midnight',
+    () {
+      final midnight = DateTime.utc(2026, 8, 17, 16);
+      expect(
+        minimumCurrentDepartureSeconds(monday, now: () => midnight),
+        86400,
+      );
+      expect(
+        minimumCurrentDepartureSeconds(
+          monday,
+          now: () => midnight.add(const Duration(microseconds: 1)),
+        ),
+        86401,
+      );
+      expect(
+        minimumCurrentDepartureSeconds(
+          DateTime(2026, 8, 19),
+          now: () => midnight,
+        ),
+        0,
+      );
+      for (final mode in TravelTimeMode.values) {
+        List<JourneyRecommendation> at(int departure, DateTime now) => build(
+          now: () => now,
+          mode: mode,
+          selectedSeconds: mode == TravelTimeMode.arriveBy ? 30 * 3600 : 0,
+          directRoutes: const [direct],
+          transfers: const [transfer],
+          services: const [
+            GtfsTripService(tripId: 'direct', serviceId: 'service'),
+            GtfsTripService(tripId: 'first', serviceId: 'service'),
+            GtfsTripService(tripId: 'second', serviceId: 'service'),
+          ],
+          times: [
+            time('direct', 'origin', 1, departure),
+            time('direct', 'destination', 5, departure + 3600),
+            time('first', 'origin', 1, departure),
+            time('first', 'transfer', 5, departure + 600),
+            time('second', 'transfer', 2, departure + 900),
+            time('second', 'destination', 8, departure + 3600),
+          ],
+        );
+        expect(at(9 * 3600, midnight), isEmpty);
+        expect(at(25 * 3600, midnight), hasLength(2));
+        expect(
+          at(
+            25 * 3600,
+            midnight.add(const Duration(hours: 1, microseconds: 1)),
+          ),
+          isEmpty,
+        );
+      }
+    },
+  );
+
   test('today filters past direct and transfer departures in both modes', () {
     for (final mode in TravelTimeMode.values) {
       List<JourneyRecommendation> search(DateTime instant, {int? selected}) =>

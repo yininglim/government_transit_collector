@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_evidence_models.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/cost_scenario.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/district_route_stop_evidence_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/fuel_cost_calculation_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/operational_evidence_models.dart';
@@ -659,7 +660,10 @@ bool _sameStopCatalogEntry(
 class CostGeminiPayloadBuilder {
   const CostGeminiPayloadBuilder();
 
-  CostGeminiEvidencePayload build(FuelCostCalculationEvidence evidence) {
+  CostGeminiEvidencePayload build(
+    FuelCostCalculationEvidence evidence, {
+    CostPlanningContext? planningContext,
+  }) {
     final references = <String>{
       'cost.diesel_price',
       'cost.fuel_consumption_benchmark',
@@ -708,6 +712,9 @@ class CostGeminiPayloadBuilder {
           ScheduledServiceEvidenceStatus.available)
         'scheduled_service_${evidence.scheduledServiceStatus.name}',
       if (!evidence.hasCompleteDirectionData) 'incomplete_direction_data',
+      if (planningContext != null &&
+          planningContext.busFrequencyAction != 'maintainService')
+        'future_service_change_quantity_not_defined',
     ];
 
     return CostGeminiEvidencePayload({
@@ -773,10 +780,37 @@ class CostGeminiPayloadBuilder {
           evidence.highEstimatedFuelCostRm,
         ),
       },
-      'unavailable_cost_categories': const [
-        'driver_staff_cost',
+      if (planningContext != null)
+        'planning_context': {
+          'route_id': planningContext.routeId,
+          'authoritative_bus_frequency_action':
+              planningContext.busFrequencyAction,
+          'additional_buses': planningContext.additionalBuses,
+          'additional_drivers': planningContext.additionalDrivers,
+          'estimated_bus_acquisition_cost_rm':
+              planningContext.estimatedBusAcquisitionCostRm,
+          if (planningContext.additionalBuses != null)
+            'bus_acquisition_basis': {
+              'rm_per_additional_diesel_bus': additionalDieselBusCostRm,
+              'source': additionalDieselBusCostSource,
+            },
+          'low_estimated_monthly_driver_cost_rm':
+              planningContext.lowMonthlyDriverCostRm,
+          'high_estimated_monthly_driver_cost_rm':
+              planningContext.highMonthlyDriverCostRm,
+          if (planningContext.additionalDrivers != null)
+            'driver_cost_basis': {
+              'low_rm_per_driver_per_month': lowMonthlyDriverCostRm,
+              'high_rm_per_driver_per_month': highMonthlyDriverCostRm,
+              'source': monthlyDriverCostSource,
+            },
+          'fuel_cost_scope': 'current_scheduled_service_baseline',
+          'future_service_change_quantity_defined': false,
+        },
+      'unavailable_cost_categories': [
+        if (planningContext?.additionalDrivers == null) 'driver_staff_cost',
         'maintenance_cost',
-        'bus_acquisition_cost',
+        if (planningContext?.additionalBuses == null) 'bus_acquisition_cost',
         'bus_stop_construction_cost',
         'total_implementation_cost',
       ],

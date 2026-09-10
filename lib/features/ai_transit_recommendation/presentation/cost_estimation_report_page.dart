@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
-import 'package:government_transit_collector/core/time/transit_service_time.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/cost_dashboard_coordinator.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/cost_recommendation_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/cost_recommendation_repository.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/cost_scenario.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_dashboard_coordinator.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/bus_frequency_recommendation_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/fuel_cost_calculation_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/fuel_cost_calculation_repository.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/presentation/numeric_display.dart';
 import 'package:government_transit_collector/features/route_performance/data/route_performance_repository.dart';
-import 'package:timezone/timezone.dart' as timezone;
 
 class CostEstimationReportPage extends StatefulWidget {
   const CostEstimationReportPage({
@@ -16,6 +18,8 @@ class CostEstimationReportPage extends StatefulWidget {
     this.evidenceRepository,
     this.routeRepository,
     this.now,
+    this.preparationScheduler,
+    this.busFrequencySession,
     super.key,
   });
 
@@ -25,6 +29,8 @@ class CostEstimationReportPage extends StatefulWidget {
   final FuelCostCalculationRepository? evidenceRepository;
   final RoutePerformanceRepository? routeRepository;
   final DateTime Function()? now;
+  final Future<void> Function()? preparationScheduler;
+  final BusFrequencyDashboardSession? busFrequencySession;
 
   @override
   State<CostEstimationReportPage> createState() =>
@@ -37,13 +43,30 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
   bool _screening = false;
   bool _analysing = false;
   String? _retryingRouteId;
+  final _additionalBusesController = TextEditingController();
+  final _additionalDriversController = TextEditingController();
+  final _additionalBusesFocusNode = FocusNode();
+  final _additionalDriversFocusNode = FocusNode();
+  String? _additionalBusesError;
+  String? _additionalDriversError;
+  String? _selectedScenarioRouteId;
+  String? _costReportActionKey;
+  bool _resourceCostReady = false;
+
+  @override
+  void dispose() {
+    _additionalBusesController.dispose();
+    _additionalDriversController.dispose();
+    _additionalBusesFocusNode.dispose();
+    _additionalDriversFocusNode.dispose();
+    super.dispose();
+  }
 
   List<CostDashboardCandidate> get _candidates => _session.candidates;
   List<CostDashboardEntry> get _entries => _session.entries;
   DateTime? get _periodStartUtc => _session.periodStartUtc;
   DateTime? get _periodEndUtc => _session.periodEndUtc;
   DateTime? get _referenceDate => _session.referenceDate;
-  bool get _empty => _session.empty;
   set _empty(bool value) => _session.empty = value;
   bool get _setupFailure => _session.setupFailure;
   set _setupFailure(bool value) => _session.setupFailure = value;
@@ -57,6 +80,26 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
   @override
   void initState() {
     super.initState();
+    _additionalBusesFocusNode.addListener(() {
+      if (!_additionalBusesFocusNode.hasFocus) {
+        _validateResourceField(
+          _additionalBusesController,
+          'Additional buses',
+          maxAdditionalBusPlanningCount,
+          (error) => _additionalBusesError = error,
+        );
+      }
+    });
+    _additionalDriversFocusNode.addListener(() {
+      if (!_additionalDriversFocusNode.hasFocus) {
+        _validateResourceField(
+          _additionalDriversController,
+          'Additional drivers',
+          maxAdditionalDriverPlanningCount,
+          (error) => _additionalDriversError = error,
+        );
+      }
+    });
     _session = widget.session ?? CostDashboardSession();
     _coordinator =
         widget.coordinator ??
@@ -77,40 +120,41 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
   }
 
   ({DateTime startUtc, DateTime endUtc, DateTime referenceDate}) _newPeriod() {
-    final now = currentTransitServiceDateTime(now: widget.now);
-    final today = timezone.TZDateTime(
-      transitServiceLocation,
-      now.year,
-      now.month,
-      now.day,
-    );
-    return (
-      startUtc: today.subtract(const Duration(days: 29)).toUtc(),
-      endUtc: today.add(const Duration(days: 1)).toUtc(),
-      referenceDate: DateTime(now.year, now.month, now.day),
-    );
+    return costAnalysisPeriod(now: widget.now);
   }
 
   Future<void> _startAnalysis() async {
     if (_screening || _analysing || _retryingRouteId != null) return;
     final period = _newPeriod();
+    final prepared =
+        _session.screeningComplete &&
+        _session.matchesPeriod(
+          period.startUtc,
+          period.endUtc,
+          period.referenceDate,
+        );
+    if (prepared && _entries.isEmpty) {
+      setState(() => _empty = _candidates.isEmpty);
+      return;
+    }
     setState(() {
-      _session.begin(period.startUtc, period.endUtc, period.referenceDate);
+      if (_entries.isNotEmpty) _session.clear();
       _screening = true;
     });
     try {
-      final candidates = await _coordinator.screenCandidates(
-        startUtc: period.startUtc,
-        endExclusiveUtc: period.endUtc,
-        referenceDate: period.referenceDate,
-      );
+      await (widget.preparationScheduler?.call() ??
+          _coordinator.prepareSession(
+            session: _session,
+            startUtc: period.startUtc,
+            endExclusiveUtc: period.endUtc,
+            referenceDate: period.referenceDate,
+          ));
       if (!mounted) return;
+      final candidates = _candidates.toList(growable: false);
       setState(() {
-        _candidates.addAll(candidates);
         _screening = false;
         _empty = candidates.isEmpty;
       });
-      if (candidates.isNotEmpty) await _analyseNextBatch();
     } on Object {
       if (!mounted) return;
       setState(() {
@@ -130,7 +174,17 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
         end == null ||
         reference == null)
       return;
-    final remaining = _candidates.skip(_nextCandidateIndex).toList();
+    final selectedRouteId = _selectedScenarioRouteId ??
+        _frequencyRecommendations.firstOrNull?.routeId;
+    final scopedCandidates = selectedRouteId == null
+        ? const <CostDashboardCandidate>[]
+        : _candidates
+              .where((candidate) =>
+                  candidate.route.routeId == selectedRouteId)
+              .toList(growable: false);
+    final remaining = scopedCandidates
+        .skip(_nextCandidateIndex)
+        .toList();
     if (remaining.isEmpty) return;
     final total = remaining.length.clamp(0, costDashboardBatchSize);
     setState(() {
@@ -143,6 +197,7 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
       startUtc: start,
       endExclusiveUtc: end,
       referenceDate: reference,
+      planningContext: _planningContext,
       onCompleted: (completed, batchTotal, entry) {
         if (!mounted) return;
         setState(() {
@@ -174,6 +229,7 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
         startUtc: start,
         endExclusiveUtc: end,
         referenceDate: reference,
+        planningContext: _planningContext,
       );
       if (!mounted) return;
       final index = _entries.indexWhere(
@@ -187,8 +243,6 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
     }
   }
 
-  int get _remainingCount => _candidates.length - _nextCandidateIndex;
-
   FuelCostCalculationEvidence? _evidenceFor(CostDashboardEntry entry) =>
       entry.result.evidence ??
       _candidates
@@ -198,7 +252,7 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Cost Recommendations')),
+    appBar: AppBar(title: const Text('Cost Estimation Report')),
     body: SafeArea(
       child: ListView(
         padding: const EdgeInsets.all(16),
@@ -206,7 +260,45 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
           _header(),
           const SizedBox(height: 16),
           _analysisCard(),
-          if (_screening || _analysing) ...[
+          if (_frequencyRecommendations.isEmpty) ...[
+            const SizedBox(height: 16),
+            _messageCard(
+              'No Bus Frequency Recommendation Yet',
+              'Generate a Bus Frequency Recommendation first to estimate the cost impact of a frequency change.',
+            ),
+          ] else ...[
+            const SizedBox(height: 16),
+            _selectionCard(),
+            if (_selectedCostCandidate case final selected?) ...[
+              const SizedBox(height: 16),
+              _evidenceOverview(selected.evidence),
+              const SizedBox(height: 16),
+              _costPlanCard(selected),
+              if (_hasValidScenarioForInsight) ...[
+                const SizedBox(height: 16),
+                _aiCostInsightSection(),
+              ],
+            ] else if (_setupFailure) ...[
+              const SizedBox(height: 16),
+              _messageCard(
+                'Cost evidence could not be prepared.',
+                'Start a new analysis when the data service is available.',
+              ),
+            ] else if (!_session.screeningComplete || _screening) ...[
+              const SizedBox(height: 16),
+              _messageCard(
+                'Preparing selected route cost evidence...',
+                'The current route evidence is still being prepared.',
+              ),
+            ] else ...[
+              const SizedBox(height: 16),
+              _messageCard(
+                'Cost Evidence Unavailable',
+                'The selected route does not have enough deterministic cost evidence for this report.',
+              ),
+            ],
+          ],
+          if (_analysing && !_hasValidScenarioForInsight) ...[
             const SizedBox(height: 16),
             const LinearProgressIndicator(key: Key('analysis-progress')),
             const SizedBox(height: 8),
@@ -217,47 +309,6 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
               key: const Key('analysis-progress-label'),
               textAlign: TextAlign.center,
             ),
-          ],
-          if (_setupFailure) ...[
-            const SizedBox(height: 16),
-            _messageCard(
-              'Cost evidence could not be prepared.',
-              'Start a new analysis when the data service is available.',
-            ),
-          ],
-          if (_empty) ...[
-            const SizedBox(height: 16),
-            _messageCard(
-              'No eligible routes',
-              'No routes currently have enough deterministic fuel-cost evidence for AI analysis over the past 30 days.',
-            ),
-          ],
-          if (_entries.isNotEmpty) ...[
-            const SizedBox(height: 24),
-            Text(
-              'Recommendation Results',
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
-            const SizedBox(height: 12),
-            for (final entry in _entries) ...[
-              _resultCard(entry),
-              const SizedBox(height: 12),
-            ],
-            Text(
-              '${_entries.length} of ${_candidates.length} eligible routes analysed',
-              key: const Key('analysed-count'),
-            ),
-            if (_remainingCount > 0) ...[
-              const SizedBox(height: 12),
-              FilledButton.icon(
-                key: const Key('analyse-next-routes'),
-                onPressed: _analysing || _screening || _retryingRouteId != null
-                    ? null
-                    : _analyseNextBatch,
-                icon: const Icon(Icons.navigate_next),
-                label: Text('Analyse Next Routes ($_remainingCount remaining)'),
-              ),
-            ],
           ],
         ],
       ),
@@ -277,12 +328,12 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Cost Recommendations',
+              'Cost Estimation Report',
               style: Theme.of(context).textTheme.titleLarge,
             ),
             const SizedBox(height: 4),
             Text(
-              'Review evidence-grounded fuel-cost actions across eligible routes.',
+              'Estimate supported costs for the selected Bus Frequency Recommendation.',
               style: TextStyle(
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
@@ -293,33 +344,491 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
     ],
   );
 
-  Widget _analysisCard() => Card(
+  Widget _analysisCard() => SizedBox(
+    width: double.infinity,
+    child: FilledButton.icon(
+      key: const Key('analyse-routes'),
+      onPressed: _screening || _analysing || _retryingRouteId != null
+          ? null
+          : _startAnalysis,
+      icon: const Icon(Icons.refresh),
+      label: const Text('Start New Analysis'),
+    ),
+  );
+
+  Widget _evidenceOverview(FuelCostCalculationEvidence evidence) {
+    final analysisDays = evidence.periodEnd.difference(evidence.periodStart).inDays;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Cost Estimation Evidence',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            _detail(
+              '$analysisDays-Day Scheduled Departures',
+              displayCount(evidence.totalScheduledDepartureCount),
+            ),
+            _detail(
+              '$analysisDays-Day Scheduled Vehicle-km',
+              '${displayDecimal(evidence.scheduledVehicleKilometres)} km',
+            ),
+            if (evidence.dieselPrice.rmPerLitre case final price?)
+              _detail('Diesel Price Used', '${displayMoney(price)} / L'),
+            const SizedBox(height: 16),
+            ..._currentServiceEvidence(evidence),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _aiCostInsightSection() => Card(
     child: Padding(
       padding: const EdgeInsets.all(16),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Analysis Period',
+            'AI Cost Insight',
             style: Theme.of(context).textTheme.titleMedium,
           ),
-          const SizedBox(height: 6),
-          const Text('Past 30 Days', key: Key('analysis-period')),
-          const SizedBox(height: 16),
-          FilledButton.icon(
-            key: const Key('analyse-routes'),
-            onPressed: _screening || _analysing || _retryingRouteId != null
-                ? null
-                : _startAnalysis,
-            icon: const Icon(Icons.auto_awesome),
-            label: Text(
-              _entries.isEmpty ? 'Analyse Routes' : 'Start New Analysis',
+          const SizedBox(height: 8),
+          if (_entries.isNotEmpty) ...[
+            for (final entry in _entries) _resultCard(entry),
+          ] else if (_analysing) ...[
+            const LinearProgressIndicator(key: Key('cost-insight-progress')),
+            const SizedBox(height: 8),
+            const Text('Generating AI Cost Insight...'),
+          ] else
+            FilledButton.icon(
+              key: const Key('generate-cost-insight'),
+              onPressed: _canGenerateInsight ? _analyseNextBatch : null,
+              icon: const Icon(Icons.auto_awesome),
+              label: const Text('Generate AI Cost Insight'),
             ),
-          ),
         ],
       ),
     ),
   );
+
+  BusFrequencyRouteRecommendationRecord? get _selectedFrequencyRecommendation {
+    final recommendations = _frequencyRecommendations;
+    if (recommendations.isEmpty) return null;
+    return recommendations
+            .where((record) => record.routeId == _selectedScenarioRouteId)
+            .firstOrNull ??
+        recommendations.first;
+  }
+
+  CostDashboardCandidate? get _selectedCostCandidate {
+    final recommendation = _selectedFrequencyRecommendation;
+    if (recommendation == null) return null;
+    return _candidates
+        .where(
+          (candidate) => candidate.route.routeId == recommendation.routeId,
+        )
+        .firstOrNull;
+  }
+
+  Widget _selectionCard() {
+    final recommendations = _frequencyRecommendations;
+    final selectedRecommendation = _selectedFrequencyRecommendation;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Selected Recommendation',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<String>(
+              value: selectedRecommendation?.routeId,
+              menuMaxHeight: 240,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'Select Bus Frequency Recommendation',
+              ),
+              items: [
+                for (final record in recommendations)
+                  DropdownMenuItem(
+                    value: record.routeId,
+                    child: Text(
+                      '${_routeName(record.routeId)} \u2014 ${_frequencyActionLabel(record.action)}',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+              ],
+              onChanged: _selectRecommendation,
+            ),
+            if (selectedRecommendation != null) ...[
+              const SizedBox(height: 8),
+              _detail('Route', _routeName(selectedRecommendation.routeId)),
+              _detail(
+                'Recommendation',
+                _frequencyActionLabel(selectedRecommendation.action),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _selectRecommendation(String? routeId) {
+    setState(() {
+      _selectedScenarioRouteId = routeId;
+      _resourceCostReady = false;
+      _costReportActionKey = null;
+      _additionalBusesController.clear();
+      _additionalDriversController.clear();
+      _additionalBusesError = null;
+      _additionalDriversError = null;
+      _entries.clear();
+      _nextCandidateIndex = 0;
+      _completedInBatch = 0;
+      _batchTotal = 0;
+    });
+  }
+
+  Widget _costPlanCard(CostDashboardCandidate selected) {
+    final recommendation = _selectedFrequencyRecommendation;
+    if (recommendation == null) {
+      return _messageCard(
+        'Cost Scenario Unavailable',
+        'The selected Bus Frequency Recommendation is no longer available.',
+      );
+    }
+    final isIncrease =
+        recommendation.action ==
+        BusFrequencyRecommendationAction.increasePeakHourFrequency;
+    final isDecrease =
+        recommendation.action ==
+        BusFrequencyRecommendationAction.decreaseService;
+    final reportReady = _isCostReportReady(recommendation);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (isIncrease) ...[
+              Text(
+                'Planning Assumptions',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 8),
+              _resourceField(
+                _additionalBusesController,
+                'Additional Buses',
+                focusNode: _additionalBusesFocusNode,
+                errorText: _additionalBusesError,
+              ),
+              _resourceField(
+                _additionalDriversController,
+                'Additional Drivers',
+                focusNode: _additionalDriversFocusNode,
+                errorText: _additionalDriversError,
+              ),
+              const Text(
+                'Planning bases: RM 700,000 per diesel bus; RM 2,500\u2013RM 3,500 per driver per month.',
+              ),
+              const SizedBox(height: 12),
+              FilledButton(
+                key: const Key('calculate-cost'),
+                onPressed: () => _calculateResourceCosts(
+                  selected,
+                  recommendation,
+                ),
+                child: const Text('Calculate Cost'),
+              ),
+            ],
+            if (reportReady) ...[
+              if (isIncrease) const SizedBox(height: 20),
+              Text(
+                'Estimated Cost',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              if (isIncrease) ...[
+                const SizedBox(height: 12),
+                Text(
+                  'One-off',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+                _detail(
+                  'Estimated Bus Acquisition Cost',
+                  _resourceCost(
+                    _additionalBusesController.text,
+                    additionalDieselBusCostRm,
+                    label: 'Additional buses',
+                    maximum: maxAdditionalBusPlanningCount,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Recurring',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+                _detail(
+                  'Estimated Monthly Driver Cost',
+                  _resourceRange(
+                    _additionalDriversController.text,
+                    lowMonthlyDriverCostRm,
+                    highMonthlyDriverCostRm,
+                    label: 'Additional drivers',
+                    maximum: maxAdditionalDriverPlanningCount,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 12),
+              Text('Fuel', style: Theme.of(context).textTheme.titleSmall),
+              _detail('Estimated Fuel Cost', _fuelRange(selected.evidence)),
+              const SizedBox(height: 8),
+              const Text(
+                'Based on current scheduled service over the 30-day analysis period and the applicable diesel price.',
+              ),
+              if (isDecrease) ...[
+                const SizedBox(height: 12),
+                const Text(
+                  'Exact fuel savings cannot be estimated until a specific service reduction is defined.',
+                ),
+              ],
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  bool _isCostReportReady(
+    BusFrequencyRouteRecommendationRecord recommendation,
+  ) {
+    if (recommendation.action !=
+        BusFrequencyRecommendationAction.increasePeakHourFrequency) {
+      return true;
+    }
+    return _resourceCostReady &&
+        _costReportActionKey == recommendation.action.name &&
+        _selectedScenarioRouteId == recommendation.routeId;
+  }
+
+  void _calculateResourceCosts(
+    CostDashboardCandidate selected,
+    BusFrequencyRouteRecommendationRecord recommendation,
+  ) {
+    final buses = parseNonNegativeResource(
+      _additionalBusesController.text,
+      'Additional buses',
+      maximum: maxAdditionalBusPlanningCount,
+    );
+    final drivers = parseNonNegativeResource(
+      _additionalDriversController.text,
+      'Additional drivers',
+      maximum: maxAdditionalDriverPlanningCount,
+    );
+    setState(() {
+      _additionalBusesError = buses.error;
+      _additionalDriversError = drivers.error;
+      if (buses.error != null || drivers.error != null) {
+        _resourceCostReady = false;
+        _costReportActionKey = null;
+        return;
+      }
+      _selectedScenarioRouteId = selected.route.routeId;
+      _resourceCostReady = true;
+      _costReportActionKey = recommendation.action.name;
+      _entries.clear();
+      _nextCandidateIndex = 0;
+    });
+  }
+
+  List<Widget> _currentServiceEvidence(
+    FuelCostCalculationEvidence evidence,
+  ) {
+    if (evidence.directionGroups.isEmpty) return const [];
+    return [
+      Text('Current Service', style: Theme.of(context).textTheme.titleSmall),
+      for (var index = 0; index < evidence.directionGroups.length; index++)
+        _directionEvidence(evidence.directionGroups[index], index),
+    ];
+  }
+
+  Widget _directionEvidence(
+    DirectionFuelCalculationEvidence group,
+    int index,
+  ) {
+    final label =
+        group.directionLabel ?? 'Direction ${group.directionId ?? index}';
+    final minimum = group.minimumHeadwaySeconds;
+    final maximum = group.maximumHeadwaySeconds;
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
+          if (group.currentHeadwayMinutes case final current?)
+            _detail('Current Headway', '${displayDecimal(current)} min'),
+          if (minimum != null && maximum != null && minimum == maximum)
+            _detail(
+              'Scheduled Headway',
+              '${displayDecimal(minimum / 60)} min',
+            ),
+          if (minimum != null && maximum != null && minimum != maximum)
+            _detail(
+              'Scheduled Headway Range',
+              '${displayDecimal(minimum / 60)}\u2013${displayDecimal(maximum / 60)} min',
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _resourceField(
+    TextEditingController controller,
+    String label, {
+    required FocusNode focusNode,
+    required String? errorText,
+  }) => TextField(
+    controller: controller,
+    focusNode: focusNode,
+    keyboardType: TextInputType.number,
+    decoration: InputDecoration(
+      labelText: '$label (planning assumption)',
+      errorText: errorText,
+      errorMaxLines: 3,
+    ),
+    onChanged: (_) => setState(() {
+      _resourceCostReady = false;
+      _costReportActionKey = null;
+      _entries.clear();
+      _nextCandidateIndex = 0;
+      if (controller == _additionalBusesController) {
+        _additionalBusesError = null;
+      } else {
+        _additionalDriversError = null;
+      }
+    }),
+  );
+
+  void _validateResourceField(
+    TextEditingController controller,
+    String label,
+    int maximum,
+    void Function(String?) setError,
+  ) {
+    final validation = parseNonNegativeResource(
+      controller.text,
+      label,
+      maximum: maximum,
+    );
+    if (!mounted) return;
+    setState(() {
+      setError(validation.error);
+    });
+  }
+
+  String _resourceCost(
+    String raw,
+    int unit, {
+    required String label,
+    required int maximum,
+  }) {
+    final count = parseNonNegativeResource(
+      raw,
+      label,
+      maximum: maximum,
+    ).value;
+    return count == null ? 'Unavailable' : displayMoney(count * unit);
+  }
+
+  String _resourceRange(
+    String raw,
+    int lowUnit,
+    int highUnit, {
+    required String label,
+    required int maximum,
+  }) {
+    final count = parseNonNegativeResource(
+      raw,
+      label,
+      maximum: maximum,
+    ).value;
+    return count == null
+        ? 'Unavailable'
+        : '${displayMoney(count * lowUnit)} \u2013 ${displayMoney(count * highUnit)} / month';
+  }
+
+  bool get _canGenerateInsight =>
+      !_screening && !_analysing && _hasValidScenarioForInsight;
+
+  bool get _hasValidScenarioForInsight {
+    final recommendation = _selectedFrequencyRecommendation;
+    final candidate = _selectedCostCandidate;
+    if (_screening || recommendation == null || candidate == null) return false;
+    return _isCostReportReady(recommendation);
+  }
+
+  CostPlanningContext? get _planningContext {
+    final recommendation = _selectedFrequencyRecommendation;
+    final candidate = _selectedCostCandidate;
+    if (recommendation == null || candidate == null) return null;
+    final buses = parseNonNegativeResource(
+      _additionalBusesController.text,
+      'Additional buses',
+      maximum: maxAdditionalBusPlanningCount,
+    );
+    final drivers = parseNonNegativeResource(
+      _additionalDriversController.text,
+      'Additional drivers',
+      maximum: maxAdditionalDriverPlanningCount,
+    );
+    final busCount = buses.error == null ? buses.value : null;
+    final driverCount = drivers.error == null ? drivers.value : null;
+    return CostPlanningContext(
+      routeId: candidate.route.routeId,
+      busFrequencyAction: recommendation.action.name,
+      additionalBuses: busCount,
+      additionalDrivers: driverCount,
+      estimatedBusAcquisitionCostRm:
+          busCount == null ? null : busCount * additionalDieselBusCostRm,
+      lowMonthlyDriverCostRm:
+          driverCount == null ? null : driverCount * lowMonthlyDriverCostRm,
+      highMonthlyDriverCostRm:
+          driverCount == null ? null : driverCount * highMonthlyDriverCostRm,
+    );
+  }
+
+  List<BusFrequencyRouteRecommendationRecord> get _frequencyRecommendations {
+    final records = widget.busFrequencySession?.recommendationResult?.synthesis
+        ?.routeRecommendations;
+    if (records == null) return const [];
+    return records
+        .where((record) =>
+            record.action !=
+            BusFrequencyRecommendationAction.insufficientEvidence)
+        .toList(growable: false);
+  }
+
+  String _routeName(String routeId) => _candidates
+      .where((candidate) => candidate.route.routeId == routeId)
+      .firstOrNull
+      ?.route
+      .displayName ?? routeId;
+
+  String _frequencyActionLabel(BusFrequencyRecommendationAction action) => switch (action) {
+    BusFrequencyRecommendationAction.increasePeakHourFrequency => 'Increase Peak-Hour Frequency',
+    BusFrequencyRecommendationAction.maintainService => 'Maintain Current Frequency',
+    BusFrequencyRecommendationAction.decreaseService => 'Decrease Frequency',
+    BusFrequencyRecommendationAction.insufficientEvidence => 'Needs More Evidence',
+  };
 
   Widget _resultCard(CostDashboardEntry entry) {
     final recommendation = entry.result.recommendation;
@@ -360,7 +869,7 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
             if (evidence != null) ...[
               const SizedBox(height: 12),
               Text(
-                'Deterministic Fuel Expenditure Range',
+                'Estimated Fuel Cost',
                 style: Theme.of(context).textTheme.titleSmall,
               ),
               Text(_fuelRange(evidence)),
@@ -386,7 +895,7 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(Icons.refresh),
-                    label: const Text('Retry'),
+                    label: const Text('Retry AI Cost Insight'),
                   ),
               ],
             ),
@@ -417,7 +926,6 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
             ),
             const SizedBox(height: 16),
             _detail('Route', entry.route.displayName),
-            _detail('Analysis Period', 'Past 30 Days'),
             if (entry.result.recommendation case final recommendation?) ...[
               _detail('Recommendation', _actionLabel(recommendation.action)),
               _detail(
@@ -428,7 +936,7 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
               Text(recommendation.summary),
               if (recommendation.rationale.isNotEmpty) ...[
                 const SizedBox(height: 20),
-                _section('Rationale', recommendation.rationale),
+                _section('AI Cost Insight', recommendation.rationale),
               ],
               if (recommendation.evidenceReferences.isNotEmpty) ...[
                 const SizedBox(height: 20),
@@ -465,9 +973,13 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
                 ),
                 const SizedBox(height: 12),
               ],
+              if (_planningBasisDetails(entry).isNotEmpty) ...[
+                _section('Estimation Bases', _planningBasisDetails(entry)),
+                const SizedBox(height: 12),
+              ],
               _detail(
                 'Diesel Price',
-                'RM ${evidence.dieselPrice.rmPerLitre!.toStringAsFixed(2)} per litre',
+                '${displayMoney(evidence.dieselPrice.rmPerLitre!)} per litre',
               ),
               _detail(
                 'Diesel Effective Date',
@@ -475,7 +987,7 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
               ),
               _detail(
                 'Scheduled Vehicle-km',
-                evidence.scheduledVehicleKilometres.toStringAsFixed(2),
+                displayDecimal(evidence.scheduledVehicleKilometres),
               ),
               _detail('Fuel Expenditure Range', _fuelRange(evidence)),
               _detail(
@@ -505,6 +1017,17 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
         .whereType<String>()
         .map(_categoryLabel)
         .toList(growable: false);
+  }
+
+  List<String> _planningBasisDetails(CostDashboardEntry entry) {
+    final context = entry.result.payload?.toJson()['planning_context'];
+    if (context is! Map<String, dynamic>) return const [];
+    return [
+      if (context['additional_buses'] != null)
+        'Bus acquisition: ${displayMoney(additionalDieselBusCostRm)} per additional diesel bus. $additionalDieselBusCostSource.',
+      if (context['additional_drivers'] != null)
+        'Driver cost: ${displayMoney(lowMonthlyDriverCostRm)}\u2013${displayMoney(highMonthlyDriverCostRm)} per additional driver per month. $monthlyDriverCostSource.',
+    ];
   }
 
   Widget _messageCard(String title, String body) => Card(
@@ -544,7 +1067,7 @@ class _CostEstimationReportPageState extends State<CostEstimationReportPage> {
       Text(title, style: Theme.of(context).textTheme.titleSmall),
       const SizedBox(height: 6),
       for (final item in items)
-        Padding(padding: const EdgeInsets.only(top: 4), child: Text('• $item')),
+        Padding(padding: const EdgeInsets.only(top: 4), child: Text('\u2022 $item')),
     ],
   );
 }
@@ -553,8 +1076,9 @@ String _fuelRange(FuelCostCalculationEvidence evidence) {
   final low = evidence.lowEstimatedFuelCostRm;
   final high = evidence.highEstimatedFuelCostRm;
   if (low == null || high == null) return 'Unavailable';
-  return 'RM ${low.toStringAsFixed(2)} – RM ${high.toStringAsFixed(2)}';
+  return '${displayMoney(low)} \u2013 ${displayMoney(high)}';
 }
+
 
 String _date(DateTime value) =>
     '${value.year.toString().padLeft(4, '0')}-${value.month.toString().padLeft(2, '0')}-${value.day.toString().padLeft(2, '0')}';

@@ -6,6 +6,7 @@ import 'package:government_transit_collector/features/ai_transit_recommendation/
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/cost_estimation_evidence_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/cost_recommendation_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/cost_recommendation_repository.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/cost_scenario.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/fuel_cost_calculation_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/fuel_cost_calculation_repository.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/gemini_evidence_payloads.dart';
@@ -488,6 +489,7 @@ class FakeRecommendationRepository implements CostRecommendationRepository {
     required DateTime endExclusiveUtc,
     required DateTime referenceDate,
     FuelCostCalculationEvidence? evidence,
+    CostPlanningContext? planningContext,
   }) async {
     routeIds.add(routeId);
     this.evidence.add(evidence);
@@ -539,6 +541,7 @@ class FakeDashboardCoordinator extends CostDashboardCoordinator {
     required DateTime startUtc,
     required DateTime endExclusiveUtc,
     required DateTime referenceDate,
+    CostPlanningContext? planningContext,
     void Function(int completed, int total, CostDashboardEntry entry)?
     onCompleted,
   }) async {
@@ -569,6 +572,7 @@ class FakeDashboardCoordinator extends CostDashboardCoordinator {
     required DateTime startUtc,
     required DateTime endExclusiveUtc,
     required DateTime referenceDate,
+    CostPlanningContext? planningContext,
   }) async {
     retryRouteIds.add(candidate.route.routeId);
     return CostDashboardEntry(

@@ -93,30 +93,50 @@ class SupabaseFeedbackReferenceRepository
     final normalized =
     query.trim();
 
-    if (normalized.isEmpty) {
-      return const [];
-    }
-
     try {
       final safe =
       _escapeLikePattern(
         normalized,
       );
 
-      final data = await _client
-          .from('gtfs_routes')
-          .select(
-        'route_id, route_short_name, route_long_name',
-      )
-          .or(
-        'route_short_name.ilike.%$safe%,route_long_name.ilike.%$safe%,route_id.ilike.%$safe%',
-      )
-          .order(
-        'route_short_name',
-      )
-          .limit(
-        resultLimit,
-      );
+      // Keep search text in a single filter value, never in raw OR syntax.
+      // Union matching IDs, then let the existing query order the results.
+      final matchingIds = <String>{};
+      if (normalized.isNotEmpty) {
+        for (final column in [
+          'route_short_name',
+          'route_long_name',
+          'route_id',
+        ]) {
+          for (var offset = 0; ; offset += _batchSize) {
+            final matches = await _client
+                .from('gtfs_routes')
+                .select('route_id')
+                .ilike(column, '%$safe%')
+                .order('route_id')
+                .range(offset, offset + _batchSize - 1);
+            matchingIds.addAll(matches.map((row) => row['route_id'] as String));
+            if (matches.length < _batchSize) break;
+          }
+        }
+        if (matchingIds.isEmpty) return [];
+      }
+
+      final data = <Map<String, dynamic>>[];
+      for (var offset = 0; ; offset += _batchSize) {
+        var request = _client.from('gtfs_routes').select(
+          'route_id, route_short_name, route_long_name',
+        );
+        if (normalized.isNotEmpty) {
+          request = request.inFilter('route_id', matchingIds.toList());
+        }
+        final page = await request
+            .order('route_short_name')
+            .order('route_id')
+            .range(offset, offset + _batchSize - 1);
+        data.addAll(page);
+        if (page.length < _batchSize) break;
+      }
 
       return data
           .map(

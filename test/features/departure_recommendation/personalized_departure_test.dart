@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'package:government_transit_collector/features/departure_recommendation/data/transfer_journey_repository.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:government_transit_collector/features/departure_recommendation/data/departure_stop_repository.dart';
@@ -43,7 +45,63 @@ class RecordingSaved implements SavedJourneyRepository {
   Future<void> delete(String id) async {}
 }
 
+class PendingDirect extends existing.FakeDirectTripRepository {
+  final pending = Completer<List<DirectRouteResult>>();
+  @override
+  Future<List<DirectRouteResult>> findDirectRoutes({
+    required String originStopId,
+    required String destinationStopId,
+  }) => pending.future;
+}
+
+class FailingTransfer extends existing.FakeTransferJourneyRepository {
+  @override
+  Future<List<OneTransferJourneyResult>> findOneTransferJourneys({
+    required String originStopId,
+    required String destinationStopId,
+  }) async {
+    throw const TransferJourneyReadException('Transfer query failed');
+  }
+}
+
 void main() {
+  testWidgets(
+    'review: transfer error is handled while direct query is pending',
+    (tester) async {
+      final direct = PendingDirect();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: DepartureRecommendationPage(
+            stopRepository: existing.FakeDepartureStopRepository(),
+            tripRepository: direct,
+            transferRepository: FailingTransfer(),
+            timetableRepository:
+                existing.FakeTimetableRecommendationRepository(),
+            recentSearchRepository: existing.FakeRecentSearchRepository(),
+            savedJourneyRepository: RecordingSaved(),
+            initialJourney: const SavedJourney(
+              id: 'saved',
+              name: 'Test',
+              origin: existing.larkin,
+              destination: existing.jbSentral,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final search = find.byKey(const Key('journey-search-button'));
+      await tester.ensureVisible(search);
+      await tester.tap(search);
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+      direct.pending.complete([]);
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Transfer query failed'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
   testWidgets('Save Journey dialog submits the selected pair and name', (
     tester,
   ) async {

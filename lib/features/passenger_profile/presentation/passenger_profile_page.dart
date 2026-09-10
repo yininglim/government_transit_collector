@@ -1,3 +1,5 @@
+import 'package:government_transit_collector/features/departure_recommendation/data/favourite_stop_repository.dart';
+import 'package:government_transit_collector/features/departure_recommendation/data/departure_stop_repository.dart';
 import 'package:government_transit_collector/features/tracked_journeys/tracked_journey_repository.dart';
 import 'package:government_transit_collector/features/bus_feedback/data/bus_feedback_repository.dart';
 import 'package:flutter/material.dart';
@@ -19,8 +21,10 @@ class PassengerProfilePage extends StatefulWidget {
     required this.onProfileUpdated,
     this.feedbackRepository,
     this.trackedJourneyRepository,
+    this.favouriteStopRepository,
   });
   final TrackedJourneyRepository? trackedJourneyRepository;
+  final FavouriteStopRepository? favouriteStopRepository;
   final AppProfile profile;
   final BusFeedbackRepository? feedbackRepository;
   final AuthRepository authRepository;
@@ -43,9 +47,47 @@ class _PassengerProfilePageState extends State<PassengerProfilePage> {
   int _radius = 1000;
   bool _savingName = false, _savingRadius = false;
   final Set<String> _deleting = {};
+  late final _favouriteRepository =
+      widget.favouriteStopRepository ??
+      FavouriteStopRepository(userId: widget.profile.userId);
+  List<DepartureStop>? _favouriteStops;
+  String? _favouriteError;
+  final _removingFavourites = <String>{};
+  int _favouriteRequest = 0;
+
+  Future<void> _loadFavouriteStops() async {
+    final request = ++_favouriteRequest;
+    try {
+      final stops = await _favouriteRepository.load();
+      if (mounted && request == _favouriteRequest)
+        setState(() {
+          _favouriteStops = stops;
+          _favouriteError = null;
+        });
+    } on Object {
+      if (mounted && request == _favouriteRequest)
+        setState(() => _favouriteError = 'Unable to load favourite stops.');
+    }
+  }
+
+  Future<void> _removeFavouriteStop(String id) async {
+    if (_removingFavourites.contains(id)) return;
+    setState(() => _removingFavourites.add(id));
+    try {
+      await _favouriteRepository.remove(id);
+    } on Object {
+      if (mounted)
+        _message('Unable to remove favourite stop. Please try again.');
+    } finally {
+      if (mounted) setState(() => _removingFavourites.remove(id));
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    _favouriteRepository.changes.addListener(_loadFavouriteStops);
+    _loadFavouriteStops();
     _name = TextEditingController(text: widget.profile.fullName);
     _displayName = widget.profile.displayName;
     _loadSaved();
@@ -55,6 +97,7 @@ class _PassengerProfilePageState extends State<PassengerProfilePage> {
 
   @override
   void dispose() {
+    _favouriteRepository.changes.removeListener(_loadFavouriteStops);
     _name.dispose();
     super.dispose();
   }
@@ -357,6 +400,36 @@ class _PassengerProfilePageState extends State<PassengerProfilePage> {
                 ),
                 if (_preferenceError != null) Text(_preferenceError!),
               ]),
+              _section('Favourite Bus Stops', Icons.star_outline, [
+                if (_favouriteError != null)
+                  TextButton(
+                    onPressed: _loadFavouriteStops,
+                    child: Text('$_favouriteError Retry'),
+                  )
+                else if (_favouriteStops == null)
+                  const LinearProgressIndicator()
+                else if (_favouriteStops!.isEmpty)
+                  const Text(
+                    'Star a stop when selecting your origin or destination to save it here.',
+                  )
+                else
+                  for (final stop in _favouriteStops!)
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(stop.name),
+                      subtitle: Text(stop.id),
+                      trailing: IconButton(
+                        tooltip: 'Remove favourite stop',
+                        onPressed: _removingFavourites.contains(stop.id)
+                            ? null
+                            : () => _removeFavouriteStop(stop.id),
+                        icon: Icon(
+                          Icons.star,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                      ),
+                    ),
+              ]),
               _section('Saved Journeys', Icons.bookmark_outline, [
                 if (_savedError != null) ...[
                   Text(_savedError!),
@@ -391,73 +464,147 @@ class _PassengerProfilePageState extends State<PassengerProfilePage> {
                       ),
                     ),
               ]),
-              _section('Recent Searches', Icons.history, [
-                const Text(
-                  'Recent searches on this device, not completed trips.',
-                ),
-                TextButton(
-                  onPressed: _clear,
-                  child: const Text('Clear History'),
-                ),
-                if (_recentError != null) ...[
-                  Text(_recentError!),
-                  TextButton(
-                    onPressed: _loadRecent,
-                    child: const Text('Retry recent searches'),
-                  ),
-                ] else if (_recent == null)
-                  const Center(child: CircularProgressIndicator())
-                else if (_recent!.isEmpty)
-                  const Text('No recent searches.')
-                else
-                  for (final recent in _recent!.take(_recentExpanded ? 10 : 3))
-                    ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: const Icon(Icons.history),
-                      title: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Text(
-                            '${recent.originStopName} → ${recent.destinationStopName}',
-                          ),
-                          const SizedBox(height: 4),
-                          Align(
-                            alignment: Alignment.centerRight,
-                            child: Wrap(
-                              crossAxisAlignment: WrapCrossAlignment.center,
-                              children: [
-                                TextButton(
-                                  onPressed: () =>
-                                      Navigator.pop(context, recent),
-                                  child: const Text('Search Again'),
-                                ),
-                                IconButton(
-                                  key: ValueKey(
-                                    'delete-recent-search-${recent.id}',
-                                  ),
-                                  tooltip: 'Delete recent search',
-                                  onPressed:
-                                      recent.id == null ||
-                                          _deletingRecentSearchIds.contains(
-                                            recent.id,
-                                          )
-                                      ? null
-                                      : () => _deleteRecent(recent),
-                                  icon: const Icon(Icons.delete_outline),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
+              Padding(
+                padding: const EdgeInsets.only(top: 16),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Recent Searches',
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.bold),
                       ),
                     ),
-                if (_recentError == null && (_recent?.length ?? 0) > 3)
-                  TextButton(
+                    TextButton(onPressed: _clear, child: const Text('Clear')),
+                  ],
+                ),
+              ),
+              Card(
+                margin: EdgeInsets.zero,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (_recentError != null) ...[
+                        Text(_recentError!),
+                        TextButton(
+                          onPressed: _loadRecent,
+                          child: const Text('Retry recent searches'),
+                        ),
+                      ] else if (_recent == null)
+                        const Center(child: CircularProgressIndicator())
+                      else if (_recent!.isEmpty)
+                        const Text('No recent searches.')
+                      else
+                        for (final entry
+                            in _recent!
+                                .take(_recentExpanded ? 10 : 3)
+                                .indexed) ...[
+                          if (entry.$1 > 0)
+                            Divider(
+                              height: 1,
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.outlineVariant,
+                            ),
+                          Builder(
+                            builder: (context) {
+                              final recent = entry.$2;
+                              final actions = Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  TextButton(
+                                    onPressed: () =>
+                                        Navigator.pop(context, recent),
+                                    child: const Text('Search Again'),
+                                  ),
+                                  IconButton(
+                                    key: ValueKey(
+                                      'delete-recent-search-${recent.id}',
+                                    ),
+                                    tooltip: 'Delete recent search',
+                                    onPressed:
+                                        recent.id == null ||
+                                            _deletingRecentSearchIds.contains(
+                                              recent.id,
+                                            )
+                                        ? null
+                                        : () => _deleteRecent(recent),
+                                    icon: Icon(
+                                      Icons.delete_outline,
+                                      color: Theme.of(
+                                        context,
+                                      ).colorScheme.primary,
+                                    ),
+                                  ),
+                                ],
+                              );
+                              final route = Text(
+                                '${recent.originStopName} \u2192 ${recent.destinationStopName}',
+                                style: Theme.of(context).textTheme.bodyMedium,
+                              );
+                              return Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 4,
+                                ),
+                                child: LayoutBuilder(
+                                  builder: (context, constraints) {
+                                    final compact = constraints.maxWidth < 420;
+                                    return Row(
+                                      children: [
+                                        Icon(
+                                          Icons.history,
+                                          size: 24,
+                                          color: Theme.of(
+                                            context,
+                                          ).colorScheme.primary,
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: compact
+                                              ? Column(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment
+                                                          .stretch,
+                                                  children: [
+                                                    route,
+                                                    Align(
+                                                      alignment:
+                                                          Alignment.centerRight,
+                                                      child: actions,
+                                                    ),
+                                                  ],
+                                                )
+                                              : route,
+                                        ),
+                                        if (!compact) actions,
+                                      ],
+                                    );
+                                  },
+                                ),
+                              );
+                            },
+                          ),
+                        ],
+                    ],
+                  ),
+                ),
+              ),
+              if (_recentError == null && (_recent?.length ?? 0) > 3)
+                Center(
+                  child: TextButton(
                     onPressed: () =>
                         setState(() => _recentExpanded = !_recentExpanded),
                     child: Text(_recentExpanded ? 'Show Less' : 'View More'),
                   ),
-              ]),
+                ),
             ],
           ),
         ),

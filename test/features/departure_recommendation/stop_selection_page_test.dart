@@ -1,3 +1,5 @@
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:government_transit_collector/features/departure_recommendation/data/favourite_stop_repository.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -36,7 +38,63 @@ Future<void> search(WidgetTester tester, String query) async {
   await tester.pump();
 }
 
+class PendingFavouriteStop extends FakeStopRepository {
+  PendingFavouriteStop() : super((_) async => []);
+  final pending = Completer<DepartureStop?>();
+  @override
+  Future<DepartureStop?> getStopById(String id) => pending.future;
+}
+
+class SavedFavourite extends FavouriteStopRepository {
+  SavedFavourite() : super(userId: 'review-test', factory: databaseFactoryFfi);
+  @override
+  Future<List<DepartureStop>> load() async => const [
+    DepartureStop(id: 'stop', name: 'Saved Stop'),
+  ];
+}
+
 void main() {
+  testWidgets(
+    'review: pending favourite lookup cannot pop the parent after Back',
+    (tester) async {
+      final navigator = GlobalKey<NavigatorState>();
+      final stops = PendingFavouriteStop();
+      await tester.pumpWidget(
+        MaterialApp(
+          navigatorKey: navigator,
+          home: const Scaffold(body: Text('Home')),
+        ),
+      );
+      navigator.currentState!.push(
+        MaterialPageRoute<void>(
+          builder: (_) => const Scaffold(body: Text('Parent Plan')),
+        ),
+      );
+      await tester.pumpAndSettle();
+      navigator.currentState!.push(
+        MaterialPageRoute<DepartureStop>(
+          builder: (_) => StopSelectionPage(
+            title: 'Select origin stop',
+            excludedStopId: null,
+            repository: stops,
+            favouriteStopRepository: SavedFavourite(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Use as Origin'));
+      await tester.pump();
+      navigator.currentState!.pop();
+      stops.pending.complete(
+        const DepartureStop(id: 'stop', name: 'Saved Stop'),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Parent Plan'), findsOneWidget);
+      expect(navigator.currentState!.canPop(), isTrue);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('empty selector asks passenger to search without loading stops', (
     tester,
   ) async {

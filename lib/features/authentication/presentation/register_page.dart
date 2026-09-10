@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:government_transit_collector/features/authentication/data/auth_repository.dart';
 import 'package:government_transit_collector/features/authentication/presentation/auth_validation.dart';
 
@@ -17,9 +19,14 @@ class _RegisterPageState extends State<RegisterPage> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
+  final _emailFocusNode = FocusNode();
+  static final _pendingInput = TextInputFormatter.withFunction(
+    (oldValue, newValue) => oldValue,
+  );
   bool _obscurePassword = true;
   bool _obscureConfirmation = true;
   bool _loading = false;
+  String? _verificationEmail;
 
   @override
   void dispose() {
@@ -27,33 +34,55 @@ class _RegisterPageState extends State<RegisterPage> {
     _emailController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
+    _emailFocusNode.dispose();
     super.dispose();
   }
 
   Future<void> _register() async {
-    FocusManager.instance.primaryFocus?.unfocus();
-    if (_loading || !_formKey.currentState!.validate()) return;
+    if (_loading) return;
+    if (!_formKey.currentState!.validate()) {
+      _cancelRegistrationAutofill();
+      return;
+    }
 
     setState(() => _loading = true);
     try {
+      // A previous failure cancelled the native context. Reattach the populated
+      // group even when retrying unchanged credentials, and keep it attached
+      // until the server outcome is known. Disabling fields closes this client.
+      _emailFocusNode.requestFocus();
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return;
       final result = await widget.repository.register(
         fullName: _fullNameController.text,
         email: _emailController.text.trim(),
         password: _passwordController.text,
       );
       if (!mounted) return;
-      final message = result.requiresEmailConfirmation
-          ? 'Account created. Check your email to confirm it before signing in.'
-          : 'Account created successfully. Signing you in…';
-      Navigator.of(context).pop(message);
+      // Only a successful signup may offer to save these credentials. Commit
+      // before clearing the passwords or replacing the registration form.
+      TextInput.finishAutofillContext(shouldSave: true);
+      FocusManager.instance.primaryFocus?.unfocus();
+      if (result.requiresEmailConfirmation) {
+        setState(() {
+          _verificationEmail = _emailController.text.trim();
+          _passwordController.clear();
+          _confirmPasswordController.clear();
+          _loading = false;
+        });
+      } else {
+        Navigator.of(context).pop();
+      }
     } on AuthFlowException catch (error) {
       if (!mounted) return;
+      _cancelRegistrationAutofill();
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(error.message)));
       setState(() => _loading = false);
     } on Object {
       if (!mounted) return;
+      _cancelRegistrationAutofill();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Unable to create the account. Please try again.'),
@@ -63,21 +92,37 @@ class _RegisterPageState extends State<RegisterPage> {
     }
   }
 
+  void _cancelRegistrationAutofill() {
+    // Cancel before focus loss can make Android infer that the form completed.
+    TextInput.finishAutofillContext(shouldSave: false);
+    FocusManager.instance.primaryFocus?.unfocus();
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (_verificationEmail != null) {
+      return EmailVerificationPage(
+        repository: widget.repository,
+        email: _verificationEmail!,
+      );
+    }
     return Scaffold(
       appBar: AppBar(title: const Text('Create account')),
       body: SafeArea(
         child: GestureDetector(
-          onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
+          onTap: _loading
+              ? null
+              : () => FocusManager.instance.primaryFocus?.unfocus(),
           behavior: HitTestBehavior.translucent,
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(24),
             keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            physics: _loading ? const NeverScrollableScrollPhysics() : null,
             child: Center(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 440),
                 child: AutofillGroup(
+                  onDisposeAction: AutofillContextAction.cancel,
                   child: Form(
                     key: _formKey,
                     child: Column(
@@ -95,7 +140,7 @@ class _RegisterPageState extends State<RegisterPage> {
                         const SizedBox(height: 24),
                         TextFormField(
                           controller: _fullNameController,
-                          enabled: !_loading,
+                          inputFormatters: [if (_loading) _pendingInput],
                           textCapitalization: TextCapitalization.words,
                           textInputAction: TextInputAction.next,
                           autofillHints: const [AutofillHints.name],
@@ -110,7 +155,8 @@ class _RegisterPageState extends State<RegisterPage> {
                         const SizedBox(height: 16),
                         TextFormField(
                           controller: _emailController,
-                          enabled: !_loading,
+                          focusNode: _emailFocusNode,
+                          inputFormatters: [if (_loading) _pendingInput],
                           keyboardType: TextInputType.emailAddress,
                           textInputAction: TextInputAction.next,
                           autofillHints: const [AutofillHints.email],
@@ -125,7 +171,14 @@ class _RegisterPageState extends State<RegisterPage> {
                         const SizedBox(height: 16),
                         TextFormField(
                           controller: _passwordController,
-                          enabled: !_loading,
+                          errorBuilder: (context, error) => Text(
+                            error,
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.error,
+                              fontSize: 12,
+                            ),
+                          ),
+                          inputFormatters: [if (_loading) _pendingInput],
                           obscureText: _obscurePassword,
                           textInputAction: TextInputAction.next,
                           autofillHints: const [AutofillHints.newPassword],
@@ -158,7 +211,14 @@ class _RegisterPageState extends State<RegisterPage> {
                         const SizedBox(height: 16),
                         TextFormField(
                           controller: _confirmPasswordController,
-                          enabled: !_loading,
+                          errorBuilder: (context, error) => Text(
+                            error,
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.error,
+                              fontSize: 12,
+                            ),
+                          ),
+                          inputFormatters: [if (_loading) _pendingInput],
                           obscureText: _obscureConfirmation,
                           textInputAction: TextInputAction.done,
                           autofillHints: const [AutofillHints.newPassword],
@@ -188,6 +248,8 @@ class _RegisterPageState extends State<RegisterPage> {
                             _passwordController.text,
                           ),
                           onFieldSubmitted: (_) => _register(),
+                          // Do not detach autofill on IME Done before signup.
+                          onEditingComplete: () {},
                         ),
                         const SizedBox(height: 24),
                         FilledButton(
@@ -222,4 +284,139 @@ class _RegisterPageState extends State<RegisterPage> {
       ),
     );
   }
+}
+
+class EmailVerificationPage extends StatefulWidget {
+  const EmailVerificationPage({
+    required this.repository,
+    required this.email,
+    this.unverifiedSignIn = false,
+    super.key,
+  });
+  final AuthRepository repository;
+  final String email;
+  final bool unverifiedSignIn;
+  @override
+  State<EmailVerificationPage> createState() => _EmailVerificationPageState();
+}
+
+class _EmailVerificationPageState extends State<EmailVerificationPage> {
+  Timer? _timer;
+  int _remaining = 0;
+  bool _busy = false;
+  String? _message;
+  void _cooldown() {
+    _timer?.cancel();
+    _remaining = 60;
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      setState(() => _remaining = (60 - timer.tick).clamp(0, 60));
+      if (_remaining == 0) timer.cancel();
+    });
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    if (!widget.unverifiedSignIn) _cooldown();
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _resend() async {
+    if (_busy || _remaining > 0) return;
+    setState(() {
+      _busy = true;
+      _message = null;
+      _cooldown();
+    });
+    try {
+      await widget.repository.resendVerificationEmail(widget.email);
+      if (mounted)
+        setState(
+          () => _message = 'Verification email sent. Please check your inbox.',
+        );
+    } on Object catch (error) {
+      if (mounted)
+        setState(
+          () => _message = error is AuthFlowException
+              ? error.message
+              : 'Unable to resend verification email. Please try again.',
+        );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(
+      title: Text(
+        widget.unverifiedSignIn ? 'Email Not Verified' : 'Verify Your Email',
+      ),
+    ),
+    body: SafeArea(
+      child: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 440),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (widget.unverifiedSignIn) ...[
+                  const Text('Your email address has not been verified.'),
+                  const SizedBox(height: 8),
+                  const Text('Please verify your email before signing in.'),
+                ] else ...[
+                  const Text('We sent a verification link to:'),
+                  const SizedBox(height: 8),
+                  Text(
+                    widget.email,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Please check your email and verify your account before signing in.',
+                  ),
+                ],
+                const SizedBox(height: 24),
+                FilledButton(
+                  onPressed: _busy || _remaining > 0 ? null : _resend,
+                  child: const Text('Resend Verification Email'),
+                ),
+                if (_remaining > 0)
+                  Text(
+                    'Resend available in $_remaining seconds.',
+                    textAlign: TextAlign.center,
+                  ),
+                if (_message != null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Text(_message!),
+                  ),
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Back to Sign In'),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Check your Spam/Junk folder if you cannot find the email.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
 }

@@ -231,23 +231,103 @@ void main() {
     expect(find.text('Headway'), findsNWidgets(3));
   });
 
-  testWidgets('all action labels are user-facing and grouped', (tester) async {
-    final items = candidates(3);
+  testWidgets('overview counts and action filter use the retained result', (
+    tester,
+  ) async {
+    final items = candidates(6);
     final coordinator = FakeCoordinator(
       items,
       resultOverride: groupedResult([
-        (BusFrequencyRecommendationAction.increasePeakHourFrequency, ['R1']),
-        (BusFrequencyRecommendationAction.maintainService, ['R2']),
-        (BusFrequencyRecommendationAction.decreaseService, ['R3']),
+        (
+          BusFrequencyRecommendationAction.increasePeakHourFrequency,
+          ['R1', 'R2', 'R3', 'R4'],
+        ),
+        (BusFrequencyRecommendationAction.maintainService, ['R5']),
+        (BusFrequencyRecommendationAction.decreaseService, ['R6']),
       ]),
     );
     await pumpPage(tester, coordinator);
     await tapGenerate(tester);
     await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('recommendation-overview')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('overview-actionable')),
+        matching: find.text('6'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('overview-increase')),
+        matching: find.text('4'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('overview-maintain')),
+        matching: find.text('1'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('overview-decrease')),
+        matching: find.text('1'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('overview-requiring-change')),
+        matching: find.text('5'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('All 6'), findsOneWidget);
+    expect(find.text('Increase 4'), findsOneWidget);
+    expect(find.text('Maintain 1'), findsOneWidget);
+    expect(find.text('Decrease 1'), findsOneWidget);
+    expect(
+      tester
+          .widget<FilterChip>(find.byKey(const Key('action-filter-all')))
+          .selected,
+      isTrue,
+    );
     expect(find.text('Increase Peak-Hour Frequency'), findsOneWidget);
     expect(find.text('Maintain Current Frequency'), findsOneWidget);
     expect(find.text('Decrease Frequency'), findsOneWidget);
     expect(find.text('increasePeakHourFrequency'), findsNothing);
+
+    final showMore = find.text('Show 1 more routes');
+    await tester.ensureVisible(showMore);
+    await tester.tap(showMore);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('group-route-R4')), findsOneWidget);
+
+    final maintainFilter = find.byKey(const Key('action-filter-maintain'));
+    await tester.ensureVisible(maintainFilter);
+    await tester.tap(maintainFilter);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('action-group-increasePeakHourFrequency')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const Key('action-group-maintainService')),
+      findsOneWidget,
+    );
+
+    final increaseFilter = find.byKey(const Key('action-filter-increase'));
+    await tester.ensureVisible(increaseFilter);
+    await tester.tap(increaseFilter);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('group-route-R4')), findsOneWidget);
+    expect(find.text('Show fewer'), findsOneWidget);
   });
 
   testWidgets('route View Evidence uses retained deterministic evidence only', (

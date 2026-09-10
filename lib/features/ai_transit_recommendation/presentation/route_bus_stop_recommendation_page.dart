@@ -9,6 +9,7 @@ import 'package:government_transit_collector/features/ai_transit_recommendation/
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_stop_recommendation_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/route_stop_recommendation_repository.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/presentation/route_stop_network_map.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/presentation/numeric_display.dart';
 import 'package:government_transit_collector/features/journey_map/data/journey_map_models.dart';
 import 'package:government_transit_collector/features/journey_map/data/shape_segment.dart';
 import 'package:government_transit_collector/features/route_performance/data/route_performance_repository.dart';
@@ -281,33 +282,28 @@ class _RouteBusStopRecommendationPageState
     ],
   );
 
-  Widget _analysisCard() => Card(
-    child: Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            'Analysis Period',
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
-          const SizedBox(height: 6),
-          const Text('Past 30 Days', key: Key('analysis-period')),
-          const SizedBox(height: 16),
-          FilledButton.icon(
-            key: const Key('analyse-routes'),
-            onPressed: _screening || _analysing || _retrying
-                ? null
-                : _startNewAnalysis,
-            icon: const Icon(Icons.refresh),
-            label: const Text('Start New Analysis'),
-          ),
-        ],
-      ),
+  Widget _analysisCard() => SizedBox(
+    width: double.infinity,
+    child: FilledButton.icon(
+      key: const Key('analyse-routes'),
+      onPressed: _screening || _analysing || _retrying
+          ? null
+          : _startNewAnalysis,
+      icon: const Icon(Icons.refresh),
+      label: const Text('Start New Analysis'),
     ),
   );
 
   Widget _evidenceOverview() {
+    if (_candidates.isEmpty) {
+      return Card(
+        key: const Key('route-stop-evidence-overview'),
+        child: const Padding(
+          padding: EdgeInsets.all(16),
+          child: Text('No route and stop evidence is available.'),
+        ),
+      );
+    }
     final allStops = _candidates
         .expand(
           (candidate) => candidate.evidence.routeStopEvidence.network.trips,
@@ -370,19 +366,18 @@ class _RouteBusStopRecommendationPageState
               spacing: 16,
               runSpacing: 12,
               children: [
-                _coverageMetric('Analysis Period', 'Past 30 Days'),
                 _coverageMetric(
                   'Routes Analysed',
-                  '${_session.routesAnalysed}',
+                  displayCount(_session.routesAnalysed),
                 ),
-                _coverageMetric('Stop Records Analysed', '${allStops.length}'),
+                _coverageMetric('Stop Records Analysed', displayCount(allStops.length)),
                 _coverageMetric(
                   'Delayed Trips',
-                  '$delayedTrips',
+                  displayCount(delayedTrips),
                 ),
                 _coverageMetric(
                   'Relevant Route/Stop Feedback',
-                  '$relevantFeedback',
+                  displayCount(relevantFeedback),
                 ),
               ],
             ),
@@ -395,8 +390,8 @@ class _RouteBusStopRecommendationPageState
               spacing: 12,
               runSpacing: 4,
               children: [
-                Text('Stop-related Issues: $stopIssues'),
-                Text('Route-information Issues: $routeInformationIssues'),
+                Text('Stop-related Issues: ${displayCount(stopIssues)}'),
+                Text('Route-information Issues: ${displayCount(routeInformationIssues)}'),
               ],
             ),
             const SizedBox(height: 12),
@@ -626,7 +621,7 @@ class _RouteBusStopRecommendationPageState
               'Peak Operation observations: '
                   '${source.operational.peakOperationSummary.observationCount}',
               'Route Performance observations: '
-                  '${source.operational.routePerformanceSummary.totalObservations}',
+                  '${displayCount(source.operational.routePerformanceSummary.totalObservations)}',
             ]),
             _detailSection('Passenger Feedback', [
               'Relevant route/stop feedback: '
@@ -875,7 +870,7 @@ class _RouteBusStopRecommendationPageState
             ),
             Text(
               'Delayed trips: '
-              '${evidence.operational.routePerformanceSummary.delayedTripCount}',
+              '${displayCount(evidence.operational.routePerformanceSummary.delayedTripCount)}',
             ),
             Text('Stop-related issues: $stopIssueCount'),
             Text('Route-information issues: $routeInformationIssueCount'),

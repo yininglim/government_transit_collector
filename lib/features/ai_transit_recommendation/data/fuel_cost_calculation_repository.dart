@@ -40,6 +40,20 @@ class DefaultFuelCostCalculationRepository
     }
     final directionGroups = evidence.scheduledService.directionGroups
         .map((group) {
+          final representative = group.departures.firstOrNull;
+          final trip = representative == null
+              ? null
+              : evidence.network.trips
+                    .where((item) => item.tripId == representative.tripId)
+                    .firstOrNull;
+          final stops = trip == null ? const [] : [...trip.stops]..sort(
+            (a, b) => a.stopSequence.compareTo(b.stopSequence),
+          );
+          final namedStops = stops
+              .map((stop) => stop.stopName?.trim())
+              .whereType<String>()
+              .where((name) => name.isNotEmpty)
+              .toList(growable: false);
           return DirectionFuelCalculationEvidence(
             directionId: group.directionId,
             departures: group.departures
@@ -81,6 +95,14 @@ class DefaultFuelCostCalculationRepository
                   );
                 })
                 .toList(growable: false),
+            directionLabel: namedStops.length >= 2
+                ? '${namedStops.first} \u2192 ${namedStops.last}'
+                : null,
+            currentHeadwayMinutes: group.averageHeadwaySeconds == null
+                ? null
+                : group.averageHeadwaySeconds! / 60,
+            minimumHeadwaySeconds: group.minimumHeadwaySeconds,
+            maximumHeadwaySeconds: group.maximumHeadwaySeconds,
           );
         })
         .toList(growable: false);
@@ -146,7 +168,18 @@ class DefaultFuelCostCalculationRepository
       incompleteTripIds: evidence.scheduledService.incompleteTripIds,
       hasCompleteDirectionData:
           evidence.scheduledService.hasCompleteDirectionData,
+      currentHeadwayMinutes: _currentHeadwayMinutes(evidence),
     );
+  }
+
+  double? _currentHeadwayMinutes(CostEstimationEvidence evidence) {
+    final values = evidence.scheduledService.directionGroups
+        .map((group) => group.averageHeadwaySeconds)
+        .whereType<double>()
+        .where((value) => value.isFinite && value > 0)
+        .toList(growable: false);
+    if (values.isEmpty) return null;
+    return values.reduce((a, b) => a + b) / values.length / 60;
   }
 
   FuelCostCalculationStatus _status({

@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/cost_recommendation_models.dart';
+import 'package:government_transit_collector/features/ai_transit_recommendation/data/cost_scenario.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/fuel_cost_calculation_models.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/fuel_cost_calculation_repository.dart';
 import 'package:government_transit_collector/features/ai_transit_recommendation/data/gemini_data_source.dart';
@@ -20,6 +21,9 @@ Use only the supplied deterministic cost evidence and preserve every submitted v
 Do not independently recalculate costs or invent cost values.
 Do not infer missing labour, maintenance, capital, staffing, infrastructure, ticketing, passenger demand, occupancy, capacity, fare revenue, subsidy, total operating cost, profitability, savings, return on investment, or budget impact.
 Fuel expenditure is not total operating cost.
+This is a qualitative cost insight only; do not recommend or select a transit frequency action.
+Treat the submitted Bus Frequency action, route, planning assumptions, and deterministic cost values as authoritative context. Do not replace them or infer missing quantities.
+Treat the fuel estimate as the current scheduled-service baseline, not an exact future increase, reduction, or saving.
 Distinguish fuel expenditure from unavailable cost categories and recognise the supplied diesel price reference and effective dates.
 Use only submitted evidence-reference IDs and clearly state unavailable categories and evidence limitations.
 Choose insufficientEvidence when deterministic fuel-cost evidence cannot responsibly support a recommendation.
@@ -77,6 +81,7 @@ abstract interface class CostRecommendationRepository {
     required DateTime endExclusiveUtc,
     required DateTime referenceDate,
     FuelCostCalculationEvidence? evidence,
+    CostPlanningContext? planningContext,
   });
 }
 
@@ -106,6 +111,7 @@ class DefaultCostRecommendationRepository
     required DateTime endExclusiveUtc,
     required DateTime referenceDate,
     FuelCostCalculationEvidence? evidence,
+    CostPlanningContext? planningContext,
   }) async {
     late final FuelCostCalculationEvidence resolvedEvidence;
     try {
@@ -132,7 +138,13 @@ class DefaultCostRecommendationRepository
         payload: null,
       );
     }
-    final payload = _payloadBuilder.build(resolvedEvidence);
+    final payload = _payloadBuilder.build(
+      resolvedEvidence,
+      planningContext:
+          planningContext == null || planningContext.routeId == routeId
+          ? planningContext
+          : null,
+    );
     if (!hasUsableCostRecommendationEvidence(resolvedEvidence)) {
       return CostRecommendationResult(
         status: CostRecommendationStatus.insufficientEvidence,
