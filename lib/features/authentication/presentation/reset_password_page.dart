@@ -83,7 +83,17 @@ class _ResetPasswordPageState extends State<ResetPasswordPage> {
                   children: [
                     if (!widget.repository.hasValidRecoverySession)
                       const Text(AuthRepository.invalidRecoveryMessage)
+                    else if (!widget.repository.supportsEmailPassword)
+                      Text(
+                        widget.repository.hasGoogleIdentity
+                            ? AuthRepository.googleOnlyResetMessage
+                            : AuthRepository.passwordResetUnavailableMessage,
+                      )
                     else ...[
+                      const Text(
+                        'Reset only your Government Transit Collector Email/Password password. Your Google password will not change.',
+                      ),
+                      const SizedBox(height: 16),
                       TextFormField(
                         controller: _password,
                         enabled: !_loading,

@@ -63,11 +63,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
       await widget.repository.sendPasswordReset(_requestedEmail!);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'If an account exists for this email, a password reset link has been sent.',
-          ),
-        ),
+        const SnackBar(content: Text(AuthRepository.passwordResetSentMessage)),
       );
       Navigator.of(context).pop();
     } on Object catch (error) {
@@ -83,7 +79,33 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
+  Widget build(BuildContext context) {
+    if (widget.accountEmail != null &&
+        widget.accountEmail!.trim().toLowerCase() ==
+            widget.repository.currentEmail?.toLowerCase() &&
+        widget.repository.hasGoogleIdentity &&
+        !widget.repository.supportsEmailPassword) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Forgot Password')),
+        body: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(AuthRepository.googleOnlyResetMessage),
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Back'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    return _requestForm(context);
+  }
+
+  Widget _requestForm(BuildContext context) => Scaffold(
     appBar: AppBar(
       title: Text(
         widget.accountEmail == null
@@ -202,6 +224,12 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
                         ),
                       ],
                       const SizedBox(height: 12),
+                      if (widget.accountEmail == null) ...[
+                        const Text(
+                          'If you only use Google Sign-In, please continue with Google. This resets only your Government Transit Collector password, not your Google password.',
+                        ),
+                        const SizedBox(height: 12),
+                      ],
                       if (widget.accountEmail == null)
                         TextFormField(
                           controller: _email,

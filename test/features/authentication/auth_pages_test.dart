@@ -314,19 +314,19 @@ void main() {
       final repository = PageAuth();
       await show(tester, LoginPage(repository: repository), keyboard: true);
       await tap(tester, find.text('Forgot Password?'));
-      await tap(tester, find.text('Send Reset Link'));
+      await tap(tester, find.text('Send Password Reset Email'));
       expect(find.text('Email is required.'), findsOneWidget);
       expect(repository.sentEmail, isNull);
       await tester.enterText(find.byType(TextFormField), 'invalid');
-      await tap(tester, find.text('Send Reset Link'));
+      await tap(tester, find.text('Send Password Reset Email'));
       expect(find.text('Please enter a valid email address.'), findsOneWidget);
       expect(repository.sentEmail, isNull);
       await tester.enterText(find.byType(TextFormField), 'rider@example.test');
-      await tap(tester, find.text('Send Reset Link'));
+      await tap(tester, find.text('Send Password Reset Email'));
       expect(repository.sentEmail, 'rider@example.test');
       expect(
         find.text(
-          'If an account exists for this email, a password reset link has been sent.',
+          'If eligible, a password reset link has been sent.',
         ),
         findsOneWidget,
       );
