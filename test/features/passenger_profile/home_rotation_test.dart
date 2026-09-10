@@ -224,7 +224,6 @@ void main() {
               savedJourneyRepository: profile.SavedFake(),
               reminderController: controller,
               feedbackRepository: ReportsFake(),
-              dataCheckPageBuilder: (_) => scrollPage('Data check page'),
               departurePageBuilder: (_) =>
                   scrollPage('Departure Recommendation'),
               livePageBuilder: (_) => scrollPage('Module 3'),
@@ -241,18 +240,16 @@ void main() {
           await tester.pumpAndSettle();
           expect(find.byType(AppBar), findsOneWidget);
           await revealHeader(tester);
-          for (final label in [
-            'Home',
-            'Plan',
-            'Live',
-            'Data Check',
-            'Reports',
-          ]) {
+          for (final label in ['Home', 'Plan', 'Live', 'Reports', 'My Trips']) {
             expect(
               find.byKey(Key('passenger-nav-$label')).hitTestable(),
               findsOneWidget,
             );
           }
+          expect(
+            find.byKey(const Key('passenger-nav-Data Check')),
+            findsNothing,
+          );
           expect(find.text('Profile / Reports'), findsNothing);
           expect(
             tester
@@ -261,17 +258,6 @@ void main() {
             isTrue,
           );
           await checkCollapse(tester);
-          await pressNav(tester, 'Data Check');
-          expect(find.text('Data check page'), findsOneWidget);
-          await checkCollapse(tester);
-          await expectSelected(tester, 'Data Check');
-          tester.view.physicalSize = Size(size.height, size.width);
-          await tester.pumpAndSettle();
-          await expectSelected(tester, 'Data Check');
-          tester.view.physicalSize = size;
-          await tester.pumpAndSettle();
-          await tester.pageBack();
-          await tester.pumpAndSettle();
           await pressNav(tester, 'Reports');
           await expectSelected(tester, 'Reports');
           expect(find.text('Report a Transit Issue'), findsOneWidget);
@@ -292,7 +278,7 @@ void main() {
           );
           await tester.pumpAndSettle();
           await expectSelected(tester, 'Reports');
-          await tester.binding.handlePopRoute();
+          Navigator.of(reportsContext).pop();
           await tester.pumpAndSettle();
           await tester.scrollUntilVisible(
             find.text('My Reports'),
@@ -310,8 +296,7 @@ void main() {
             isTrue,
           );
 
-          await tester.pageBack();
-          await tester.pumpAndSettle();
+          await pressNav(tester, 'Home');
           await tester.scrollUntilVisible(
             find.text('Plan a Journey'),
             -150,
@@ -326,14 +311,12 @@ void main() {
           await expectSelected(tester, 'Plan');
           expect(find.text('Departure Recommendation'), findsOneWidget);
           await checkCollapse(tester);
-          await tester.pageBack();
-          await tester.pumpAndSettle();
+          await pressNav(tester, 'Home');
           await pressNav(tester, 'Live');
           await expectSelected(tester, 'Live');
           expect(find.text('Module 3'), findsOneWidget);
           await checkCollapse(tester);
-          await tester.pageBack();
-          await tester.pumpAndSettle();
+          await pressNav(tester, 'Home');
           await expectSelected(tester, 'Home');
           if (upcoming) {
             await tester.scrollUntilVisible(

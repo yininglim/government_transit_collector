@@ -20,7 +20,6 @@ import 'package:government_transit_collector/features/departure_recommendation/d
 import 'package:government_transit_collector/features/departure_recommendation/presentation/departure_recommendation_page.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/realtime_vehicle_repository.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/data/static_trip_matcher.dart';
-import 'package:government_transit_collector/features/realtime_vehicle/presentation/realtime_data_check_page.dart';
 import 'package:government_transit_collector/features/realtime_vehicle/presentation/realtime_journey_tracker_page.dart';
 
 String malaysiaGreeting(DateTime instant) {
@@ -69,7 +68,7 @@ class PassengerHomePage extends StatefulWidget {
 class _PassengerHomePageState extends State<PassengerHomePage>
     with WidgetsBindingObserver {
   Timer? _homeTimer;
-  final _tabNavigators = List.generate(6, (_) => GlobalKey<NavigatorState>());
+  final _tabNavigators = List.generate(5, (_) => GlobalKey<NavigatorState>());
   final _planKey = GlobalKey<DepartureRecommendationPageState>();
   final Map<int, WidgetBuilder> _tabBuilders = {};
   int _activeTab = 0;
@@ -208,19 +207,8 @@ class _PassengerHomePageState extends State<PassengerHomePage>
         ),
   );
 
-  void _openDataCheck() => _pushTab(
-    3,
-    (context) =>
-        widget.dataCheckPageBuilder?.call(context) ??
-        RealtimeDataCheckPage(
-          showPageHeader: false,
-          repository: DataGovMyRealtimeVehicleRepository(),
-          tripMatcher: SupabaseStaticTripMatcher(),
-        ),
-  );
-
   void _openReports() => _pushTab(
-    4,
+    3,
     (_) => PassengerReportsPage(
       showPageHeader: false,
       userId: widget.profile.userId,
@@ -246,22 +234,16 @@ class _PassengerHomePageState extends State<PassengerHomePage>
         selected: active == 2,
       ),
       _navItem(
-        'Data Check',
-        Icons.data_object,
-        active == 3 ? () {} : _openDataCheck,
-        selected: active == 3,
-      ),
-      _navItem(
         'Reports',
         Icons.feedback_outlined,
-        active == 4 ? () {} : _openReports,
-        selected: active == 4,
+        active == 3 ? () {} : _openReports,
+        selected: active == 3,
       ),
       _navItem(
         'My Trips',
         Icons.task_alt,
         () => _pushTab(
-          5,
+          4,
           (_) => Scaffold(
             body: SafeArea(
               child: Center(
@@ -301,7 +283,7 @@ class _PassengerHomePageState extends State<PassengerHomePage>
             ),
           ),
         ),
-        selected: active == 5,
+        selected: active == 4,
       ),
     ],
   );
@@ -415,7 +397,7 @@ class _PassengerHomePageState extends State<PassengerHomePage>
           ),
           child: IndexedStack(
             index: _activeTab,
-            children: List.generate(6, (tab) {
+            children: List.generate(5, (tab) {
               if (tab != 0 && !_tabBuilders.containsKey(tab)) {
                 return const SizedBox.shrink();
               }
