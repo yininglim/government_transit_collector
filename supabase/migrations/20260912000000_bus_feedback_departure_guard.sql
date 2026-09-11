@@ -3,7 +3,6 @@ begin;
 create or replace function public.validate_bus_feedback_scheduled_event()
 returns trigger language plpgsql set search_path = public as $$
 begin
-  -- Description-only edits must not revalidate old or retired schedules.
   if TG_OP = 'UPDATE' then
     if row(new.user_id, new.route_id, new.stop_id, new.trip_id,
            new.service_date, new.scheduled_departure_seconds)

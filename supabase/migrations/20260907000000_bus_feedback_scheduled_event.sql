@@ -1,9 +1,5 @@
 begin;
 
--- bus_feedback is an existing deployed table (also used by the admin-read
--- migration). Its original CREATE TABLE is absent from this repository.
--- Historical reports retain NULL schedule fields; created_at is never used
--- as a substitute for the scheduled service date.
 alter table public.bus_feedback
   add column service_date date,
   add column scheduled_departure_seconds integer,
@@ -14,19 +10,14 @@ alter table public.bus_feedback
         and route_id is not null and stop_id is not null)
   );
 
--- GTFS seconds may exceed 86400. Do not collapse overnight departures onto
--- the following service date. Neither issue_type nor description is identity.
 create unique index bus_feedback_user_scheduled_event_key
   on public.bus_feedback
     (user_id, route_id, stop_id, service_date, scheduled_departure_seconds)
   where service_date is not null and scheduled_departure_seconds is not null;
 
--- Existing rows may remain incomplete, but newly submitted reports must
--- identify a real scheduled stop event. SECURITY INVOKER retains existing RLS.
 create function public.validate_bus_feedback_scheduled_event()
 returns trigger language plpgsql set search_path = public as $$
 begin
-  -- Description-only edits must not revalidate old or retired schedules.
   if TG_OP = 'UPDATE' then
     if row(new.user_id, new.route_id, new.stop_id, new.trip_id,
            new.service_date, new.scheduled_departure_seconds)

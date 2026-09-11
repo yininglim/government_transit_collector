@@ -1,6 +1,3 @@
--- Saved snapshots from the administrator's operational-analysis features.
--- This table is intentionally separate from analysis_reports and
--- ai_recommendations, which belong to the generic/AI analysis workflow.
 
 create type public.saved_operational_report_type as enum (
   'route_performance',
@@ -53,9 +50,6 @@ create trigger saved_operational_reports_set_updated_at
 before update on public.saved_operational_reports
 for each row execute function public.set_updated_at();
 
--- Only management metadata may be edited. ON DELETE SET NULL on route_id must
--- remain possible so deleting an obsolete GTFS route does not delete or block its
--- historical reports. A direct route_id edit is rejected while the old route exists.
 create or replace function public.protect_saved_operational_report_snapshot()
 returns trigger
 language plpgsql
@@ -122,8 +116,6 @@ create index saved_operational_reports_admin_created_idx
 
 alter table public.saved_operational_reports enable row level security;
 
--- Reports are shared across administrators, matching the existing admin analysis
--- tables. Passengers fail public.is_admin() and therefore receive no row access.
 create policy saved_operational_reports_admin_select
 on public.saved_operational_reports for select
 to authenticated

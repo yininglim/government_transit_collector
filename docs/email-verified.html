@@ -18,8 +18,6 @@
     <p>You can return to the device where you signed up. No app installation is needed on this device.</p>
   </main>
   <script>
-    // Supabase verifies the email before redirecting here. Do not exchange the
-    // PKCE code, initialize an auth client, or launch the mobile app.
     const query = new URLSearchParams(location.search);
     const fragment = new URLSearchParams(location.hash.slice(1));
     const failed = query.has('error') || query.has('error_code') || fragment.has('error') || fragment.has('error_code');

@@ -1,5 +1,3 @@
--- Existing Auth signup trigger remains the primary profile creation path.
--- Repair a missing Google profile without granting clients general INSERT access.
 create or replace function public.ensure_current_google_profile()
 returns void
 language plpgsql

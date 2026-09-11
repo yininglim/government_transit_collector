@@ -33,5 +33,4 @@ create policy journey_reminders_insert_own on public.journey_reminders
   for insert to authenticated with check (user_id = (select auth.uid()) and reminder_at > now());
 create policy journey_reminders_delete_own on public.journey_reminders
   for delete to authenticated using (user_id = (select auth.uid()));
--- No UPDATE policy: cancel and recreate instead. No administrator read exception.
 commit;
